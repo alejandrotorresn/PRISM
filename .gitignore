@@ -1,0 +1,26 @@
+# Compiled Python files
+__pycache__/
+*.pyc
+
+# Virtual Environments
+env/
+venv/
+.conda/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Data (Avoid uploading large datasets)
+data/
+*.csv
+*.pth
+*.pt
+
+# Logs
+*.log
+logs/
+experiments_logs/
+
+# IDE settings
+.vscode/
+.idea/
