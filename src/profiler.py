@@ -1382,19 +1382,19 @@ def main():
         model = resnet50(weights=ResNet50_Weights.DEFAULT)
         inp = torch.randn(args.batch_size, 3, 224, 224)
         if args.precision == "fp16": model = model.half()
-        elif args.precision == "bf16": model = model.to(torch_dtype)
+        elif args.precision == "bf16": model = model.to(dtype=torch_dtype)
 
     elif args.model == "resnet152":
         model = resnet152(weights=ResNet152_Weights.DEFAULT)
         inp = torch.randn(args.batch_size, 3, 224, 224)
         if args.precision == "fp16": model = model.half()
-        elif args.precision == "bf16": model = model.to(torch_dtype)
+        elif args.precision == "bf16": model = model.to(dtype=torch_dtype)
 
     elif args.model == "vit":
         model = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
         inp = torch.randn(args.batch_size, 3, 224, 224)
         if args.precision == "fp16": model = model.half()
-        elif args.precision == "bf16": model = model.to(torch_dtype)
+        elif args.precision == "bf16": model = model.to(dtype=torch_dtype)
 
     elif args.model == "bert":
         model = BertModel.from_pretrained("bert-base-uncased", torch_dtype=torch_dtype)
@@ -1411,7 +1411,7 @@ def main():
         model = SimpleMLP()
         inp = torch.randn(args.batch_size, 784)
         if args.precision == "fp16": model = model.half()
-        elif args.precision == "bf16": model = model.to(torch_dtype)
+        elif args.precision == "bf16": model = model.to(dtype=torch_dtype)
 
     else:
         raise ValueError(f"Unknown model: {args.model}")
@@ -1422,8 +1422,8 @@ def main():
         elif isinstance(inp, dict): inp = {k: (v.half() if v.is_floating_point() else v) for k, v in inp.items()}
 
     elif args.precision == "bf16":
-        if isinstance(inp, torch.Tensor): inp = inp.to(torch_dtype)
-        elif isinstance(inp, dict): inp = {k: (v.to(torch_dtype) if v.is_floating_point() else v) for k, v in inp.items()}
+        if isinstance(inp, torch.Tensor): inp = inp.to(dtype=torch_dtype)
+        elif isinstance(inp, dict): inp = {k: (v.to(dtype=torch_dtype) if v.is_floating_point() else v) for k, v in inp.items()}
 
     TrainingProfiler(model, args.model, args).run(inp)
 
