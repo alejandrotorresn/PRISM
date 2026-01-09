@@ -118,8 +118,8 @@ Location: `data/{model_name}_meta.json`
 | **cpu_bwd_energy_j** | CPU backward energy (J, heuristic = 2× forward; 0.0 if RAPL unavailable) |
 | **cpu_mem_mb** | CPU memory proxy (activations MB) |
 | **layer_j_per_tflop_cpu** | Energy per TFLOP in CPU (J/TFLOP; None if RAPL unavailable) |
-| **transfer_h2d_ms** | Estimated Host→Device transfer time (α + MB/β) |
-| **transfer_d2h_ms** | Estimated Device→Host transfer time (α + MB/β) |
+| **transfer_h2d_ms** | Estimated Host→Device transfer time (α + MB/β); uses `params_mb` as payload proxy |
+| **transfer_d2h_ms** | Estimated Device→Host transfer time (α + MB/β); uses `activations_mb` as payload proxy |
 | **precision_requested** | Requested precision (`fp32`, `fp16`, `bf16`) |
 | **cpu_precision_executed** | Effective CPU precision (e.g., `fp32_fallback`) |
 | **gpu_precision_executed** | Effective GPU precision |
@@ -156,3 +156,5 @@ Location: `data/{model_name}_meta.json`
 | **energy_distribution_vector** | Energy distribution per layer (normalized shares) |
 | **gpu_mem_peak_mb_global** | Global GPU peak memory |
 | **gpu_mem_reserved_mb_global** | Global GPU reserved memory
+| **total_model_flops_per_step** | Total FLOPs per training step (forward) divided by `measure` |
+| **optimizer_step_time_total_ms**, **optimizer_step_time_avg_ms** | Total and average `optimizer.step()` time over measured iterations |

@@ -98,7 +98,7 @@ Columnas principales:
   - layer_j_per_tflop_gpu (J/TFLOP por capa, si energía y trabajo > 0)
   - layer_j_per_tflop_cpu (None si no hay energía CPU)
 - Transferencias:
-  - transfer_h2d_ms = α_h2d + activations_mb / β_h2d
+  - transfer_h2d_ms = α_h2d + params_mb / β_h2d
   - transfer_d2h_ms = α_d2h + activations_mb / β_d2h
 - Overhead:
   - dispatch_overhead_ratio (GPU): g_dispatch / g_t_fwd (0 si g_t_fwd=0)
@@ -126,6 +126,7 @@ Incluye:
 - Eficiencia energética global (J/TFLOP): energy_efficiency_j_per_tflop_gpu, energy_efficiency_j_per_tflop_cpu (None si energía indisponible).
 - Optimizador: optimizer_used, optimizer_lr, optimizer_momentum, optimizer_step_time_total_ms, optimizer_step_time_avg_ms.
 - Factor de estados: optimizer_state_mb_factor_fallback y optimizer_state_mb_factor_used.
+ - FLOPs totales por paso: total_model_flops_per_step (forward dividido por `measure`).
 
 ---
 

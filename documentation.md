@@ -14,7 +14,7 @@
           │   - Execution time: gpu_fwd_time_ms, cpu_fwd_time_ms, etc.
           │   - Energy: gpu_fwd_energy_j, cpu_fwd_energy_j
           │   - Efficiency: tflops, efficiency_ratio, layer_j_per_tflop_gpu/cpu
-          │   - Overhead: dispatch_overhead_ms, dispatch_overhead_ratio
+          │   - Overhead: dispatch_overhead_ratio (per-layer) and global overhead vectors
           │   - Transfers: transfer_h2d_ms, transfer_d2h_ms
           │
           ▼
@@ -167,8 +167,8 @@ A continuación se presenta una tabla que describe las columnas principales del 
 | **cpu_fwd_energy_j** | float or None | J | Energía atribuida al forward en CPU; None si RAPL no disponible |
 | **layer_j_per_tflop_cpu** | float or None | J/TFLOP | Energía por TFLOP en CPU; None si no hay medida |
 | **gpu_mem_peak_mb** | float | MB | Pico global de memoria CUDA observado tras la capa |
-| **dispatch_overhead_ratio** | float | — | Proporción de overhead de despacho respecto al tiempo de kernel |
-| **transfer_h2d_ms** | float | ms | Tiempo estimado H2D usando alfa–beta y activations_mb |
+| **dispatch_overhead_ratio** | float | — | Proporción de overhead de despacho respecto al tiempo de kernel (GPU) |
+| **transfer_h2d_ms** | float | ms | Tiempo estimado H2D usando alfa–beta y `params_mb` como proxy de payload |
 | **transfer_d2h_ms** | float | ms | Tiempo estimado D2H usando alfa–beta y activations_mb |
 | **precision_requested** | string | — | Precisión solicitada por el usuario |
 | **cpu_precision_executed** | string | — | Precisión efectivamente ejecutada en CPU |
@@ -190,8 +190,10 @@ El **JSON** global contiene campos agregados y vectores que complementan el CSV.
 | **pci_alpha_h2d / pci_beta_h2d** | float | Parámetros alfa y beta calibrados para H2D |
 | **gpu_mem_peak_mb_global** | float | Pico global de memoria CUDA observado durante el experimento |
 | **params_mb_total / activations_mb_total** | float | Sumatorias globales de parámetros y activaciones |
+| **total_model_flops_per_step** | float | Suma de FLOPs forward del modelo dividida por `measure` |
+| **optimizer_step_time_total_ms / optimizer_step_time_avg_ms** | float | Tiempo total y promedio de `optimizer.step()` medido |
 
-**Mapeo al ILP.** Cada fila del CSV se traduce directamente en parámetros del ILP: tiempos \(t_{l,d}^{\text{fwd}}\), \(t_{l,d}^{\text{bwd}}\); energías \(e_{l,d}^{\text{fwd}}\), \(e_{l,d}^{\text{bwd}}\); memorias \(m_{l}^{\text{params}}\), \(m_{l}^{\text{acts}}\), \(m_{l}^{\text{opt}}\); y transferencias \(h2d_l\), \(d2h_l\). Las variables de decisión binarias \(x_{l}^{\text{GPU}}, x_{l}^{\text{CPU}}\) se imponen con \(x_{l}^{\text{GPU}}+x_{l}^{\text{CPU}}=1\). Una función objetivo representativa minimiza la suma ponderada de tiempos y energías:
+**Mapeo al ILP.** Cada fila del CSV se traduce directamente en parámetros del ILP: tiempos \(t_{l,d}^{\text{fwd}}\), \(t_{l,d}^{\text{bwd}}\); energías \(e_{l,d}^{\text{fwd}}\), \(e_{l,d}^{\text{bwd}}\); memorias \(m_{l}^{\text{params}}\), \(m_{l}^{\text{acts}}\), \(m_{l}^{\text{opt}}\); y transferencias \(h2d_l\), \(d2h_l\) con \(h2d_l\) derivado de `params_mb` y \(d2h_l\) de `activations_mb`. Las variables de decisión binarias \(x_{l}^{\text{GPU}}, x_{l}^{\text{CPU}}\) se imponen con \(x_{l}^{\text{GPU}}+x_{l}^{\text{CPU}}=1\). Una función objetivo representativa minimiza la suma ponderada de tiempos y energías:
 \[
 \min \sum_l \sum_{d\in\{\text{CPU,GPU}\}} x_{l}^{d}\big(t_{l,d}^{\text{fwd}}+t_{l,d}^{\text{bwd}}+\text{transfers}_l^d\big) + \lambda \sum_l \sum_{d} x_{l}^{d}\big(e_{l,d}^{\text{fwd}}+e_{l,d}^{\text{bwd}}\big),
 \]
