@@ -21,8 +21,8 @@ jobs:
       - name: Run profiler smoke test (CPU-only)
         run: |
           mkdir -p data/test-ci
-          python src/profiler.py --model mlp --no-gpu --precision fp32 --warmup 1 --measure 1 --output-dir data/test-ci
+          python src/profiler.py --model simple_mlp --no_gpu --precision fp32 --warmup 1 --measure 1 --output_dir data/test-ci
       - name: Verify outputs
         run: |
-          test -f data/test-ci/mlp_metrics.csv
-          test -f data/test-ci/mlp_meta.json
+          test -f data/test-ci/simple_mlp_metrics.csv
+          test -f data/test-ci/simple_mlp_meta.json
