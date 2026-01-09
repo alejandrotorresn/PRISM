@@ -1,3 +1,5 @@
+[![CI Smoke Test](https://github.com/alejandrotorresn/Final-Thesis-Code/actions/workflows/ci.yml/badge.svg)](https://github.com/alejandrotorresn/Final-Thesis-Code/actions/workflows/ci.yml)
+
 # Hybrid CPU↔GPU Profiler for ILP Optimization
 
 ## Overview
