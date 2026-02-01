@@ -183,7 +183,7 @@ def cpu_supports_bf16() -> bool:
 
 def get_cpu_model():
     cpu_model = platform.processor()
-    if not cpu_model:
+    if not cpu_model or cpu_model == 'x86_64' :
         try:
             with open("/proc/cpuinfo") as f:
                 for line in f:
@@ -933,7 +933,6 @@ if __name__ == "__main__":
     parser.add_argument("--no_gpu", action='store_true', help="Disable GPU profiling even if available")
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID to use for profiling")
     parser.add_argument("--rapl", action='store_true', help="Enable RAPL energy measurement on CPU (Linux only)")
-    
     parser.add_argument("--input_size", type=int, default=224, help="Input size (for vision models)")
     parser.add_argument("--seq_length", type=int, default=128, help="Sequence length (for NLP models)")
     parser.add_argument("--optimizer", type=str, default="SGD", choices=list(OPTIMIZER_OVERHEAD_MAP.keys()), help="Optimizer type for overhead estimation")

@@ -23,19 +23,19 @@ LOG_FILE="logs/experiments_log.txt" # Log in logs/ folder
 
 # 1. Models to characterize (Vision, NLP, MLP)
 #MODELS=("resnet50" "resnet152" "vit_b16" "bert_base" "gpt2_small" "simple_mlp")
-MODELS=("resnet50" "simple_mlp")
+MODELS=("vit_b16")
 
 # 2. Batch Sizes (Evaluate Memory Scalability)
 # Includes typical powers of 2
-#BATCH_SIZES=(8 16 32 64 128 256)
-BATCH_SIZES=(8 16 32 64)
+BATCH_SIZES=(8 16 32 64 128 256)
+#BATCH_SIZES=(8 16 32 64)
 
 # 3. Arithmetic Precisions
 # fp32: Standard Baseline
 # fp16: Mixed Precision (Tensor Cores)
 # bf16: BFloat16 (Ampere+ / Modern CPUs)
-#PRECISIONS=("fp32" "fp16" "bf16")
-PRECISIONS=("fp32")
+PRECISIONS=("fp32" "fp16" "bf16")
+#PRECISIONS=("fp32")
 
 # 4. Optimizers (Evaluate impact of optimizer states on memory)
 # Includes optimizers with varying state memory requirements:
@@ -44,8 +44,8 @@ PRECISIONS=("fp32")
 # - Adam/AdamW: Weights + Momentum + Variance (2x extra)
 # - RMSprop/Adagrad: Different accumulation strategies (~1x extra)
 # - Adadelta: Heavy history tracking (~2x extra)
-#OPTIMIZERS=("SGD" "SGD_momentum" "Adam" "AdamW" "RMSprop" "Adagrad" "Adadelta")
-OPTIMIZERS=("SGD" "Adam")
+OPTIMIZERS=("SGD" "SGD_momentum" "Adam" "AdamW" "RMSprop" "Adagrad" "Adadelta")
+#OPTIMIZERS=("SGD" "Adam")
 # Fixed Profiler Parameters
 WARMUP=3 #5
 MEASURE=10 #15
