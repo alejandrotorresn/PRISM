@@ -1,4 +1,12 @@
-# ILP Flow Diagram – Profiler Metrics to Optimization Model
+# Advanced Hybrid Profiler - Technical Documentation
+
+**See [../README.md](../README.md) for quick start and general overview.**
+
+This document describes the data schema, profiler outputs, and how metrics map to ILP optimization variables.
+
+---
+
+## ILP Flow Diagram – Profiler Metrics to Optimization Model
 
                 ┌───────────────────────────────┐
                 │   Profiler (per-layer CSV/JSON)│
@@ -214,6 +222,35 @@ Se recomiendan las siguientes prácticas metodológicas para asegurar rigor doct
 - **Repeticiones y estadística:** ejecutar múltiples repeticiones independientes y reportar medidas de dispersión (desviación estándar, intervalos de confianza) para cada métrica clave.
 - **Calibración de heurísticas:** cuando sea posible, medir backward explícitamente para capas críticas y sustituir la heurística \(T_{\text{bwd}}=2T_{\text{fwd}}\) por valores empíricos.
 - **Validación del ILP:** validar soluciones del ILP mediante ejecuciones reales en el entorno objetivo para detectar discrepancias debidas a solapes de transferencia y cómputo no modelados.
+
+---
+
+## Related Documentation
+
+For more information, see:
+
+| Document | Purpose |
+|----------|---------|
+| [../README.md](../README.md) | Project overview, quick start, setup instructions |
+| [README.md](README.md) | Detailed usage guide and troubleshooting |
+| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Complete reference of all files and folders |
+| [FOLDER_GUIDE.md](FOLDER_GUIDE.md) | Organization rationale and navigation |
+| [ZOMBIE_THREAD_FIX_SUMMARY.md](ZOMBIE_THREAD_FIX_SUMMARY.md) | Technical details of zombie thread issue and solutions |
+| [FINAL_VALIDATION_REPORT.md](FINAL_VALIDATION_REPORT.md) | Validation test results (60/60 checks) |
+| [CODE_REVIEW_FINAL_REPORT.md](CODE_REVIEW_FINAL_REPORT.md) | Code review of timeout mechanism |
+| [MODEL_VALIDATION_REPORT.md](MODEL_VALIDATION_REPORT.md) | Per-model validation analysis |
+
+## Getting Help
+
+1. **Quick Start**: See [../README.md](../README.md)
+2. **Usage Examples**: See [README.md](README.md)
+3. **Troubleshooting**: See [README.md](README.md#troubleshooting)
+4. **Project Structure**: See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
+5. **Deeper Technical Details**: See individual section above
+
+---
+
+*Last Updated*: February 24, 2026
 - **Documentación exhaustiva:** incluir en el apéndice los artefactos CSV y JSON, versiones de librerías, firmware y drivers, y la configuración de hardware para facilitar reproducibilidad y auditoría.
 - **Sensibilidad y análisis de robustez:** realizar análisis de sensibilidad del ILP frente a variaciones en alfa–beta, pico TFLOPS y energía medida para evaluar la estabilidad de las soluciones.
 

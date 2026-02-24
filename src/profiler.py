@@ -2,8 +2,8 @@
 Advanced Hybrid Profiler for Deep Learning Training (PhD Thesis).
 
 This tool characterizes neural network architectures to generate cost metrics
-required for the Integer Linear Programming (ILP) optimization model defined
-in Chapter 3 of the Thesis.
+required by the Integer Linear Programming (ILP) optimization model defined
+in Chapter 3 of the thesis.
 
 ================================================================================
 DATA DICTIONARY (OUTPUTS)
@@ -41,11 +41,19 @@ DATA DICTIONARY (OUTPUTS)
 --------------------------------------------------------------------------------
 | Key                     | Description                                            |
 |-------------------------|--------------------------------------------------------|
-| pci_stats_raw           | Calibration data for PCIe bus (Alpha/Beta/Sigma)       |
-| measured_peak_tflops_* | Empirical Peak TFLOPS measured via GEMM benchmark      |
+| pcie_stats_raw          | Calibration data for PCIe bus (Alpha/Beta/Sigma)      |
+| measured_peak_tflops_*  | Empirical peak TFLOPS measured via GEMM benchmark      |
 | energy_total_*_j        | Total energy consumed during the profiling window      |
 | overlap_ratio_sigma     | [NEW] Streaming concurrency ratio (0.0 - 1.0)          |
-| framework_overhead_* | Time spent in Python dispatch vs Kernel execution      |
+| framework_overhead_*    | Time spent in Python dispatch vs Kernel execution      |
+| cpu_precision_executed  | Effective precision executed on CPU (with status tags) |
+| gpu_precision_executed  | Effective precision executed on GPU                    |
+| cpu_fp16_supported      | Functional CPU FP16 support result (True/False)        |
+| cpu_fp16_isa_avx512     | Whether AVX512_FP16 ISA flag is detected               |
+| cpu_fp16_smoke_test_ok  | Result of runtime FP16 CPU smoke test (torch.mm)       |
+| cpu_fp16_model_smoke_ok | Result of CPU FP16 mini training-step preflight        |
+| cpu_fp16_model_smoke_reason | Diagnostic reason from CPU FP16 model preflight   |
+| cpu_fp16_support_reason | Human-readable reason/diagnostic for FP16 support      |
 ================================================================================
 
 METHODOLOGY OVERVIEW:
@@ -96,6 +104,9 @@ METHODOLOGY OVERVIEW:
 LIMITATIONS (Thesis Section 3.2):
     - CPU Energy: Returns 'NaN' (None) if Intel RAPL interface (/sys/class/powercap) is unavailable.
       Consequently, 'layer_j_per_tflop_cpu' and 'energy_efficiency_cpu' will also be None.
+        - CPU FP16 Support: The profiler validates functional FP16 support on CPU and records this
+            in metadata for traceability. If unsupported, it logs a warning and continues execution
+            without forcing a fallback to FP32.
     - Backward Estimation: We rely on the heuristic T_bwd = 2.0 * T_fwd, standard in
       hybrid offloading literature (e.g., vDNN, Checkmate).
 """
@@ -173,6 +184,57 @@ def set_determinism(seed: int = 42):
         torch.backends.cudnn.deterministic = True
     os.environ["PYTHONHASHSEED"] = str(seed)
 
+def configure_cpu_runtime(force_threads: int = 0) -> None:
+    """Configure CPU threading and denormal handling for stable HPC behavior.
+    
+    Args:
+        force_threads: If > 0, override auto-detection and use this thread count.
+                      Useful for overriding SLURM/HPC CPU affinity restrictions.
+    """
+    env_threads = os.getenv("OMP_NUM_THREADS")
+    target_threads = None
+    source = None
+
+    # Priority: force_threads > OMP_NUM_THREADS > cpu_affinity > physical_cores
+    if force_threads > 0:
+        target_threads = force_threads
+        source = "user_forced"
+    elif env_threads and env_threads.isdigit() and int(env_threads) > 0:
+        target_threads = int(env_threads)
+        source = "OMP_NUM_THREADS"
+    else:
+        try:
+            affinity = psutil.Process().cpu_affinity()
+            affinity_count = len(affinity) if affinity is not None else 0
+        except Exception:
+            affinity_count = 0
+
+        physical_count = psutil.cpu_count(logical=False) or psutil.cpu_count(logical=True) or 1
+        target_threads = affinity_count if affinity_count > 0 else physical_count
+        source = "cpu_affinity" if affinity_count > 0 else "physical_cores"
+
+    target_threads = max(1, int(target_threads))
+
+    try:
+        torch.set_num_threads(target_threads)
+    except Exception as e:
+        logger.warning(f"Failed to set torch intra-op threads: {e}")
+
+    try:
+        torch.set_num_interop_threads(max(1, min(4, target_threads)))
+    except Exception as e:
+        logger.warning(f"Failed to set torch inter-op threads: {e}")
+
+    try:
+        torch.set_flush_denormal(True)
+    except Exception as e:
+        logger.warning(f"Failed to enable flush denormals: {e}")
+
+    logger.info(
+        f"CPU runtime configured: threads={target_threads} "
+        f"(source={source}), interop={max(1, min(4, target_threads))}, flush_denormal=True"
+    )
+
 def cpu_supports_bf16() -> bool:
     """Check for AVX512_BF16 support on Linux."""
     try:
@@ -180,6 +242,212 @@ def cpu_supports_bf16() -> bool:
         with open("/proc/cpuinfo", "r") as f:
             return "avx512_bf16" in f.read()
     except: return False
+
+def get_cpu_fp16_support_info() -> Dict[str, Any]:
+    """Validate functional CPU FP16 support and provide traceable diagnostics."""
+    info = {
+        "supported": False,
+        "isa_avx512_fp16": False,
+        "smoke_test_ok": False,
+        "reason": "unknown"
+    }
+
+    try:
+        if platform.system() == "Linux":
+            with open("/proc/cpuinfo", "r") as f:
+                cpuinfo = f.read().lower()
+                info["isa_avx512_fp16"] = "avx512_fp16" in cpuinfo
+    except Exception:
+        info["isa_avx512_fp16"] = False
+
+    try:
+        a = torch.randn((64, 64), dtype=torch.float16, device="cpu")
+        b = torch.randn((64, 64), dtype=torch.float16, device="cpu")
+        _ = torch.mm(a, b)
+        info["smoke_test_ok"] = True
+    except Exception as e:
+        info["smoke_test_ok"] = False
+        info["reason"] = f"fp16 cpu smoke test failed: {e}"
+
+    if info["smoke_test_ok"]:
+        info["supported"] = True
+        if info["isa_avx512_fp16"]:
+            info["reason"] = "functional support validated; avx512_fp16 detected"
+        else:
+            info["reason"] = "functional support validated; avx512_fp16 not detected (possible emulation/slower path)"
+    elif info["reason"] == "unknown":
+        info["reason"] = "functional support not available"
+
+    return info
+
+def _extract_loss_for_preflight(out: Any) -> torch.Tensor:
+    """Extract a scalar loss tensor from heterogeneous model outputs."""
+    if hasattr(out, "loss") and out.loss is not None:
+        return out.loss
+    if hasattr(out, "logits"):
+        return out.logits.sum()
+    if isinstance(out, torch.Tensor):
+        return out.sum()
+    if isinstance(out, (tuple, list)) and len(out) > 0 and isinstance(out[0], torch.Tensor):
+        return out[0].sum()
+    return torch.tensor(0.0, requires_grad=True)
+
+def _build_mini_input_for_cpu_fp16(input_data: Any) -> Any:
+    """Build a minimal batch (size=1) and cast floating tensors to FP16 on CPU."""
+    def _slice_first(x: torch.Tensor) -> torch.Tensor:
+        if x.ndim > 0 and x.shape[0] > 1:
+            return x[:1].clone()
+        return x.clone()
+
+    def _to_cpu_fp16_if_float(x: torch.Tensor) -> torch.Tensor:
+        x_cpu = x.to("cpu")
+        if torch.is_floating_point(x_cpu):
+            return x_cpu.to(dtype=torch.float16)
+        return x_cpu
+
+    if isinstance(input_data, dict):
+        mini = {}
+        for key, value in input_data.items():
+            if isinstance(value, torch.Tensor):
+                mini[key] = _to_cpu_fp16_if_float(_slice_first(value))
+            else:
+                mini[key] = value
+        return mini
+
+    if isinstance(input_data, torch.Tensor):
+        return _to_cpu_fp16_if_float(_slice_first(input_data))
+
+    return input_data
+
+def run_cpu_fp16_model_preflight(model: nn.Module, input_data: Any, timeout_safety_factor: float = 2.5) -> Dict[str, Any]:
+    """
+    CPU FP16 full training-step preflight with adaptive timeout based on forward time.
+    
+    Validates that the model can execute forward+backward+step in FP16 on CPU without blocking.
+    Uses adaptive timeout: measures forward pass, then allows backward time = forward_time * BACKWARD_FACTOR * safety_factor.
+    
+    Args:
+        model: Neural network model to validate
+        input_data: Sample input data
+        timeout_safety_factor: Multiplier for timeout calculation (default 2.5×forward×BACKWARD_FACTOR)
+                              Accounts for overhead and hardware variability
+    
+    Result fields:
+    - ok: True if training step completed within adaptive timeout, False if timeout or exception
+    - reason: Human-readable diagnostic (includes measured forward time if available)
+    
+    Adaptive timeout behavior:
+    - Measures forward pass time
+    - Sets backward timeout = forward_time * BACKWARD_FACTOR * timeout_safety_factor
+    - If backward blocks beyond timeout (missing AVX512_FP16, etc.), returns False with diagnostic
+    - Prevents invalid data (guessed backward time) from reaching ILP
+    """
+    result = {"ok": False, "reason": "unknown"}
+    execution_result = {
+        "forward_completed": False,
+        "forward_time_ms": 0.0,
+        "backward_completed": False,
+        "exception": None
+    }
+    
+    def _run_training_step():
+        """Inner function to run training step, measures and sets flags on completion."""
+        try:
+            model.train()
+            model.to("cpu")
+            model.to(dtype=torch.float16)
+
+            mini_inp = _build_mini_input_for_cpu_fp16(input_data)
+            opt = torch.optim.SGD(model.parameters(), lr=1e-6)
+            opt.zero_grad(set_to_none=True)
+
+            # --- FORWARD PASS with measurement ---
+            t_forward_start = time.perf_counter()
+            if isinstance(mini_inp, dict):
+                out = model(**mini_inp)
+            else:
+                out = model(mini_inp)
+            t_forward_end = time.perf_counter()
+            execution_result["forward_time_ms"] = (t_forward_end - t_forward_start) * 1000.0
+            execution_result["forward_completed"] = True
+
+            # Extract loss
+            loss = _extract_loss_for_preflight(out)
+            
+            # --- BACKWARD PASS (monitored for blocking) ---
+            loss.backward()
+            
+            # --- OPTIMIZER STEP ---
+            opt.step()
+
+            execution_result["backward_completed"] = True
+        except Exception as e:
+            execution_result["exception"] = e
+
+    # Run preflight in a thread
+    preflight_thread = threading.Thread(target=_run_training_step, daemon=True)
+    preflight_thread.start()
+
+    # PHASE 1: Wait for forward pass to complete (with generous timeout of 60s)
+    # This allows us to measure forward_time_ms for adaptive backward timeout
+    preflight_thread.join(timeout=60.0)
+    
+    # PHASE 2: Calculate backward timeout based on measured forward time
+    # timeout = forward_time * BACKWARD_FACTOR * safety_factor, with minimum of 10s
+    if execution_result["forward_completed"]:
+        forward_time_sec = execution_result["forward_time_ms"] / 1000.0
+        backward_timeout = max(
+            10.0,  # Minimum 10s for backward even if forward is very fast
+            forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor
+        )
+        logger.debug(
+            f"FP16 preflight forward time: {execution_result['forward_time_ms']:.2f}ms, "
+            f"calculated backward timeout: {backward_timeout:.2f}s "
+            f"(formula: {forward_time_sec:.4f}s × {BACKWARD_FACTOR} × {timeout_safety_factor})"
+        )
+    else:
+        # Forward timed out or failed - use minimum timeout
+        backward_timeout = 10.0
+        logger.warning(
+            f"FP16 preflight forward pass did not complete within 60s timeout; "
+            f"using minimum backward timeout of {backward_timeout:.2f}s"
+        )
+
+    # PHASE 3: Wait for backward+optimizer to complete (or timeout)
+    # Thread has already completed forward, now waiting on backward+step
+    preflight_thread.join(timeout=backward_timeout)
+
+    # Analyze results
+    if execution_result["exception"] is not None:
+        # Exception occurred during training step (forward, backward, or optimizer)
+        result["ok"] = False
+        result["reason"] = f"cpu fp16 training-step preflight failed with exception: {execution_result['exception']}"
+    elif execution_result["backward_completed"]:
+        # Full training step (forward + backward + optimizer step) completed successfully
+        result["ok"] = True
+        result["reason"] = (
+            f"cpu fp16 training-step preflight succeeded "
+            f"(forward={execution_result['forward_time_ms']:.2f}ms, "
+            f"backward allowed {backward_timeout:.2f}s timeout)"
+        )
+    elif execution_result["forward_completed"]:
+        # Forward passed but backward timed out
+        result["ok"] = False
+        result["reason"] = (
+            f"cpu fp16 backward pass blocked after {backward_timeout:.2f}s timeout "
+            f"(forward took {execution_result['forward_time_ms']:.2f}ms, "
+            f"calculated timeout=forward×{BACKWARD_FACTOR}×{timeout_safety_factor}={backward_timeout:.2f}s); "
+            f"likely missing AVX512_FP16 ISA flag, insufficient CPU resources, or model too complex for CPU FP16"
+        )
+    else:
+        # Forward didn't complete within 60s initial timeout
+        result["ok"] = False
+        result["reason"] = (
+            f"cpu fp16 forward pass timeout after 60s; "
+            f"model layers too large for CPU FP16 on this hardware or severe resource limitation"
+        )
+
+    return result
 
 def get_cpu_model():
     cpu_model = platform.processor()
@@ -469,16 +737,23 @@ class TrainingProfiler:
                         "flops": 0.0
                     }
                 s = self.layer_stats[name]
-                
-                try:
-                    params_bytes = sum(p.numel() * p.element_size() for p in module.parameters(recurse=False))
-                    s["params_mb"] = params_bytes / (1024**2)
-                except: pass
-                
-                s["output_bytes"] = max(s["output_bytes"], get_tensor_size_recursive(out))
-                try:
-                    s["flops"] = max(s["flops"], estimate_flops(module, inp, out))
-                except: pass
+
+                if s["count"] == 0:
+                    try:
+                        params_bytes = sum(p.numel() * p.element_size() for p in module.parameters(recurse=False))
+                        s["params_mb"] = params_bytes / (1024**2)
+                    except:
+                        pass
+
+                    try:
+                        s["output_bytes"] = get_tensor_size_recursive(out)
+                    except:
+                        pass
+
+                    try:
+                        s["flops"] = estimate_flops(module, inp, out)
+                    except:
+                        pass
 
                 # --- Timing ---
                 kernel_ms = 0.0
@@ -711,6 +986,109 @@ class TrainingProfiler:
             logger.warning(f"Failed to measure TFLOPS on {device}: {e}")
             return 0.0
 
+    def _save_gpu_partial_results(
+        self,
+        gpu_layer_stats: Dict[str, Dict[str, Any]],
+        gpu_total_energy: Optional[float],
+        gpu_run_time_sec: float,
+        measured_gpu_peak_tflops: float,
+        measure: int
+    ) -> None:
+        """Persist GPU-only artifacts early to avoid data loss during long CPU profiling."""
+        if not gpu_layer_stats:
+            return
+
+        os.makedirs(self.args.output_dir, exist_ok=True)
+
+        g_total_layers_ms = sum((gpu_layer_stats[l].get("time_ms_accum", 0) / measure) for l in gpu_layer_stats) or 1.0
+        avg_step_time_gpu_ms = (gpu_run_time_sec * 1000.0) / measure if measure > 0 else 0.0
+        energy_avg_step_gpu = (gpu_total_energy / measure) if gpu_total_energy else 0.0
+
+        opt_name = getattr(self.args, "optimizer", "SGD")
+        opt_factor_used = OPTIMIZER_OVERHEAD_MAP.get(opt_name, OPTIMIZER_OVERHEAD_FACTOR)
+        rows = []
+
+        for name in sorted(gpu_layer_stats.keys()):
+            g_s = gpu_layer_stats.get(name, {})
+            t_fwd_gpu = g_s.get("time_ms_accum", 0) / max(1, g_s.get("count", 1))
+            gpu_share = (t_fwd_gpu / g_total_layers_ms) if g_total_layers_ms > 0 else 0.0
+            gpu_layer_energy_j = energy_avg_step_gpu * gpu_share
+            flops = g_s.get("flops", 0.0)
+
+            tflops = 0.0
+            eff_ratio = 0.0
+            if t_fwd_gpu > 0:
+                tflops = (flops / 1e12) / (t_fwd_gpu / 1000.0)
+                if measured_gpu_peak_tflops > 0:
+                    eff_ratio = tflops / measured_gpu_peak_tflops
+
+            layer_work_tflops = flops / 1e12
+            dispatch_ms = g_s.get("dispatch_ms_accum", 0) / max(1, g_s.get("count", 1))
+            params_mb = g_s.get("params_mb", 0.0)
+
+            rows.append({
+                "layer": name,
+                "type": g_s.get("type", "Unknown"),
+                "params_mb": params_mb,
+                "grads_mb": params_mb,
+                "optimizer_states_mb": params_mb * opt_factor_used,
+                "activations_mb": g_s.get("output_bytes", 0) / (1024**2),
+                "theoretical_flops": flops,
+                "tflops": tflops,
+                "efficiency_ratio": eff_ratio,
+                "gpu_fwd_time_ms": t_fwd_gpu,
+                "gpu_bwd_time_ms": t_fwd_gpu * BACKWARD_FACTOR,
+                "gpu_fwd_energy_j": gpu_layer_energy_j,
+                "gpu_bwd_energy_j": gpu_layer_energy_j * BACKWARD_FACTOR,
+                "gpu_mem_peak_mb": g_s.get("mem_mb", 0),
+                "layer_j_per_tflop_gpu": (gpu_layer_energy_j / layer_work_tflops) if (layer_work_tflops > 0 and gpu_layer_energy_j > 0) else 0.0,
+                "dispatch_overhead_ratio": dispatch_ms / t_fwd_gpu if t_fwd_gpu > 0 else 0,
+                "cpu_fwd_time_ms": None,
+                "cpu_bwd_time_ms": None,
+                "cpu_fwd_energy_j": None,
+                "cpu_bwd_energy_j": None,
+                "cpu_mem_mb": None,
+                "layer_j_per_tflop_cpu": None,
+                "transfer_h2d_ms": None,
+                "transfer_d2h_ms": None,
+                "remat_penalty_ms": t_fwd_gpu,
+                "precision_requested": self.args.precision,
+                "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
+                "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
+                "optimizer": opt_name,
+                "opt_step_time_ms": getattr(self, "_last_opt_step_ms", 0.0)
+            })
+
+        partial_csv_path = os.path.join(self.args.output_dir, f"{self.model_name}_metrics_gpu_partial.csv")
+        pd.DataFrame(rows).to_csv(partial_csv_path, index=False)
+
+        partial_meta = get_hardware_metadata()
+        partial_meta.update({
+            "model": self.model_name,
+            "phase": "gpu_partial",
+            "layers_profiled_count": len(gpu_layer_stats),
+            "precision_mode": self.args.precision,
+            "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
+            "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
+            "cpu_fp16_supported": getattr(self.args, "cpu_fp16_supported", None),
+            "cpu_fp16_isa_avx512": getattr(self.args, "cpu_fp16_isa_avx512", None),
+            "cpu_fp16_smoke_test_ok": getattr(self.args, "cpu_fp16_smoke_test_ok", None),
+            "cpu_fp16_model_smoke_ok": getattr(self.args, "cpu_fp16_model_smoke_ok", None),
+            "cpu_fp16_model_smoke_reason": getattr(self.args, "cpu_fp16_model_smoke_reason", None),
+            "cpu_fp16_support_reason": getattr(self.args, "cpu_fp16_support_reason", None),
+            "gpu_total_layer_time_ms": g_total_layers_ms,
+            "gpu_step_time_ms": avg_step_time_gpu_ms,
+            "energy_avg_per_step_gpu_j": (gpu_total_energy / measure) if gpu_total_energy else None,
+            "energy_total_gpu_j": gpu_total_energy,
+            "measured_peak_tflops_gpu": measured_gpu_peak_tflops
+        })
+
+        partial_json_path = os.path.join(self.args.output_dir, f"{self.model_name}_meta_gpu_partial.json")
+        with open(partial_json_path, 'w') as f:
+            json.dump(partial_meta, f, indent=4)
+
+        logger.info(f"Saved early GPU partial artifacts: {partial_csv_path}, {partial_json_path}")
+
     def run_profiling(self, input_data: Any):
         """Executes the full profiling sequence."""
         logger.info(f"Starting Profiling Run for: {self.model_name}")
@@ -732,13 +1110,55 @@ class TrainingProfiler:
             gpu_layer_stats = self.layer_stats.copy()
             self.layer_stats = {}
             measured_gpu_peak_tflops = self._measure_peak_flops("cuda")
+            self._save_gpu_partial_results(
+                gpu_layer_stats=gpu_layer_stats,
+                gpu_total_energy=gpu_total_energy,
+                gpu_run_time_sec=gpu_run_time_sec,
+                measured_gpu_peak_tflops=measured_gpu_peak_tflops,
+                measure=measure
+            )
 
         # 3. CPU Profiling
-        logger.info("--> Profiling CPU Execution...")
-        cpu_total_energy, cpu_run_time_sec = self._run_epoch(input_data, "cpu", measure)
-        cpu_layer_stats = self.layer_stats.copy()
-        self.layer_stats = {}
-        measured_cpu_peak_tflops = self._measure_peak_flops("cpu")
+        cpu_total_energy, cpu_run_time_sec = None, 0.0
+        cpu_layer_stats = {}
+        measured_cpu_peak_tflops = 0.0
+
+        # CPU FP16 model-level viability preflight (only before CPU profiling)
+        # This is moved here to ensure GPU data is already saved before any blocking
+        if self.args.precision == "fp16" and not getattr(self.args, "skip_cpu", False):
+            model_preflight = run_cpu_fp16_model_preflight(self.model, input_data)
+            self.args.cpu_fp16_model_smoke_ok = model_preflight["ok"]
+            self.args.cpu_fp16_model_smoke_reason = model_preflight["reason"]
+            if not model_preflight["ok"]:
+                logger.warning(
+                    "CPU FP16 model preflight failed. Skipping CPU profiling. "
+                    f"Reason: {model_preflight['reason']}"
+                )
+
+        # Update precision execution tracking after preflight
+        if self.args.precision == "fp16" and self.args.cpu_fp16_model_smoke_ok is False:
+            self.args.cpu_precision_executed = "fp16_requested_model_preflight_failed"
+
+        # Determine if we should skip CPU profiling
+        skip_cpu_profile = (
+            getattr(self.args, "skip_cpu", False) or  # User requested skip
+            (
+                self.args.precision == "fp16" and
+                getattr(self.args, "cpu_fp16_model_smoke_ok", None) is False
+            )
+        )
+
+
+        if skip_cpu_profile:
+            logger.warning(
+                "Skipping CPU profiling: CPU FP16 model preflight failed and FP32 fallback is disabled."
+            )
+        else:
+            logger.info("--> Profiling CPU Execution...")
+            cpu_total_energy, cpu_run_time_sec = self._run_epoch(input_data, "cpu", measure)
+            cpu_layer_stats = self.layer_stats.copy()
+            self.layer_stats = {}
+            measured_cpu_peak_tflops = self._measure_peak_flops("cpu")
 
         # 4. Global Memory Snapshot
         gpu_peak_mb = 0.0
@@ -902,13 +1322,19 @@ class TrainingProfiler:
             "weighted_avg_tflops_per_layer": 0.0,
             "energy_efficiency_j_per_tflop_gpu": 0.0,
             "energy_efficiency_j_per_tflop_cpu": 0.0,
-            "cpu_precision": getattr(self.args, "cpu_precision_executed", "unknown"),
-            "gpu_precision": getattr(self.args, "gpu_precision_executed", "unknown"),
+            "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
+            "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
             "optimizer_step_time_total_ms": getattr(self, "_last_opt_step_ms", 0.0),
             "optimizer_step_time_avg_ms": (getattr(self, "_last_opt_step_ms", 0.0) / max(1, getattr(self, "_last_opt_step_count", 1))),
             "optimizer_used": opt_name,
             "optimizer_lr": getattr(self.args, "lr", 0.01),
             "optimizer_momentum": getattr(self.args, "momentum", None),
+            "cpu_fp16_supported": getattr(self.args, "cpu_fp16_supported", None),
+            "cpu_fp16_isa_avx512": getattr(self.args, "cpu_fp16_isa_avx512", None),
+            "cpu_fp16_smoke_test_ok": getattr(self.args, "cpu_fp16_smoke_test_ok", None),
+            "cpu_fp16_model_smoke_ok": getattr(self.args, "cpu_fp16_model_smoke_ok", None),
+            "cpu_fp16_model_smoke_reason": getattr(self.args, "cpu_fp16_model_smoke_reason", None),
+            "cpu_fp16_support_reason": getattr(self.args, "cpu_fp16_support_reason", None),
             "total_model_flops": total_model_flops,
             "total_model_flops_per_step": total_model_flops / measure
         })
@@ -938,14 +1364,42 @@ if __name__ == "__main__":
     parser.add_argument("--optimizer", type=str, default="SGD", choices=list(OPTIMIZER_OVERHEAD_MAP.keys()), help="Optimizer type for overhead estimation")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate (for metadata)")
     parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (for metadata)")
+    parser.add_argument("--skip_cpu", action='store_true', help="Skip CPU profiling entirely")
+    parser.add_argument("--num_threads", type=int, default=0, help="Force CPU thread count (0 = auto-detect)")
 
     args = parser.parse_args()
 
+    configure_cpu_runtime(force_threads=args.num_threads)
     set_determinism()
+
+    args.cpu_fp16_supported = None
+    args.cpu_fp16_isa_avx512 = None
+    args.cpu_fp16_smoke_test_ok = None
+    args.cpu_fp16_model_smoke_ok = None
+    args.cpu_fp16_model_smoke_reason = None
+    args.cpu_fp16_support_reason = None
 
     # Precision Setup
     torch_dtype = torch.float32
     if args.precision == "fp16":
+        fp16_info = get_cpu_fp16_support_info()
+        args.cpu_fp16_supported = fp16_info["supported"]
+        args.cpu_fp16_isa_avx512 = fp16_info["isa_avx512_fp16"]
+        args.cpu_fp16_smoke_test_ok = fp16_info["smoke_test_ok"]
+        args.cpu_fp16_support_reason = fp16_info["reason"]
+
+        if not fp16_info["supported"]:
+            logger.warning(
+                "CPU FP16 requested but functional support is not available. "
+                "Continuing without FP32 fallback. "
+                f"Reason: {fp16_info['reason']}"
+            )
+        elif not fp16_info["isa_avx512_fp16"]:
+            logger.warning(
+                "CPU FP16 is functionally available, but AVX512_FP16 was not detected. "
+                "Execution may use a slower path."
+            )
+
         torch_dtype = torch.float16
     elif args.precision == "bf16":
         if cpu_supports_bf16():
@@ -954,14 +1408,6 @@ if __name__ == "__main__":
             logger.warning("CPU does not support BF16. Falling back to FP32.")
             torch_dtype = torch.float32
 
-    # Precision Execution Tracking
-    if args.precision == "bf16" and not cpu_supports_bf16():
-        args.cpu_precision_executed = "fp32_fallback"
-    else:
-        args.cpu_precision_executed = args.precision
-    args.gpu_precision_executed = args.precision
-
-    
     # Model Selection
     logger.info(f"Initializing {args.model} with batch size {args.batch_size}...")
 
@@ -995,5 +1441,15 @@ if __name__ == "__main__":
         if isinstance(inp, torch.Tensor):
             inp = inp.to(dtype=torch_dtype)
             # For NLP inputs (int64 token IDs), no cast needed
+
+    # Precision Execution Tracking (Initial - before preflight)
+    # Note: Final tracking with preflight result will be set inside run_profiling()
+    if args.precision == "bf16" and not cpu_supports_bf16():
+        args.cpu_precision_executed = "fp32_fallback"
+    elif args.precision == "fp16" and args.cpu_fp16_supported is False:
+        args.cpu_precision_executed = "fp16_requested_no_cpu_support"
+    else:
+        args.cpu_precision_executed = args.precision
+    args.gpu_precision_executed = args.precision
 
     TrainingProfiler(model, args.model, args).run_profiling(inp)

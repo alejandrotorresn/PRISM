@@ -1,0 +1,28 @@
+# ========================================================================
+# PROFILER DEPENDENCIES
+# ========================================================================
+# Note: PyTorch and torchvision should be installed separately using:
+#   - conda (recommended, see environment.yml)
+#   - or pip with specific CUDA version from https://pytorch.org/get-started/locally/
+
+# Core utilities
+numpy>=1.24.0
+pandas>=2.0.0
+psutil>=5.9.0
+
+# Deep Learning (PyTorch)
+# Install separately: see environment.yml or https://pytorch.org/
+# torch>=2.1.0
+# torchvision>=0.16.0
+
+# NLP / Transformer models
+transformers>=4.40.0
+huggingface_hub>=0.20.0
+safetensors>=0.4.0
+
+# GPU monitoring and energy telemetry
+pynvml>=11.5.0              # NVIDIA GPU metrics via NVML
+
+# CPU energy measurement (Intel RAPL via sysfs on Linux)
+# Requires: /sys/class/powercap/intel-rapl/* accessible (may need sudo)
+pyRAPL>=0.2.3
