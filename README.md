@@ -61,6 +61,7 @@ Output: `data/vit_b16_metrics.csv` + `data/vit_b16_meta.json`
 python validation/validate_code.py
 python validation/validate_all_models.py
 python validation/validate_zombie_fix.py
+bash validation/run_unit_tests.sh
 ```
 
 ---

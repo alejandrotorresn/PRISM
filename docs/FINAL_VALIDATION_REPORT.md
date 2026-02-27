@@ -140,18 +140,19 @@ $$\text{backward\_timeout} = \max(10s, T_{fwd} \times 2.0 \times 2.5)$$
 ## 📦 Deliverables
 
 ### Core Code (Modified)
-- **File**: `src/profiler.py`
-- **Lines Modified**: 379-407 (timeout logic), 408-437 (diagnostics)
+- **Files**: `src/profiler.py`, `src/core/*`, `src/models/factory.py`, `src/runner/training_profiler.py`
+- **Architecture**: Modular refactor preserving CLI/public API compatibility
 - **Key Components**:
-  - `run_cpu_fp16_model_preflight()` - Two-phase timeout mechanism
+  - `run_cpu_fp16_model_preflight()` - Two-phase timeout mechanism (moved to `src/core/precision_policy.py`)
   - `_extract_loss_for_preflight()` - Loss extraction helper
   - `_build_mini_input_for_cpu_fp16()` - Input preparation helper
-  - Full model loading for 6 architectures (lines 1380-1405)
+  - Full model loading for 6 architectures (`src/models/factory.py`)
+  - Runtime profiler orchestration (`src/runner/training_profiler.py`)
 
 ### Validation Scripts Created
 - **`comprehensive_check.sh`**: 60-point validation (all passing)
 - **`validate_all_models.py`**: Model loading and preflight test harness
-- **`validate_code.py`**: Quick syntax and integrity check
+- **`validate_code.py`**: Quick syntax/integrity check with modular-architecture support (imports + inspect)
 - **`test_timeout_validation.py`**: Timeout behavior test suite
 
 ### Documentation

@@ -2,7 +2,7 @@
 
 ## ✅ RESUMEN EJECUTIVO
 
-**Todos los modelos están correctamente integrados en profiler.py**
+**Todos los modelos están correctamente integrados en la arquitectura modular (`src/profiler.py` + `src/core` + `src/models` + `src/runner`)**
 
 ---
 
@@ -23,7 +23,7 @@
 
 ## 2️⃣ Análisis por Componente
 
-### **Carga de Modelos (Líneas 1381-1405)**
+### **Carga de Modelos (`src/models/factory.py`)**
 
 ✅ **Vision Models (Correctamente implementados)**
 ```python
@@ -55,7 +55,7 @@ inp = torch.randn((batch_size, 784), dtype=torch_dtype)
 ```
 **Status**: Completamente configurable
 
-### **Manejo de Precisión (Líneas 1350-1401)**
+### **Manejo de Precisión (`src/core/precision_policy.py` + orquestación en `src/profiler.py`)**
 
 ✅ **FP16 Path**
 - Detecta soporte CPU: `get_cpu_fp16_support_info()`
@@ -64,9 +64,9 @@ inp = torch.randn((batch_size, 784), dtype=torch_dtype)
 - Preflight preflight completo (forward+backward+step)
 
 ✅ **BF16 Path**
-- Detecta soporte: `cpu_supports_bf16()` (AVX512_BF16)
-- Fallback a FP32 si no soportado
-- Nota: BERT/GPT2 manejan BF16 internamente
+- Detecta soporte ISA acelerado: AVX512_BF16 o AMX_BF16+AMX_TILE
+- Si no hay soporte acelerado, la ejecución se marca como `skip` (sin fallback emulado)
+- Nota: BERT/GPT2 mantienen entrada en INT64; la política de precisión se aplica al flujo general
 
 ✅ **Cast de Entrada**
 ```python
@@ -76,7 +76,7 @@ if args.precision in ["fp16", "bf16"] and args.model not in ["bert_base", "gpt2_
 ```
 **Status**: Excluye NLP models correctamente (tokens permanecen INT64)
 
-### **CPU FP16 Preflight (Líneas 1410-1418)**
+### **CPU FP16 Preflight (`src/core/precision_policy.py`, invocado desde `src/runner/training_profiler.py`)**
 
 ✅ **Ejecución**
 ```python
@@ -91,7 +91,7 @@ if args.precision == "fp16":
 - NLP models: Mini batch [1, seq_len] int64 + FP16 para computación ✅
 - SimpleMLP: Mini batch [1, 784] en FP16 ✅
 
-### **Campos de Metadata (Líneas 1340-1349, luego guardados en JSON)**
+### **Campos de Metadata (inicialización en `src/profiler.py`, guardado en `src/runner/training_profiler.py`)**
 
 ✅ **Inicialización**
 ```python
@@ -111,7 +111,7 @@ args.cpu_fp16_support_reason = None         # ← Actualizado por get_cpu_fp16_s
 
 ## 3️⃣ Análisis Detallado del Timeout de Dos Fases
 
-### **Función: run_cpu_fp16_model_preflight() (Líneas 311-437)**
+### **Función: run_cpu_fp16_model_preflight() (`src/core/precision_policy.py`)**
 
 #### **Componentes Críticos**
 
@@ -166,7 +166,7 @@ $$\text{backward\_timeout} = \max(10s, T_{fwd} \times 2.0 \times 2.5)$$
 
 ✅ **FP32**: Siempre funciona (baseline)  
 ✅ **FP16**: Con detección de soporte y preflight  
-✅ **BF16**: Con fallback a FP32 si no soportado  
+✅ **BF16**: Con política ISA-aware (`skip` + reporte) si no hay soporte acelerado  
 
 ### **Metadata Completitud**
 
@@ -221,7 +221,7 @@ $$\text{backward\_timeout} = \max(10s, T_{fwd} \times 2.0 \times 2.5)$$
 
 ## 7️⃣ Capacidad de Todos los Modelos
 
-### **SimpleMLP** (Líneas 253-262)
+### **SimpleMLP** (`src/models/factory.py`)
 ```python
 def __init__(self, input_dim=784, hidden_dims=(512, 256), output_dim=10):
     super().__init__()
@@ -254,12 +254,12 @@ start
   │       ├─ Smoke test torch.mm (funcionalidad)
   │       └─ Retorna: supported, isa_flag, reason
   │
-  ├─ Si precision == "bf16":
-  │   └─ cpu_supports_bf16()
-  │       └─ Detecta AVX512_BF16 + fallback a FP32
+    ├─ Si precision == "bf16":
+    │   └─ policy ISA-aware
+    │       └─ AVX512_BF16 o AMX_BF16+AMX_TILE; si no, `skipped_unsupported_precision`
   │
-  ├─ Cargar modelo con dtype correcto
-  │   └─ Para NLP: Model + tokens float64
+    ├─ Cargar modelo con dtype correcto
+    │   └─ Para NLP: Model + tokens int64
   │   └─ Para vision: Model + imagen en dtype
   │
   ├─ Preparar input

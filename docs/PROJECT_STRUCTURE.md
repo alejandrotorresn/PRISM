@@ -13,7 +13,7 @@ This project implements an advanced profiler for deep learning models to generat
 │   ├── profiler.py              # Main profiler implementation
 │   ├── profiler_en.md           # English documentation (embedded)
 │   ├── profiler_es.md           # Spanish documentation (embedded)
-│   └── profiler_old.py          # Legacy/backup version
+│   └── __init__.py
 │
 ├── config/                       # Configuration files
 │   ├── environment.yml          # Conda environment specification
@@ -99,11 +99,6 @@ The complete profiler implementation for characterizing DL models:
 
 #### `profiler_en.md` / `profiler_es.md`
 Inline documentation within profiler.py extracted to separate files.
-
-#### `profiler_old.py`
-Legacy version for reference/rollback.
-
----
 
 ### Configuration (`config/`)
 

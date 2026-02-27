@@ -9,7 +9,6 @@ Advanced Hybrid Profiler/
 │   ├── profiler.py                     # ★ Main application (1455 lines)
 │   ├── profiler_en.md                  # English documentation excerpt
 │   ├── profiler_es.md                  # Spanish documentation excerpt
-│   ├── profiler_old.py                 # Legacy/backup version
 │   └── __init__.py
 │
 ├── 📁 config/                           # Configuration & Dependencies
