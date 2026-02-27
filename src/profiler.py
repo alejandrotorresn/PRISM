@@ -243,6 +243,79 @@ def cpu_supports_bf16() -> bool:
             return "avx512_bf16" in f.read()
     except: return False
 
+def get_cpu_instruction_flags() -> List[str]:
+    """Return detected CPU ISA flags (Linux /proc/cpuinfo based)."""
+    if platform.system() != "Linux":
+        return []
+
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            cpuinfo = f.read().lower()
+    except Exception:
+        return []
+
+    matches = re.findall(r"^flags\s*:\s*(.+)$", cpuinfo, re.MULTILINE)
+    if not matches:
+        return []
+
+    flags = set()
+    for line in matches:
+        for flag in line.split():
+            flags.add(flag.strip())
+    return sorted(flags)
+
+def probe_cpu_precision_support() -> Dict[str, Any]:
+    """
+    Probe CPU ISA support relevant to mixed precision training decisions.
+
+    FP16 requires AVX512_FP16 for accelerated training path.
+    BF16 requires AVX512_BF16 or AMX_BF16 (+ AMX_TILE) accelerated path.
+    """
+    flags = set(get_cpu_instruction_flags())
+    has_avx512_fp16 = "avx512_fp16" in flags
+    has_avx512_bf16 = "avx512_bf16" in flags
+    has_amx_bf16 = "amx_bf16" in flags
+    has_amx_tile = "amx_tile" in flags
+    has_amx_bf16_path = has_amx_bf16 and has_amx_tile
+
+    return {
+        "flags": sorted(flags),
+        "avx512_fp16": has_avx512_fp16,
+        "avx512_bf16": has_avx512_bf16,
+        "amx_bf16": has_amx_bf16,
+        "amx_tile": has_amx_tile,
+        "fp16_accelerated": has_avx512_fp16,
+        "bf16_accelerated": has_avx512_bf16 or has_amx_bf16_path
+    }
+
+def evaluate_precision_execution_policy(precision: str, isa_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Decide whether requested precision can be executed on CPU ISA-accelerated path."""
+    result = {
+        "allowed": True,
+        "cpu_precision_executed": precision,
+        "reason": "",
+        "status": "ready"
+    }
+
+    if precision == "fp16":
+        if not isa_info.get("fp16_accelerated", False):
+            result.update({
+                "allowed": False,
+                "cpu_precision_executed": "fp16_requested_isa_unsupported",
+                "reason": "missing avx512_fp16; fp16 would require non-accelerated/emulated path",
+                "status": "skipped_unsupported_precision"
+            })
+    elif precision == "bf16":
+        if not isa_info.get("bf16_accelerated", False):
+            result.update({
+                "allowed": False,
+                "cpu_precision_executed": "bf16_requested_isa_unsupported",
+                "reason": "missing avx512_bf16 and amx_bf16/amx_tile; bf16 would require non-accelerated/emulated path",
+                "status": "skipped_unsupported_precision"
+            })
+
+    return result
+
 def get_cpu_fp16_support_info() -> Dict[str, Any]:
     """Validate functional CPU FP16 support and provide traceable diagnostics."""
     info = {
@@ -679,6 +752,8 @@ class TrainingProfiler:
         self.hooks = []
         self._last_opt_step_ms = 0.0
         self._last_opt_step_count = 0
+        self._partial_csv_path = None
+        self._partial_json_path = None
         # Check GPU availability respecting the no-gpu flag
         self.has_gpu = torch.cuda.is_available() and not args.no_gpu
         self.gpu_id = args.gpu_id if self.has_gpu else 0
@@ -1055,6 +1130,9 @@ class TrainingProfiler:
                 "precision_requested": self.args.precision,
                 "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
                 "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
+                "run_executed": True,
+                "skip_unsupported_precision": False,
+                "skip_reason": "",
                 "optimizer": opt_name,
                 "opt_step_time_ms": getattr(self, "_last_opt_step_ms", 0.0)
             })
@@ -1087,11 +1165,98 @@ class TrainingProfiler:
         with open(partial_json_path, 'w') as f:
             json.dump(partial_meta, f, indent=4)
 
+        self._partial_csv_path = partial_csv_path
+        self._partial_json_path = partial_json_path
+
         logger.info(f"Saved early GPU partial artifacts: {partial_csv_path}, {partial_json_path}")
+
+    def _cleanup_partial_artifacts(self) -> None:
+        """Remove temporary GPU partial artifacts after a successful final save."""
+        if getattr(self.args, "keep_partial_artifacts", False):
+            return
+
+        for path in [self._partial_csv_path, self._partial_json_path]:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.info(f"Removed temporary partial artifact: {path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary partial artifact {path}: {e}")
+
+    def _save_skip_artifacts(self, reason: str) -> None:
+        """Persist CSV/JSON status when profiling is skipped due to unsupported precision ISA."""
+        os.makedirs(self.args.output_dir, exist_ok=True)
+
+        row = {
+            "layer": "__profiling_skipped__",
+            "type": "NA",
+            "params_mb": 0.0,
+            "grads_mb": 0.0,
+            "optimizer_states_mb": 0.0,
+            "activations_mb": 0.0,
+            "theoretical_flops": 0.0,
+            "tflops": 0.0,
+            "efficiency_ratio": 0.0,
+            "gpu_fwd_time_ms": 0.0,
+            "gpu_bwd_time_ms": 0.0,
+            "gpu_fwd_energy_j": 0.0,
+            "gpu_bwd_energy_j": 0.0,
+            "gpu_mem_peak_mb": 0.0,
+            "layer_j_per_tflop_gpu": None,
+            "dispatch_overhead_ratio": 0.0,
+            "cpu_fwd_time_ms": 0.0,
+            "cpu_bwd_time_ms": 0.0,
+            "cpu_fwd_energy_j": 0.0,
+            "cpu_bwd_energy_j": 0.0,
+            "cpu_mem_mb": 0.0,
+            "layer_j_per_tflop_cpu": None,
+            "transfer_h2d_ms": 0.0,
+            "transfer_d2h_ms": 0.0,
+            "remat_penalty_ms": 0.0,
+            "precision_requested": self.args.precision,
+            "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
+            "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
+            "run_executed": False,
+            "skip_unsupported_precision": True,
+            "skip_reason": reason,
+            "optimizer": getattr(self.args, "optimizer", "SGD"),
+            "opt_step_time_ms": 0.0
+        }
+
+        csv_path = os.path.join(self.args.output_dir, f"{self.model_name}_metrics.csv")
+        pd.DataFrame([row]).to_csv(csv_path, index=False)
+
+        meta = get_hardware_metadata()
+        meta.update({
+            "model": self.model_name,
+            "precision_mode": self.args.precision,
+            "execution_status": "skipped_unsupported_precision",
+            "execution_skip_reason": reason,
+            "run_executed": False,
+            "skip_unsupported_precision": True,
+            "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
+            "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
+            "cpu_instruction_flags": getattr(self.args, "cpu_instruction_flags", []),
+            "cpu_isa_probe": getattr(self.args, "cpu_isa_probe", {})
+        })
+
+        json_path = os.path.join(self.args.output_dir, f"{self.model_name}_meta.json")
+        with open(json_path, 'w') as f:
+            json.dump(meta, f, indent=4)
+
+        logger.warning(
+            "Profiling skipped due to unsupported precision ISA. "
+            f"Artifacts saved: {csv_path}, {json_path}. Reason: {reason}"
+        )
 
     def run_profiling(self, input_data: Any):
         """Executes the full profiling sequence."""
         logger.info(f"Starting Profiling Run for: {self.model_name}")
+
+        if getattr(self.args, "abort_profiling_due_to_isa", False):
+            reason = getattr(self.args, "abort_profiling_reason", "unsupported precision ISA")
+            self._save_skip_artifacts(reason)
+            return
         
         warmup = int(getattr(self.args, "warmup", WARMUP_STEPS))
         measure = int(getattr(self.args, "measure", MEASURE_STEPS))
@@ -1271,6 +1436,9 @@ class TrainingProfiler:
                 "precision_requested": self.args.precision,
                 "cpu_precision_executed": self.args.cpu_precision_executed,
                 "gpu_precision_executed": self.args.gpu_precision_executed,
+                "run_executed": True,
+                "skip_unsupported_precision": False,
+                "skip_reason": "",
                 "optimizer": opt_name,
                 "opt_step_time_ms": getattr(self, "_last_opt_step_ms", 0.0)
             })
@@ -1335,6 +1503,12 @@ class TrainingProfiler:
             "cpu_fp16_model_smoke_ok": getattr(self.args, "cpu_fp16_model_smoke_ok", None),
             "cpu_fp16_model_smoke_reason": getattr(self.args, "cpu_fp16_model_smoke_reason", None),
             "cpu_fp16_support_reason": getattr(self.args, "cpu_fp16_support_reason", None),
+            "cpu_instruction_flags": getattr(self.args, "cpu_instruction_flags", []),
+            "cpu_isa_probe": getattr(self.args, "cpu_isa_probe", {}),
+            "execution_status": getattr(self.args, "execution_status", "completed"),
+            "execution_skip_reason": getattr(self.args, "abort_profiling_reason", ""),
+            "run_executed": True,
+            "skip_unsupported_precision": False,
             "total_model_flops": total_model_flops,
             "total_model_flops_per_step": total_model_flops / measure
         })
@@ -1342,6 +1516,8 @@ class TrainingProfiler:
         json_path = os.path.join(self.args.output_dir, f"{self.model_name}_meta.json")
         with open(json_path, 'w') as f:
             json.dump(meta, f, indent=4)
+
+        self._cleanup_partial_artifacts()
 
         logger.info(f"Profiling Complete. Data saved to {self.args.output_dir}")
 
@@ -1366,6 +1542,7 @@ if __name__ == "__main__":
     parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (for metadata)")
     parser.add_argument("--skip_cpu", action='store_true', help="Skip CPU profiling entirely")
     parser.add_argument("--num_threads", type=int, default=0, help="Force CPU thread count (0 = auto-detect)")
+    parser.add_argument("--keep_partial_artifacts", action='store_true', help="Keep intermediate *_gpu_partial.csv/json artifacts after successful final save")
 
     args = parser.parse_args()
 
@@ -1378,9 +1555,29 @@ if __name__ == "__main__":
     args.cpu_fp16_model_smoke_ok = None
     args.cpu_fp16_model_smoke_reason = None
     args.cpu_fp16_support_reason = None
+    args.cpu_instruction_flags = []
+    args.cpu_isa_probe = {}
+    args.abort_profiling_due_to_isa = False
+    args.abort_profiling_reason = ""
+    args.execution_status = "ready"
 
     # Precision Setup
     torch_dtype = torch.float32
+    isa_info = probe_cpu_precision_support()
+    args.cpu_instruction_flags = isa_info.get("flags", [])
+    args.cpu_isa_probe = isa_info
+
+    precision_policy = evaluate_precision_execution_policy(args.precision, isa_info)
+    args.cpu_precision_executed = precision_policy["cpu_precision_executed"]
+    args.execution_status = precision_policy["status"]
+    if not precision_policy["allowed"]:
+        args.abort_profiling_due_to_isa = True
+        args.abort_profiling_reason = precision_policy["reason"]
+        logger.warning(
+            "Requested precision is not ISA-accelerated on this CPU. Profiling run will be skipped. "
+            f"Reason: {args.abort_profiling_reason}"
+        )
+
     if args.precision == "fp16":
         fp16_info = get_cpu_fp16_support_info()
         args.cpu_fp16_supported = fp16_info["supported"]
@@ -1405,7 +1602,7 @@ if __name__ == "__main__":
         if cpu_supports_bf16():
             torch_dtype = torch.bfloat16
         else:
-            logger.warning("CPU does not support BF16. Falling back to FP32.")
+            logger.warning("CPU does not support BF16 accelerated ISA path.")
             torch_dtype = torch.float32
 
     # Model Selection
@@ -1444,12 +1641,8 @@ if __name__ == "__main__":
 
     # Precision Execution Tracking (Initial - before preflight)
     # Note: Final tracking with preflight result will be set inside run_profiling()
-    if args.precision == "bf16" and not cpu_supports_bf16():
-        args.cpu_precision_executed = "fp32_fallback"
-    elif args.precision == "fp16" and args.cpu_fp16_supported is False:
+    if args.precision == "fp16" and args.cpu_fp16_supported is False and args.cpu_precision_executed == "fp16":
         args.cpu_precision_executed = "fp16_requested_no_cpu_support"
-    else:
-        args.cpu_precision_executed = args.precision
     args.gpu_precision_executed = args.precision
 
     TrainingProfiler(model, args.model, args).run_profiling(inp)

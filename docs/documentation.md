@@ -85,7 +85,7 @@ El perfilador híbrido CPU–GPU desarrollado en este trabajo constituye una her
 
 La fase de preparación del experimento persigue dos objetivos complementarios: minimizar la variabilidad no controlada y garantizar coherencia numérica entre dispositivos. Para ello se implementa una rutina de determinismo que fija semillas en Python, NumPy y PyTorch, desactiva heurísticas no deterministas de cuDNN y, cuando es posible, fuerza algoritmos deterministas en PyTorch. Estas medidas reducen la dispersión de las mediciones y facilitan comparaciones reproducibles entre ejecuciones y configuraciones.
 
-La gestión de precisión numérica se centraliza en una función que mapea las etiquetas de usuario a tipos de PyTorch (`fp32`, `fp16`, `bf16`). En CPU se verifica la presencia de soporte AVX512_BF16; en ausencia de dicho soporte se documenta y aplica un **fallback** a FP32 para evitar resultados numéricos inválidos. En la instanciación de modelos se adopta la siguiente política: para modelos HuggingFace (BERT, GPT2) se especifica `torch_dtype` en `from_pretrained` para materializar los pesos en la precisión deseada; para modelos de TorchVision y para el MLP propio se aplica la conversión posterior mediante `.half()` o `.to(torch.bfloat16)`. Los tensores de entrada se convierten únicamente si son de punto flotante; tensores discretos como `input_ids` y `attention_mask` se preservan en su tipo entero para mantener la semántica del modelo. Esta estrategia evita conversiones ambiguas que puedan inducir errores de análisis estático o inconsistencias numéricas.
+La gestión de precisión numérica se centraliza en una política que mapea las etiquetas de usuario a tipos de PyTorch (`fp32`, `fp16`, `bf16`) y, antes de ejecutar, sondea el conjunto de instrucciones de CPU (`/proc/cpuinfo`). Para ejecución acelerada se exige AVX512_FP16 en `fp16`, y AVX512_BF16 o AMX_BF16+AMX_TILE en `bf16`. Si no existe una ruta acelerada para la precisión solicitada, el perfilador **no ejecuta** entrenamiento/profilado (sin fallback emulado a FP32) y genera artefactos de estado (`CSV`/`JSON`) con bandera de `skip` y motivo explícito. En la instanciación de modelos se adopta la siguiente política: para modelos HuggingFace (BERT, GPT2) se especifica `torch_dtype` en `from_pretrained` para materializar los pesos en la precisión deseada; para modelos de TorchVision y para el MLP propio se aplica la conversión posterior mediante `.half()` o `.to(torch.bfloat16)`. Los tensores de entrada se convierten únicamente si son de punto flotante; tensores discretos como `input_ids` y `attention_mask` se preservan en su tipo entero para mantener la semántica del modelo. Esta estrategia evita conversiones ambiguas que puedan inducir errores de análisis estático o inconsistencias numéricas.
 
 La **fábrica de modelos** en `main()` garantiza que cada rama asigne `model` e `inp` de forma explícita y documentada. Para cada modelo se define la forma de entrada, la política de casting y la inicialización de dtype, de modo que las mediciones posteriores sean comparables y reproducibles. Además, se registra en los metadatos la precisión efectivamente ejecutada en CPU y GPU, lo que permite que el ILP incorpore restricciones de factibilidad relacionadas con la precisión.
 
@@ -181,6 +181,9 @@ A continuación se presenta una tabla que describe las columnas principales del 
 | **precision_requested** | string | — | Precisión solicitada por el usuario |
 | **cpu_precision_executed** | string | — | Precisión efectivamente ejecutada en CPU |
 | **gpu_precision_executed** | string | — | Precisión efectivamente ejecutada en GPU |
+| **run_executed** | bool | — | `true` si se ejecutó el perfilado; `false` si se omitió |
+| **skip_unsupported_precision** | bool | — | `true` cuando se omite por falta de ISA acelerada |
+| **skip_reason** | string | — | Motivo detallado de omisión |
 
 El **JSON** global contiene campos agregados y vectores que complementan el CSV. A modo de referencia, las entradas más relevantes del JSON son:
 
@@ -200,6 +203,10 @@ El **JSON** global contiene campos agregados y vectores que complementan el CSV.
 | **params_mb_total / activations_mb_total** | float | Sumatorias globales de parámetros y activaciones |
 | **total_model_flops_per_step** | float | Suma de FLOPs forward del modelo dividida por `measure` |
 | **optimizer_step_time_total_ms / optimizer_step_time_avg_ms** | float | Tiempo total y promedio de `optimizer.step()` medido |
+| **execution_status** | string | Estado global (`completed` o `skipped_unsupported_precision`) |
+| **execution_skip_reason** | string | Motivo de omisión (si aplica) |
+| **cpu_instruction_flags** | list | Flags ISA detectadas en CPU |
+| **cpu_isa_probe** | dict | Resultado estructurado del sondeo ISA usado por la política de precisión |
 
 **Mapeo al ILP.** Cada fila del CSV se traduce directamente en parámetros del ILP: tiempos \(t_{l,d}^{\text{fwd}}\), \(t_{l,d}^{\text{bwd}}\); energías \(e_{l,d}^{\text{fwd}}\), \(e_{l,d}^{\text{bwd}}\); memorias \(m_{l}^{\text{params}}\), \(m_{l}^{\text{acts}}\), \(m_{l}^{\text{opt}}\); y transferencias \(h2d_l\), \(d2h_l\) con \(h2d_l\) derivado de `params_mb` y \(d2h_l\) de `activations_mb`. Las variables de decisión binarias \(x_{l}^{\text{GPU}}, x_{l}^{\text{CPU}}\) se imponen con \(x_{l}^{\text{GPU}}+x_{l}^{\text{CPU}}=1\). Una función objetivo representativa minimiza la suma ponderada de tiempos y energías:
 \[
@@ -250,7 +257,8 @@ For more information, see:
 
 ---
 
-*Last Updated*: February 24, 2026
+### Líneas futuras de mejora
+
 - **Documentación exhaustiva:** incluir en el apéndice los artefactos CSV y JSON, versiones de librerías, firmware y drivers, y la configuración de hardware para facilitar reproducibilidad y auditoría.
 - **Sensibilidad y análisis de robustez:** realizar análisis de sensibilidad del ILP frente a variaciones en alfa–beta, pico TFLOPS y energía medida para evaluar la estabilidad de las soluciones.
 
@@ -259,3 +267,7 @@ For more information, see:
 ### Conclusión
 
 El perfilador híbrido descrito articula una metodología integral que vincula instrumentación de bajo nivel, medición energética concurrente, estimación de FLOPs y calibración de transferencias en un pipeline reproducible. Sus salidas —CSV por capa y JSON global— proporcionan una base auditable y directamente utilizable para la formulación y resolución del ILP de la tesis. La elección de medir picos empíricos de TFLOPS, separar kernel de overhead de framework y tratar la memoria pico como proxy conservador responde a criterios de validez y seguridad en la optimización. En conjunto, la herramienta permite fundamentar decisiones de planificación y asignación de recursos con evidencia empírica sólida, facilitando análisis comparativos entre arquitecturas, precisiones y dispositivos en un contexto de investigación doctoral.
+
+---
+
+*Last Updated*: February 26, 2026

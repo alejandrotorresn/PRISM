@@ -67,13 +67,14 @@ python src/profiler.py \
   --rapl
 ```
 
-### Important: Zombie Thread Avoidance
+### Important: ISA-Aware Precision Behavior
 
-When profiling ViT-B/16 or other models with slow CPU FP16:
+When requesting FP16/BF16 on CPU, profiling now checks ISA support first:
 
 ```bash
-# CPU FP16 emulation can be very slow on non-AVX512_FP16 CPUs:
-# Solution: Use --skip_cpu flag
+# If ISA is unsupported (no AVX512_FP16 or AVX512_BF16/AMX path),
+# the run is skipped and reported via run_executed / skip_reason.
+# Use --precision fp32 or supported hardware.
 
 python src/profiler.py \
   --model vit_b16 \
@@ -83,7 +84,7 @@ python src/profiler.py \
   --batch_size 32
 ```
 
-This extracts GPU metrics in ~3 minutes instead of ~15 minutes.
+Use `--skip_cpu` when you only need GPU metrics regardless of CPU support.
 
 ### Override SLURM Single-Core Limitation
 
@@ -105,7 +106,7 @@ python src/profiler.py \
 ### Metrics CSV
 - **Location**: `data/{model_name}_metrics.csv`
 - **Rows**: One per layer
-- **Columns**: Time, energy, FLOPs, memory, efficiency, overhead
+- **Columns**: Time, energy, FLOPs, memory, efficiency, overhead, execution status (`run_executed`, `skip_unsupported_precision`, `skip_reason`)
 - **Purpose**: Input data for ILP model
 
 ```bash
@@ -115,7 +116,7 @@ head -20 data/resnet50_metrics.csv
 
 ### Metadata JSON
 - **Location**: `data/{model_name}_meta.json`
-- **Content**: Hardware info, total energy, calibration data, precision executed
+- **Content**: Hardware info, total energy, calibration data, precision executed, execution status (`execution_status`, `execution_skip_reason`, `cpu_instruction_flags`, `cpu_isa_probe`)
 - **Purpose**: Global context for metrics
 
 ```bash
@@ -170,13 +171,13 @@ bash scripts/run_experiments.sh
 
 ## Troubleshooting
 
-### Process Hangs During Profiling
+### Run Skipped During Profiling
 
-**Symptom**: Stuck at "Profiling ViT-B/16 with FP16"
+**Symptom**: Output indicates precision run was skipped
 
-**Cause**: CPU FP16 emulation on non-AVX512_FP16 machine
+**Cause**: Requested FP16/BF16 has no accelerated ISA path on this CPU
 
-**Solution**: Use `--skip_cpu` or `--precision fp32`
+**Solution**: Check `skip_reason` in CSV/JSON, then use `--precision fp32` or supported hardware; use `--skip_cpu` for GPU-only runs
 
 ```bash
 python src/profiler.py --model vit_b16 --skip_cpu

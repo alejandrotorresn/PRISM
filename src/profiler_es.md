@@ -10,7 +10,7 @@ Este profiler caracteriza arquitecturas de deep learning y genera métricas para
 ### Hardware
 - GPU NVIDIA con soporte CUDA (métricas de kernel y energía vía NVML).
 - CPU Linux con acceso a `/sys/class/powercap` para energía RAPL (opcional).
-- Para bf16 en CPU: soporte AVX512-BF16; si no, fallback automático a fp32.
+- Para fp16/bf16 en CPU: se sondea ISA acelerada. Requiere AVX512-FP16 (fp16) y AVX512-BF16 o AMX_BF16+AMX_TILE (bf16). Si no existe soporte acelerado, el perfilado se omite y se reporta en CSV/JSON.
 
 ### Software
 - Python ≥ 3.9; PyTorch ≥ 2.0; TorchVision; Transformers (HuggingFace).
@@ -63,7 +63,7 @@ python src/profiler.py --model simple_mlp --no_gpu --precision fp32
 ## Flujo interno
 
 - Determinismo: seeds globales y flags de PyTorch; fallback si no se puede forzar.
-- Factory y casting: creación de modelo y datos sintéticos; tensores float se convierten a fp16/bf16 según la precisión solicitada (bf16 en CPU verifica AVX512-BF16; si no, `cpu_precision_executed = fp32_fallback`).
+- Factory y casting: creación de modelo y datos sintéticos; antes de ejecutar, se evalúa la política de precisión según ISA CPU. Si la precisión solicitada no tiene ruta acelerada, no se ejecuta entrenamiento/perfilado y se guardan artefactos con estado de `skip`.
 - Hooks por capa (solo hojas): pre/post hooks miden tiempo de kernel GPU (CUDA Events) o tiempo de pared CPU, overhead de despacho (`dispatch_ms = max(0, wall_ms - kernel_ms)`), memoria pico (proxy global) y tamaño de salida (payload PCIe), FLOPs teóricos por geometría (Conv, Linear, activaciones, norm; heurística para atención).
 - Calibración PCIe: estima α/β para H2D y D2H; se usan parámetros como proxy de payload H2D y activaciones como proxy de payload D2H.
 - Energía: NVML para GPU; pyRAPL opcional para CPU. Si RAPL no está disponible o falla, la energía CPU se reporta como `None` en metadatos y `0.0` en el CSV por capa.
@@ -114,8 +114,11 @@ Ubicación: `data/{model_name}_meta.json`
 | **transfer_d2h_ms** | Tiempo estimado Device→Host (α + activations_mb / β) |
 | **remat_penalty_ms** | Penalty de rematerialización (≈ tiempo forward GPU) |
 | **precision_requested** | Precisión solicitada (`fp32`, `fp16`, `bf16`) |
-| **cpu_precision_executed** | Precisión efectiva en CPU (p. ej., `fp32_fallback`) |
+| **cpu_precision_executed** | Precisión efectiva en CPU (incluye estados de no soporte, p. ej., `fp16_requested_isa_unsupported`) |
 | **gpu_precision_executed** | Precisión efectiva en GPU |
+| **run_executed** | Booleano: `true` si se ejecutó el perfilado, `false` si se omitió |
+| **skip_unsupported_precision** | Booleano: `true` si se omitió por falta de ISA acelerada |
+| **skip_reason** | Motivo detallado del `skip` |
 | **optimizer** | Optimizador usado |
 | **opt_step_time_ms** | Tiempo acumulado de `optimizer.step()` en la ventana de medición (ms) |
 
@@ -135,6 +138,10 @@ Ubicación: `data/{model_name}_meta.json`
 | **model** | Nombre del modelo perfilado |
 | **layers_profiled_count** | Número de capas hoja perfiladas |
 | **precision_mode** | Precisión solicitada |
+| **execution_status** | Estado de ejecución (`completed` o `skipped_unsupported_precision`) |
+| **execution_skip_reason** | Motivo del `skip` (si aplica) |
+| **cpu_instruction_flags** | Flags ISA detectadas en CPU (`/proc/cpuinfo`) |
+| **cpu_isa_probe** | Resultado estructurado del sondeo ISA para decisiones de precisión |
 | **cpu_precision**, **gpu_precision** | Precisión efectiva en CPU/GPU |
 | **gpu_total_layer_time_ms** | Suma de tiempos forward GPU por capa |
 | **cpu_total_layer_time_ms** | Suma de tiempos forward CPU por capa |
@@ -174,7 +181,7 @@ Ubicación: `data/{model_name}_meta.json`
 
 ## Validación y buenas prácticas
 - Reproducibilidad: ejecutar en entornos controlados; usar seeds fijos.
-- Fallbacks documentados: metadatos registran `cpu_precision_executed` y disponibilidad RAPL.
+- Política de precisión documentada: metadatos registran `cpu_precision_executed`, `execution_status`, `execution_skip_reason` y resultado del sondeo ISA.
 - Sanidad de tiempos: variación <5% entre corridas para per-layer y step; overhead ratio estable ±5% absolutos.
 - Energía: `energy_total_gpu_j` debe ser >0 si NVML está operativo; energía CPU será `None` si RAPL falla/no está.
 - Preferir `weighted_avg_tflops_per_layer` como métrica de rendimiento sostenido.
@@ -195,7 +202,7 @@ Ubicación: `data/{model_name}_meta.json`
 python src/profiler.py --model resnet50 --batch_size 16 --precision fp16 --rapl
 ```
 
-- ViT, bf16 solicitado; si CPU sin AVX512-BF16, queda registrado como `fp32_fallback` en metadatos:
+- ViT, bf16 solicitado; si CPU sin AVX512-BF16 y sin AMX_BF16/AMX_TILE, el perfilado se omite y queda registrado como `skip` en CSV/JSON:
 ```bash
 python src/profiler.py --model vit_b16 --batch_size 8 --precision bf16 --rapl
 ```
@@ -209,6 +216,3 @@ python src/profiler.py --model gpt2_small --no_gpu --batch_size 4 --precision fp
 ```bash
 python src/profiler.py --model simple_mlp --no_gpu --precision fp32 --warmup 1 --measure 2 --output_dir data/test
 ```
-| **theoretical_flops** | FLOPs teóricos de la capa (forward) |
-
-| **tflops** | Rendimiento efectivo de la capa en TFLOPS |

@@ -10,7 +10,7 @@ This profiler characterizes deep learning architectures and generates metrics fo
 ### Hardware
 - NVIDIA GPU with CUDA support for kernel metrics and GPU energy (NVML).
 - Linux CPU with `/sys/class/powercap` access for RAPL energy (optional).
-- For bf16 on CPU: AVX512-BF16 support; otherwise automatic fallback to fp32.
+- For fp16/bf16 on CPU: accelerated ISA is probed first. fp16 requires AVX512-FP16; bf16 requires AVX512-BF16 or AMX_BF16+AMX_TILE. If accelerated support is missing, profiling is skipped and reported in CSV/JSON.
 
 ### Software
 - Python ≥ 3.9; PyTorch ≥ 2.0; TorchVision; Transformers (HuggingFace).
@@ -68,7 +68,7 @@ python src/profiler.py --model simple_mlp --no_gpu --precision fp32 --warmup 1 -
 ## Internal Workflow
 
 - Determinism: global seeds and PyTorch flags; fallback if deterministic algorithms cannot be forced.
-- Factory and casting: model creation and synthetic data; float tensors are cast to fp16/bf16 per request (bf16 on CPU checks AVX512-BF16; otherwise `cpu_precision_executed = fp32_fallback`).
+- Factory and casting: model creation and synthetic data; before execution, a CPU ISA precision policy is evaluated. If the requested precision has no accelerated path, training/profiling is not executed and skip-status artifacts are saved.
 - Per-layer hooks (leaf-only): pre/post hooks measure GPU kernel time (CUDA Events) or CPU wall-clock, dispatch overhead (`dispatch_ms = max(0, wall_ms - kernel_ms)`), peak memory (global proxy), output size (PCIe payload), and theoretical FLOPs by geometry (Conv, Linear, activations, norm; attention heuristic).
 - PCIe calibration: estimates α/β for H2D and D2H; parameters are used as the H2D payload proxy and activations as the D2H payload proxy.
 - Energy: NVML for GPU; optional pyRAPL for CPU. If RAPL is unavailable or fails, CPU energy is `None` in metadata and `0.0` in the per-layer CSV.
@@ -119,8 +119,11 @@ Location: `data/{model_name}_meta.json`
 | **transfer_d2h_ms** | Estimated Device→Host time (α + activations_mb / β) |
 | **remat_penalty_ms** | Rematerialization penalty (≈ GPU forward time) |
 | **precision_requested** | Requested precision (`fp32`, `fp16`, `bf16`) |
-| **cpu_precision_executed** | Effective CPU precision (e.g., `fp32_fallback`) |
+| **cpu_precision_executed** | Effective CPU precision (includes unsupported states, e.g., `fp16_requested_isa_unsupported`) |
 | **gpu_precision_executed** | Effective GPU precision |
+| **run_executed** | Boolean: `true` if profiling executed, `false` if skipped |
+| **skip_unsupported_precision** | Boolean: `true` when skipped due to missing accelerated ISA |
+| **skip_reason** | Detailed skip reason |
 | **optimizer** | Optimizer used |
 | **opt_step_time_ms** | Accumulated `optimizer.step()` time within the measurement window (ms) |
 
@@ -140,6 +143,10 @@ Location: `data/{model_name}_meta.json`
 | **model** | Profiled model name |
 | **layers_profiled_count** | Number of leaf layers profiled |
 | **precision_mode** | Requested precision |
+| **execution_status** | Execution status (`completed` or `skipped_unsupported_precision`) |
+| **execution_skip_reason** | Skip reason (if applicable) |
+| **cpu_instruction_flags** | Detected CPU ISA flags (`/proc/cpuinfo`) |
+| **cpu_isa_probe** | Structured ISA probe result used for precision decisions |
 | **cpu_precision**, **gpu_precision** | Effective CPU/GPU precision |
 | **gpu_total_layer_time_ms** | Sum of GPU forward times across layers |
 | **cpu_total_layer_time_ms** | Sum of CPU forward times across layers |

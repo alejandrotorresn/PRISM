@@ -15,7 +15,7 @@ This profiler measures per-layer execution characteristics of deep learning mode
 - **Compute**: Theoretical FLOPs, measured TFLOPS, and hardware efficiency
 - **Memory**: Parameter, activation, gradient, and optimizer state sizes
 - **Transfers**: PCIe bandwidth modeling (α-β calibration)
-- **Precision**: FP32, FP16, BF16 with fallback handling
+- **Precision**: FP32, FP16, BF16 with ISA-aware execution policy (skip + report if unsupported)
 - **Framework Overhead**: CPU dispatch vs. kernel execution time
 
 **Output**: Per-layer CSV metrics + global JSON metadata for ILP model parameterization.
@@ -43,7 +43,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ### Profile Your First Model (2 minutes)
 
 ```bash
-# GPU-only profiling (avoids slow CPU FP16 emulation)
+# GPU-only profiling (independent of CPU precision ISA support)
 python src/profiler.py \
   --model vit_b16 \
   --precision fp32 \
@@ -94,9 +94,10 @@ python validation/validate_zombie_fix.py
 - Preflight moved inside run_profiling() for safety
 
 ### ✅ Precision Support
-- FP32, FP16, BF16 with automatic fallback
-- CPU FP16 capability detection
+- FP32, FP16, BF16 with CPU ISA probe (AVX512_FP16, AVX512_BF16, AMX_BF16/AMX_TILE)
+- Unsupported accelerated precision is skipped (no emulated fallback training)
 - Per-layer precision tracking
+- Explicit execution status reporting in CSV/JSON artifacts
 
 ### ✅ Comprehensive Output
 - **CSV**: Per-layer execution and energy metrics
@@ -213,7 +214,13 @@ watch -n 5 'ls -R data/results'
 --gpu_id N                  # GPU device ID (default: 0)
 --input_size N              # Vision model input size (default: 224)
 --seq_length N              # NLP model sequence length (default: 128)
+--keep_partial_artifacts    # Keep intermediate *_gpu_partial.csv/json after successful final save
 ```
+
+Note on outputs:
+- During long runs, the profiler may create temporary `*_metrics_gpu_partial.csv` and `*_meta_gpu_partial.json` as safety checkpoints.
+- By default, these partial files are removed automatically once final artifacts are saved successfully.
+- Use `--keep_partial_artifacts` to keep them for debugging/auditing.
 
 ### Zombie Thread Fix Arguments (NEW)
 
@@ -231,6 +238,9 @@ watch -n 5 'ls -R data/results'
 layer,type,params_mb,flops,gpu_fwd_time_ms,cpu_fwd_time_ms,gpu_fwd_energy_j,...
 conv2d,Conv2d,2.4,3.7e9,125.3,425.7,42.5,...
 linear,Linear,0.8,2.1e8,15.2,45.2,5.1,...
+
+# New status columns:
+# run_executed, skip_unsupported_precision, skip_reason
 ```
 
 ### JSON: Global Metadata
@@ -256,7 +266,7 @@ See [docs/documentation.md](docs/documentation.md) for complete schema.
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Process hangs at batch X | ViT-B/16 FP16 on CPU without AVX512_FP16 (C++ emulation) | Use `--skip_cpu` or `--precision fp32` |
+| Run reported as skipped | Requested FP16/BF16 lacks accelerated CPU ISA support | Check `skip_reason` in CSV/JSON, then use `--precision fp32` or supported hardware |
 | OOM (Out of Memory) | Batch size too large | Reduce `--batch_size` |
 | RAPL: Permission denied | RAPL requires read access to sysfs | Run with sudo or omit `--rapl` |
 | GPU: ImportError pynvml | NVIDIA driver/CUDA not installed | Install via pytorch.org |
@@ -270,8 +280,8 @@ For more, see [docs/PROJECT_STRUCTURE.md#troubleshooting](docs/PROJECT_STRUCTURE
 
 ### Zombie Thread Fix (v1.0)
 Fixed critical issue where CPU FP16 preflight could block GPU profiling:
-- **Problem**: ViT-B/16 + FP16 without AVX512_FP16 → C++ emulation → thread blocks
-- **Solution**: New `--skip_cpu` and `--num_threads` flags + preflight safety placement
+- **Problem**: Slow/blocked CPU FP16 paths in unsupported ISA scenarios
+- **Solution**: ISA-aware precision policy (`skip` + report), plus `--skip_cpu` and `--num_threads`
 - See [docs/ZOMBIE_THREAD_FIX_SUMMARY.md](docs/ZOMBIE_THREAD_FIX_SUMMARY.md)
 
 ### Two-Phase Timeout (Previous)

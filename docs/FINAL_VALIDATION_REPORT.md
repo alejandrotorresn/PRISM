@@ -33,7 +33,7 @@ All 6 neural network models are correctly integrated into the profiler with robu
 ### 3. **Precision Support (3 modes)** ✅
 - ✅ **FP32**: Always available (baseline)
 - ✅ **FP16**: With ISA detection + smoke test + full training-step preflight
-- ✅ **BF16**: With fallback to FP32 if unsupported
+- ✅ **BF16**: With ISA-based execution policy (skip + report if unsupported)
 
 ### 4. **Metadata Completeness** ✅
 All 6 FP16-related fields properly initialized, populated, and saved to JSON:
@@ -65,7 +65,7 @@ SECTION 2: PRECISION HANDLING (10/10 ✅)
 ├─ FP16 ISA flag check (AVX512_FP16) working
 ├─ FP16 smoke test (torch.mm) implemented
 ├─ BF16 detection function present
-├─ BF16 ISA flag check (AVX512_BF16) working
+├─ BF16 ISA flag check (AVX512_BF16 / AMX_BF16+AMX_TILE) working
 ├─ FP32/FP16/BF16 branches correctly implemented
 ├─ NLP models excluded from precision casting
 └─ Input casting logic correct
@@ -96,7 +96,7 @@ SECTION 5: PRECISION EXECUTION TRACKING (5/5 ✅)
 ├─ GPU precision tracking logic
 ├─ FP16 preflight failure path
 ├─ FP16 no support path
-└─ BF16 fallback to FP32 path
+└─ BF16 unsupported ISA skip-report path
 ```
 
 ---
@@ -181,7 +181,7 @@ $$\text{backward\_timeout} = \max(10s, T_{fwd} \times 2.0 \times 2.5)$$
 ### Precision Handling
 - ✅ FP32: always available
 - ✅ FP16: with ISA detection + smoke test + full preflight
-- ✅ BF16: with fallback to FP32
+- ✅ BF16: with ISA-based skip-report policy (no emulated fallback execution)
 - ✅ NLP models exclude input casting (tokens remain INT64)
 
 ### Metadata
@@ -192,8 +192,9 @@ $$\text{backward\_timeout} = \max(10s, T_{fwd} \times 2.0 \times 2.5)$$
 
 ### Data Integrity
 - ✅ Only valid metrics generated (backward only if preflight succeeds)
-- ✅ No fallback to FP32 if preflight fails
-- ✅ CPU profiling skipped if preflight fails  
+- ✅ FP16 preflight failure does not auto-fallback to FP32 (CPU profiling is skipped)
+- ✅ BF16 without accelerated ISA is skipped and reported (no emulated fallback execution)
+- ✅ Unsupported precision ISA generates explicit skip artifacts (CSV/JSON)
 - ✅ Clear diagnostics for why preflight failed
 
 ---
