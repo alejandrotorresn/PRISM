@@ -433,8 +433,9 @@ class TrainingProfiler:
             return
         cleanup_artifacts([self._partial_csv_path, self._partial_json_path])
 
-    def _save_skip_artifacts(self, reason: str) -> None:
+    def _save_skip_artifacts(self, reason: str, skip_status: str = "skipped_unsupported_precision") -> None:
         os.makedirs(self.args.output_dir, exist_ok=True)
+        skip_unsupported_precision = skip_status == "skipped_unsupported_precision"
 
         row = {
             "layer": "__profiling_skipped__",
@@ -466,7 +467,7 @@ class TrainingProfiler:
             "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
             "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
             "run_executed": False,
-            "skip_unsupported_precision": True,
+            "skip_unsupported_precision": skip_unsupported_precision,
             "skip_reason": reason,
             "optimizer": getattr(self.args, "optimizer", "SGD"),
             "opt_step_time_ms": 0.0,
@@ -479,10 +480,10 @@ class TrainingProfiler:
         meta.update({
             "model": self.model_name,
             "precision_mode": self.args.precision,
-            "execution_status": "skipped_unsupported_precision",
+            "execution_status": skip_status,
             "execution_skip_reason": reason,
             "run_executed": False,
-            "skip_unsupported_precision": True,
+            "skip_unsupported_precision": skip_unsupported_precision,
             "cpu_precision_executed": getattr(self.args, "cpu_precision_executed", "unknown"),
             "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
             "cpu_instruction_flags": getattr(self.args, "cpu_instruction_flags", []),
@@ -492,17 +493,19 @@ class TrainingProfiler:
         json_path = os.path.join(self.args.output_dir, f"{self.model_name}_meta.json")
         write_json_dict(json_path, meta)
 
-        logger.warning(
-            "Profiling skipped due to unsupported precision ISA. "
-            f"Artifacts saved: {csv_path}, {json_path}. Reason: {reason}"
-        )
+        logger.warning(f"Profiling skipped ({skip_status}). Artifacts saved: {csv_path}, {json_path}. Reason: {reason}")
 
     def run_profiling(self, input_data: Any):
         logger.info(f"Starting Profiling Run for: {self.model_name}")
 
+        if getattr(self.args, "skip_cpu", False) and not self.has_gpu:
+            reason = "--skip_cpu requested but GPU is unavailable or disabled; no execution target available"
+            self._save_skip_artifacts(reason, skip_status="skipped_invalid_configuration")
+            return
+
         if getattr(self.args, "abort_profiling_due_to_isa", False):
             reason = getattr(self.args, "abort_profiling_reason", "unsupported precision ISA")
-            self._save_skip_artifacts(reason)
+            self._save_skip_artifacts(reason, skip_status="skipped_unsupported_precision")
             return
 
         warmup = int(getattr(self.args, "warmup", WARMUP_STEPS))
@@ -550,13 +553,19 @@ class TrainingProfiler:
         )
 
         if skip_cpu_profile:
-            logger.warning("Skipping CPU profiling: CPU FP16 model preflight failed and FP32 fallback is disabled.")
+            if getattr(self.args, "skip_cpu", False):
+                logger.warning("Skipping CPU profiling: --skip_cpu requested by user.")
+            else:
+                logger.warning("Skipping CPU profiling: CPU FP16 model preflight failed and FP32 fallback is disabled.")
         else:
             logger.info("--> Profiling CPU Execution...")
             cpu_total_energy, cpu_run_time_sec = self._run_epoch(input_data, "cpu", measure)
             cpu_layer_stats = self.layer_stats.copy()
             self.layer_stats = {}
             measured_cpu_peak_tflops = self._measure_peak_flops("cpu")
+
+        self.args.execution_status = "completed"
+        self.args.abort_profiling_reason = ""
 
         gpu_peak_mb = 0.0
         if self.has_gpu:
@@ -734,7 +743,7 @@ class TrainingProfiler:
             "cpu_fp16_support_reason": getattr(self.args, "cpu_fp16_support_reason", None),
             "cpu_instruction_flags": getattr(self.args, "cpu_instruction_flags", []),
             "cpu_isa_probe": getattr(self.args, "cpu_isa_probe", {}),
-            "execution_status": getattr(self.args, "execution_status", "completed"),
+            "execution_status": getattr(self.args, "execution_status", "completed") or "completed",
             "execution_skip_reason": getattr(self.args, "abort_profiling_reason", ""),
             "run_executed": True,
             "skip_unsupported_precision": False,

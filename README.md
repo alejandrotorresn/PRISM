@@ -59,7 +59,7 @@ Output: `data/vit_b16_metrics.csv` + `data/vit_b16_meta.json`
 
 ```bash
 python validation/validate_code.py
-python validation/validate_all_models.py
+python validation/validate_all_models.py --preflight-scope fast
 python validation/validate_zombie_fix.py
 bash validation/run_unit_tests.sh
 ```
@@ -347,7 +347,7 @@ If you use this profiler in research, please cite:
 ### Running Tests
 ```bash
 python validation/validate_code.py        # Syntax checks
-python validation/validate_all_models.py   # Model validation
+python validation/validate_all_models.py --preflight-scope fast  # Model validation
 python validation/validate_zombie_fix.py   # Zombie thread fix validation
 bash validation/comprehensive_check.sh    # Full suite
 ```

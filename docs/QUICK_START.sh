@@ -29,7 +29,7 @@ echo ""
 
 echo -e "${BLUE}2. VERIFY INSTALLATION${NC}"
 echo "   python validation/validate_code.py"
-echo "   python validation/validate_all_models.py"
+echo "   python validation/validate_all_models.py --preflight-scope fast"
 echo "   python validation/validate_zombie_fix.py"
 echo ""
 

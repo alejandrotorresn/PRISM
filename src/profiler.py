@@ -78,39 +78,59 @@ def _configure_precision(args) -> torch.dtype:
     args.cpu_precision_executed = precision_policy["cpu_precision_executed"]
     args.execution_status = precision_policy["status"]
     if not precision_policy["allowed"]:
-        args.abort_profiling_due_to_isa = True
-        args.abort_profiling_reason = precision_policy["reason"]
-        logger.warning(
-            "Requested precision is not ISA-accelerated on this CPU. Profiling run will be skipped. "
-            f"Reason: {args.abort_profiling_reason}"
+        gpu_only_requested = bool(
+            getattr(args, "skip_cpu", False)
+            and not getattr(args, "no_gpu", False)
+            and torch.cuda.is_available()
         )
+        if gpu_only_requested:
+            args.abort_profiling_due_to_isa = False
+            args.abort_profiling_reason = ""
+            args.execution_status = "ready"
+            logger.warning(
+                "Requested precision is not ISA-accelerated on this CPU, "
+                "but --skip_cpu is active and GPU profiling is available. Continuing with GPU-only profiling. "
+                f"CPU reason: {precision_policy['reason']}"
+            )
+        else:
+            args.abort_profiling_due_to_isa = True
+            args.abort_profiling_reason = precision_policy["reason"]
+            logger.warning(
+                "Requested precision is not ISA-accelerated on this CPU. Profiling run will be skipped. "
+                f"Reason: {args.abort_profiling_reason}"
+            )
 
     if args.precision == "fp16":
-        fp16_info = get_cpu_fp16_support_info()
-        args.cpu_fp16_supported = fp16_info["supported"]
-        args.cpu_fp16_isa_avx512 = fp16_info["isa_avx512_fp16"]
-        args.cpu_fp16_smoke_test_ok = fp16_info["smoke_test_ok"]
-        args.cpu_fp16_support_reason = fp16_info["reason"]
+        if getattr(args, "skip_cpu", False):
+            args.cpu_fp16_supported = isa_info.get("fp16_accelerated", False)
+            args.cpu_fp16_isa_avx512 = isa_info.get("avx512_fp16", False)
+            args.cpu_fp16_smoke_test_ok = None
+            args.cpu_fp16_support_reason = "cpu profiling skipped (--skip_cpu); fp16 CPU smoke test not executed"
+            logger.info("Skipping CPU FP16 smoke test because --skip_cpu is enabled.")
+        else:
+            fp16_info = get_cpu_fp16_support_info()
+            args.cpu_fp16_supported = fp16_info["supported"]
+            args.cpu_fp16_isa_avx512 = fp16_info["isa_avx512_fp16"]
+            args.cpu_fp16_smoke_test_ok = fp16_info["smoke_test_ok"]
+            args.cpu_fp16_support_reason = fp16_info["reason"]
 
-        if not fp16_info["supported"]:
-            logger.warning(
-                "CPU FP16 requested but functional support is not available. "
-                "Continuing without FP32 fallback. "
-                f"Reason: {fp16_info['reason']}"
-            )
-        elif not fp16_info["isa_avx512_fp16"]:
-            logger.warning(
-                "CPU FP16 is functionally available, but AVX512_FP16 was not detected. "
-                "Execution may use a slower path."
-            )
+            if not fp16_info["supported"]:
+                logger.warning(
+                    "CPU FP16 requested but functional support is not available. "
+                    "Continuing without FP32 fallback. "
+                    f"Reason: {fp16_info['reason']}"
+                )
+            elif not fp16_info["isa_avx512_fp16"]:
+                logger.warning(
+                    "CPU FP16 is functionally available, but AVX512_FP16 was not detected. "
+                    "Execution may use a slower path."
+                )
 
         torch_dtype = torch.float16
     elif args.precision == "bf16":
-        if cpu_supports_bf16():
-            torch_dtype = torch.bfloat16
-        else:
+        torch_dtype = torch.bfloat16
+        if not cpu_supports_bf16():
             logger.warning("CPU does not support BF16 accelerated ISA path.")
-            torch_dtype = torch.float32
 
     return torch_dtype
 
