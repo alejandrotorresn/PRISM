@@ -1,3 +1,4 @@
+import importlib.util
 import logging
 import os
 import platform
@@ -10,11 +11,7 @@ import psutil
 import pynvml
 import torch
 
-try:
-    import pyRAPL
-    PYRAPL_AVAILABLE = True
-except ImportError:
-    PYRAPL_AVAILABLE = False
+PYRAPL_AVAILABLE = importlib.util.find_spec("pyRAPL") is not None
 
 logger = logging.getLogger(__name__)
 

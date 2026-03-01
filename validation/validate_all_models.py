@@ -13,7 +13,8 @@ Tests:
 import sys
 import os
 import logging
-from typing import Dict, Tuple, List, Any
+import argparse
+from typing import Dict, Tuple, List, Any, Optional
 
 # Add project src to path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -56,7 +57,7 @@ class ModelValidator:
     INPUT_SIZE = 224
     SEQ_LENGTH = 128
     
-    def __init__(self):
+    def __init__(self, preflight_models: Optional[List[str]] = None, preflight_timeout_safety_factor: float = 2.5):
         self.results = {
             "model_loading": {},
             "preflight": {},
@@ -64,6 +65,11 @@ class ModelValidator:
             "metadata": {}
         }
         self.models_loaded = {}
+        if preflight_models is None:
+            self.preflight_models = ["simple_mlp"]
+        else:
+            self.preflight_models = preflight_models
+        self.preflight_timeout_safety_factor = preflight_timeout_safety_factor
     
     def _load_model(self, model_name: str, dtype: torch.dtype) -> Tuple[nn.Module, Any]:
         """Load a model with specified precision."""
@@ -214,8 +220,15 @@ class ModelValidator:
             logger.warning("⚠️  CPU FP16 not supported - skipping preflight tests")
             self.results["preflight"]["skipped"] = "CPU FP16 not supported"
             return
+
+        if not self.preflight_models:
+            logger.warning("⚠️  Preflight scope is empty - skipping preflight tests")
+            self.results["preflight"]["skipped"] = "Preflight disabled by configuration"
+            return
+
+        logger.info(f"Preflight scope: {', '.join(self.preflight_models)}")
         
-        for model_name in self.MODELS:
+        for model_name in self.preflight_models:
             if model_name not in self.models_loaded:
                 logger.info(f"  ⏭️  {model_name}: not loaded, skipping preflight")
                 continue
@@ -224,7 +237,11 @@ class ModelValidator:
             
             try:
                 logger.info(f"  Running preflight for {model_name}...")
-                result = run_cpu_fp16_model_preflight(model, inp, timeout_safety_factor=2.5)
+                result = run_cpu_fp16_model_preflight(
+                    model,
+                    inp,
+                    timeout_safety_factor=self.preflight_timeout_safety_factor,
+                )
                 
                 # Store result
                 self.results["preflight"][model_name] = {
@@ -302,6 +319,7 @@ class ModelValidator:
         logger.info(f"Models to test: {', '.join(self.MODELS)}")
         logger.info(f"Precisions to test: {', '.join(self.PRECISIONS)}")
         logger.info(f"Batch size: {self.BATCH_SIZE}\n")
+        logger.info(f"FP16 preflight scope: {', '.join(self.preflight_models) if self.preflight_models else 'none'}")
         
         self.test_model_loading()
         self.test_precision_handling()
@@ -356,7 +374,32 @@ class ModelValidator:
 
 
 def main():
-    validator = ModelValidator()
+    parser = argparse.ArgumentParser(description="Validate all profiler models and precision helpers")
+    parser.add_argument(
+        "--preflight-scope",
+        choices=["fast", "all", "none"],
+        default="fast",
+        help="FP16 CPU preflight scope: fast=simple_mlp only, all=all models, none=skip preflight",
+    )
+    parser.add_argument(
+        "--preflight-timeout-safety-factor",
+        type=float,
+        default=2.5,
+        help="Timeout safety factor passed to FP16 preflight",
+    )
+    args = parser.parse_args()
+
+    if args.preflight_scope == "all":
+        preflight_models = ModelValidator.MODELS.copy()
+    elif args.preflight_scope == "none":
+        preflight_models = []
+    else:
+        preflight_models = ["simple_mlp"]
+
+    validator = ModelValidator(
+        preflight_models=preflight_models,
+        preflight_timeout_safety_factor=args.preflight_timeout_safety_factor,
+    )
     validator.run_all_tests()
 
 

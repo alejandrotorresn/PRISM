@@ -111,7 +111,10 @@ bash validation/run_unit_tests.sh
 ```
 .
 ├── src/                          # Source code
-│   ├── profiler.py              # ★ Main profiler (1455 lines)
+│   ├── profiler.py              # CLI entrypoint / orchestrator
+│   ├── core/                    # Shared core modules
+│   ├── models/                  # Model factory
+│   ├── runner/                  # Runtime profiling pipeline
 │   ├── profiler_en.md           # English documentation
 │   └── profiler_es.md           # Spanish documentation
 │
@@ -130,9 +133,8 @@ bash validation/run_unit_tests.sh
 ├── docs/                         # Documentation
 │   ├── README.md                # Quick start
 │   ├── PROJECT_STRUCTURE.md     # Detailed reference
-│   ├── FOLDER_GUIDE.md          # Organization guide
-│   ├── ZOMBIE_THREAD_FIX_SUMMARY.md  # Issue & fixes
-│   └── [Other technical docs]
+│   ├── TESTING_VALIDATION_MAP.md # Validation runbook
+│   └── documentation.md         # Technical methodology
 │
 ├── validation/                   # Validation scripts
 ├── tests/                        # Unit tests
@@ -270,10 +272,10 @@ See [docs/documentation.md](docs/documentation.md) for complete schema.
 | Run reported as skipped | Requested FP16/BF16 lacks accelerated CPU ISA support | Check `skip_reason` in CSV/JSON, then use `--precision fp32` or supported hardware |
 | OOM (Out of Memory) | Batch size too large | Reduce `--batch_size` |
 | RAPL: Permission denied | RAPL requires read access to sysfs | Run with sudo or omit `--rapl` |
-| GPU: ImportError pynvml | NVIDIA driver/CUDA not installed | Install via pytorch.org |
+| GPU: ImportError `pynvml` module | NVML package/driver mismatch | Install `nvidia-ml-py` and verify NVIDIA driver/CUDA |
 | Slow CPU profiling | SLURM/HPC single-core allocation | Use `--num_threads {physical_cores}` |
 
-For more, see [docs/PROJECT_STRUCTURE.md#troubleshooting](docs/PROJECT_STRUCTURE.md#troubleshooting)
+For more, see [docs/README.md#troubleshooting](docs/README.md#troubleshooting)
 
 ---
 
@@ -283,7 +285,7 @@ For more, see [docs/PROJECT_STRUCTURE.md#troubleshooting](docs/PROJECT_STRUCTURE
 Fixed critical issue where CPU FP16 preflight could block GPU profiling:
 - **Problem**: Slow/blocked CPU FP16 paths in unsupported ISA scenarios
 - **Solution**: ISA-aware precision policy (`skip` + report), plus `--skip_cpu` and `--num_threads`
-- See [docs/ZOMBIE_THREAD_FIX_SUMMARY.md](docs/ZOMBIE_THREAD_FIX_SUMMARY.md)
+- Details are integrated in [docs/documentation.md](docs/documentation.md) and [docs/TESTING_VALIDATION_MAP.md](docs/TESTING_VALIDATION_MAP.md)
 
 ### Two-Phase Timeout (Previous)
 Adaptive timeout mechanism for CPU profiling:
@@ -308,13 +310,10 @@ Adaptive timeout mechanism for CPU profiling:
 | Document | Purpose |
 |----------|---------|
 | [docs/README.md](docs/README.md) | Quick start guide |
-| [docs/README.md](docs/README.md) | Quick start guide |
 | [docs/QUICK_START.sh](docs/QUICK_START.sh) | Interactive quick reference |
 | [docs/documentation.md](docs/documentation.md) | Technical documentation & data schema |
 | [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) | Detailed project reference |
-| [docs/FOLDER_GUIDE.md](docs/FOLDER_GUIDE.md) | Folder organization & rationale |
-| [docs/ZOMBIE_THREAD_FIX_SUMMARY.md](docs/ZOMBIE_THREAD_FIX_SUMMARY.md) | Zombie thread issue & solutions |
-| [docs/FINAL_VALIDATION_REPORT.md](docs/FINAL_VALIDATION_REPORT.md) | Test results (60/60 checks passed) |
+| [docs/TESTING_VALIDATION_MAP.md](docs/TESTING_VALIDATION_MAP.md) | Validation strategy and runbook |
 
 ---
 

@@ -239,13 +239,9 @@ For more information, see:
 | Document | Purpose |
 |----------|---------|
 | [../README.md](../README.md) | Project overview, quick start, setup instructions |
-| [README.md](README.md) | Detailed usage guide and troubleshooting |
-| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Complete reference of all files and folders |
-| [FOLDER_GUIDE.md](FOLDER_GUIDE.md) | Organization rationale and navigation |
-| [ZOMBIE_THREAD_FIX_SUMMARY.md](ZOMBIE_THREAD_FIX_SUMMARY.md) | Technical details of zombie thread issue and solutions |
-| [FINAL_VALIDATION_REPORT.md](FINAL_VALIDATION_REPORT.md) | Validation test results (60/60 checks) |
-| [CODE_REVIEW_FINAL_REPORT.md](CODE_REVIEW_FINAL_REPORT.md) | Code review of timeout mechanism |
-| [MODEL_VALIDATION_REPORT.md](MODEL_VALIDATION_REPORT.md) | Per-model validation analysis |
+| [README.md](README.md) | Operational quick start and troubleshooting |
+| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Current architecture and folder map |
+| [TESTING_VALIDATION_MAP.md](TESTING_VALIDATION_MAP.md) | End-to-end validation workflow |
 
 ## Getting Help
 

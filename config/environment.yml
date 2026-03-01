@@ -15,7 +15,7 @@ dependencies:
   - pytorch::torchvision>=0.16
   - pytorch-cuda=12.1  # Remove this line and add 'cpuonly' (from pytorch channel) for CPU-only nodes
   # GPU telemetry
-  - pynvml>=11.5  # conda-forge provides pynvml
+  - nvidia-ml-py>=12.535  # module import remains `pynvml`
   # NLP models
   - transformers>=4.40
   # Optional helpers (safe to keep; can help with HF model loading)

@@ -7,9 +7,6 @@ import torch
 
 from core.system import PYRAPL_AVAILABLE
 
-if PYRAPL_AVAILABLE:
-    import pyRAPL  # type: ignore
-
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +36,7 @@ class EnergyMonitor(threading.Thread):
 
         if self.device_type == "cpu" and PYRAPL_AVAILABLE and self.enable_rapl:
             try:
+                import pyRAPL  # type: ignore
                 pyRAPL.setup()  # type: ignore
                 self.cpu_meter = pyRAPL.Measurement("cpu_meter")  # type: ignore
             except Exception as e:

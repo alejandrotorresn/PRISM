@@ -20,7 +20,7 @@ Este documento deja un mapa operativo del proyecto para ejecutar pruebas y valid
 - `validation/validate_code.py`: validación estructural/semántica del mecanismo de timeout en dos fases.
 - `validation/validate_zombie_fix.py`: validación de flags/flujo para corrección de hilos zombie.
 - `validation/comprehensive_check.sh`: auditoría grep de arquitectura modular y reglas críticas.
-- `validation/validate_all_models.py`: validación amplia por modelo (alineada a imports modulares actuales).
+- `validation/validate_all_models.py`: validación amplia por modelo con alcance configurable de preflight (`--preflight-scope fast|all|none`).
 
 ### Orquestación de experimentos
 - `scripts/run_experiments.sh`: barrido de combinaciones (modelo, optimizador, precisión, batch, hilos), con soporte `--skip_cpu`.
@@ -37,8 +37,7 @@ Este documento deja un mapa operativo del proyecto para ejecutar pruebas y valid
 - Validación zombie-fix: **5/5 passed** (`validation/validate_zombie_fix.py`).
 
 Advertencias observadas (no bloqueantes):
-- `pynvml` deprecado (recomendado migrar a `nvidia-ml-py`).
-- warning de `pymongo` por dependencia opcional de `MongoOutput`.
+- No se detectaron warnings bloqueantes en la última validación completa.
 
 ## 3) Runbook recomendado (rápido → profundo)
 
@@ -85,8 +84,7 @@ Criterio de éxito: artefactos generados:
 ## 5) Riesgos y ajustes recomendados
 
 1. **Warnings de entorno no bloqueantes**
-   - `pynvml` aparece como deprecado (recomendado migrar a `nvidia-ml-py`).
-   - Warning de `pymongo` por dependencia opcional de `MongoOutput`.
+   - Revisar de forma periódica cambios de dependencias en telemetría (NVML/RAPL) al actualizar entorno.
 
 2. **Costo de pruebas de modelos grandes**
    - La validación amplia por modelo puede requerir descargas y tiempo de cómputo significativo para `bert_base`/`gpt2_small`.
