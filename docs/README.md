@@ -4,6 +4,8 @@
 
 This document provides detailed instructions and examples for using the Advanced Hybrid Profiler.
 
+For a full project-wide testing and validation playbook, see [TESTING_VALIDATION_MAP.md](TESTING_VALIDATION_MAP.md).
+
 ## Installation
 
 ### Option 1: Conda (Recommended)
@@ -26,6 +28,9 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 Before profiling, verify installation:
 
 ```bash
+# Unit tests
+bash validation/run_unit_tests.sh
+
 # Quick syntax check
 python validation/validate_code.py
 

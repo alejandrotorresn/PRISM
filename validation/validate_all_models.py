@@ -15,8 +15,11 @@ import os
 import logging
 from typing import Dict, Tuple, List, Any
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Add project src to path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SRC_ROOT = os.path.join(PROJECT_ROOT, "src")
+if SRC_ROOT not in sys.path:
+    sys.path.insert(0, SRC_ROOT)
 
 import torch
 import torch.nn as nn
@@ -27,15 +30,15 @@ from torchvision.models import (
 )
 from transformers import BertModel, GPT2Model
 
-from profiler import (
-    SimpleMLP, 
-    run_cpu_fp16_model_preflight,
-    get_cpu_fp16_support_info,
-    cpu_supports_bf16,
+from core.constants import BACKWARD_FACTOR
+from core.precision_policy import (
     _build_mini_input_for_cpu_fp16,
     _extract_loss_for_preflight,
-    BACKWARD_FACTOR
+    cpu_supports_bf16,
+    get_cpu_fp16_support_info,
+    run_cpu_fp16_model_preflight,
 )
+from models.factory import SimpleMLP
 
 logging.basicConfig(
     level=logging.INFO,
