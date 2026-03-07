@@ -14,6 +14,7 @@ from core.constants import (
     WARMUP_STEPS,
 )
 from core.energy import EnergyMonitor
+from core.graph_extractor import export_graph_artifacts
 from core.io_artifacts import cleanup_artifacts, write_csv_rows, write_json_dict
 from core.metrics import estimate_flops, get_tensor_size_recursive
 from core.precision_policy import run_cpu_fp16_model_preflight
@@ -360,6 +361,10 @@ class TrainingProfiler:
 
             rows.append({
                 "layer": name,
+                "model": self.model_name,
+                "batch_size": getattr(self.args, "batch_size", None),
+                "run_id": getattr(self.args, "run_id", "run_001"),
+                "seed": getattr(self.args, "seed", 42),
                 "type": g_s.get("type", "Unknown"),
                 "params_mb": params_mb,
                 "grads_mb": params_mb,
@@ -402,6 +407,8 @@ class TrainingProfiler:
         partial_meta = get_hardware_metadata()
         partial_meta.update({
             "model": self.model_name,
+            "run_id": getattr(self.args, "run_id", "run_001"),
+            "seed": getattr(self.args, "seed", 42),
             "phase": "gpu_partial",
             "layers_profiled_count": len(gpu_layer_stats),
             "precision_mode": self.args.precision,
@@ -439,6 +446,10 @@ class TrainingProfiler:
 
         row = {
             "layer": "__profiling_skipped__",
+            "model": self.model_name,
+            "batch_size": getattr(self.args, "batch_size", None),
+            "run_id": getattr(self.args, "run_id", "run_001"),
+            "seed": getattr(self.args, "seed", 42),
             "type": "NA",
             "params_mb": 0.0,
             "grads_mb": 0.0,
@@ -479,6 +490,8 @@ class TrainingProfiler:
         meta = get_hardware_metadata()
         meta.update({
             "model": self.model_name,
+            "run_id": getattr(self.args, "run_id", "run_001"),
+            "seed": getattr(self.args, "seed", 42),
             "precision_mode": self.args.precision,
             "execution_status": skip_status,
             "execution_skip_reason": reason,
@@ -494,6 +507,61 @@ class TrainingProfiler:
         write_json_dict(json_path, meta)
 
         logger.warning(f"Profiling skipped ({skip_status}). Artifacts saved: {csv_path}, {json_path}. Reason: {reason}")
+
+    def _build_edge_transfer_costs(
+        self,
+        graph_edges: Optional[Any],
+        pci_stats: Dict[str, float],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, float], Dict[str, float]]:
+        edge_rows: List[Dict[str, Any]] = []
+        incoming_h2d_by_layer: Dict[str, float] = {}
+        outgoing_d2h_by_layer: Dict[str, float] = {}
+
+        if not graph_edges:
+            return edge_rows, incoming_h2d_by_layer, outgoing_d2h_by_layer
+
+        alpha_h2d = float(pci_stats.get("alpha_h2d", 0.05))
+        beta_h2d = max(float(pci_stats.get("beta_h2d", 12.0)), 1e-6)
+        alpha_d2h = float(pci_stats.get("alpha_d2h", 0.05))
+        beta_d2h = max(float(pci_stats.get("beta_d2h", 12.0)), 1e-6)
+        sigma_overlap = float(pci_stats.get("overlap_ratio_sigma", 0.0))
+
+        for idx, e in enumerate(graph_edges):
+            tensor_mb = float(e.get("tensor_mb", 0.0) or 0.0)
+            producer_name = str(e.get("producer_name", ""))
+            consumer_name = str(e.get("consumer_name", ""))
+
+            h2d_ms_raw = alpha_h2d + (tensor_mb / beta_h2d)
+            d2h_ms_raw = alpha_d2h + (tensor_mb / beta_d2h)
+
+            # Overlap-aware approximation: sigma in [0,1] attenuates transfer penalty.
+            overlap_factor = max(0.0, min(1.0, 1.0 - (0.5 * sigma_overlap)))
+            h2d_ms_eff = h2d_ms_raw * overlap_factor
+            d2h_ms_eff = d2h_ms_raw * overlap_factor
+
+            incoming_h2d_by_layer[consumer_name] = incoming_h2d_by_layer.get(consumer_name, 0.0) + h2d_ms_eff
+            outgoing_d2h_by_layer[producer_name] = outgoing_d2h_by_layer.get(producer_name, 0.0) + d2h_ms_eff
+
+            edge_rows.append({
+                "edge_id": f"e{idx}",
+                "src_id": e.get("src_id", ""),
+                "dst_id": e.get("dst_id", ""),
+                "producer_name": producer_name,
+                "consumer_name": consumer_name,
+                "tensor_mb": tensor_mb,
+                "transfer_h2d_ms_raw": h2d_ms_raw,
+                "transfer_d2h_ms_raw": d2h_ms_raw,
+                "transfer_h2d_ms": h2d_ms_eff,
+                "transfer_d2h_ms": d2h_ms_eff,
+                "transfer_sym_ms": 0.5 * (h2d_ms_eff + d2h_ms_eff),
+                "alpha_h2d_ms": alpha_h2d,
+                "beta_h2d_mb_s": beta_h2d,
+                "alpha_d2h_ms": alpha_d2h,
+                "beta_d2h_mb_s": beta_d2h,
+                "sigma_overlap": sigma_overlap,
+            })
+
+        return edge_rows, incoming_h2d_by_layer, outgoing_d2h_by_layer
 
     def run_profiling(self, input_data: Any):
         logger.info(f"Starting Profiling Run for: {self.model_name}")
@@ -604,6 +672,37 @@ class TrainingProfiler:
 
         total_model_flops = 0.0
 
+        graph_info: Dict[str, Any] = {}
+        try:
+            merged_layer_stats: Dict[str, Dict[str, Any]] = {}
+            for layer_name, layer_values in cpu_layer_stats.items():
+                merged_layer_stats[layer_name] = dict(layer_values)
+            for layer_name, layer_values in gpu_layer_stats.items():
+                if layer_name not in merged_layer_stats:
+                    merged_layer_stats[layer_name] = {}
+                merged_layer_stats[layer_name].update(layer_values)
+
+            graph_info = export_graph_artifacts(
+                model=self.model,
+                model_name=self.model_name,
+                output_dir=self.args.output_dir,
+                input_data=input_data,
+                layer_stats=merged_layer_stats,
+                include_records=True,
+            )
+        except Exception as e:
+            logger.warning(f"Graph artifact export failed (non-fatal): {e}")
+
+        edge_transfer_rows, incoming_h2d_by_layer, outgoing_d2h_by_layer = self._build_edge_transfer_costs(
+            graph_edges=graph_info.get("edges") if graph_info else None,
+            pci_stats=pci_stats,
+        )
+
+        transfer_edges_path = None
+        if edge_transfer_rows:
+            transfer_edges_path = os.path.join(self.args.output_dir, f"{self.model_name}_transfer_edges.csv")
+            write_csv_rows(transfer_edges_path, edge_transfer_rows)
+
         for name in all_layers:
             c_s = cpu_layer_stats.get(name, {})
             g_s = gpu_layer_stats.get(name, {})
@@ -642,12 +741,22 @@ class TrainingProfiler:
                 layer_j_per_tflop_gpu = gpu_layer_energy_j / layer_work_tflops
 
             alpha_h2d = pci_stats.get("alpha_h2d", 0.05)
-            beta_h2d = pci_stats.get("beta_h2d", 12.0)
+            beta_h2d = max(pci_stats.get("beta_h2d", 12.0), 1e-6)
             alpha_d2h = pci_stats.get("alpha_d2h", 0.05)
-            beta_d2h = pci_stats.get("beta_d2h", 12.0)
+            beta_d2h = max(pci_stats.get("beta_d2h", 12.0), 1e-6)
+
+            transfer_h2d_ms_legacy = alpha_h2d + (params_mb / beta_h2d)
+            transfer_d2h_ms_legacy = alpha_d2h + (act_mb / beta_d2h)
+
+            transfer_h2d_ms = incoming_h2d_by_layer.get(name, transfer_h2d_ms_legacy)
+            transfer_d2h_ms = outgoing_d2h_by_layer.get(name, transfer_d2h_ms_legacy)
 
             rows.append({
                 "layer": name,
+                "model": self.model_name,
+                "batch_size": getattr(self.args, "batch_size", None),
+                "run_id": getattr(self.args, "run_id", "run_001"),
+                "seed": getattr(self.args, "seed", 42),
                 "type": g_s.get("type") or c_s.get("type", "Unknown"),
                 "params_mb": params_mb,
                 "grads_mb": params_mb,
@@ -671,8 +780,11 @@ class TrainingProfiler:
                 "layer_j_per_tflop_cpu": (cpu_layer_energy_j / layer_work_tflops)
                 if (layer_work_tflops > 0 and cpu_layer_energy_j > 0)
                 else None,
-                "transfer_h2d_ms": alpha_h2d + (params_mb / beta_h2d),
-                "transfer_d2h_ms": alpha_d2h + (act_mb / beta_d2h),
+                "transfer_h2d_ms": transfer_h2d_ms,
+                "transfer_d2h_ms": transfer_d2h_ms,
+                "transfer_h2d_ms_legacy": transfer_h2d_ms_legacy,
+                "transfer_d2h_ms_legacy": transfer_d2h_ms_legacy,
+                "transfer_edge_aware_total_ms": transfer_h2d_ms + transfer_d2h_ms,
                 "remat_penalty_ms": t_fwd_gpu,
                 "precision_requested": self.args.precision,
                 "cpu_precision_executed": self.args.cpu_precision_executed,
@@ -690,7 +802,16 @@ class TrainingProfiler:
         meta = get_hardware_metadata()
         meta.update({
             "model": self.model_name,
+            "run_id": getattr(self.args, "run_id", "run_001"),
+            "seed": getattr(self.args, "seed", 42),
             "layers_profiled_count": len(all_layers),
+            "graph_nodes_count": graph_info.get("nodes_count"),
+            "graph_edges_count": graph_info.get("edges_count"),
+            "graph_trace_source": graph_info.get("trace_source"),
+            "graph_nodes_path": graph_info.get("nodes_path"),
+            "graph_edges_path": graph_info.get("edges_path"),
+            "transfer_edges_count": len(edge_transfer_rows),
+            "transfer_edges_path": transfer_edges_path,
             "precision_mode": self.args.precision,
             "gpu_total_layer_time_ms": g_total_layers_ms,
             "cpu_total_layer_time_ms": c_total_layers_ms,

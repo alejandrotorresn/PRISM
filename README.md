@@ -180,8 +180,35 @@ python src/profiler.py \
 # - OPTIMIZERS: SGD, Adam, AdamW, etc.
 
 bash scripts/run_experiments.sh
-# Results: data/results/{model}/{optimizer}/{precision}/
+# Results: data/results/{model}/{optimizer}/{precision}/batch_{N}/
 ```
+
+### Run Fast Smoke Validation (Script Mode)
+
+```bash
+# One quick end-to-end check (1 model × 1 optimizer × 1 precision × 1 batch)
+SMOKE_MODE=true \
+USE_SKIP_CPU=true \
+FORCE_THREADS=4 \
+PYTHON_CMD=.venv/bin/python \
+bash scripts/run_experiments.sh
+```
+
+Useful environment variables for `scripts/run_experiments.sh`:
+- `SMOKE_MODE=true|false`: Enables minimal campaign for quick sanity checks.
+- `USE_SKIP_CPU=true|false`: Enables GPU-only profiling mode.
+- `FORCE_THREADS=N`: Forces CPU thread count passed to `--num_threads`.
+- `PYTHON_CMD=/path/to/python`: Selects interpreter (useful for `.venv`).
+- `BASE_OUTPUT_DIR=...` and `LOG_DIR=...`: Override output and logs directories.
+- `WARMUP=N` and `MEASURE=N`: Override profiling iterations globally.
+
+#### `run_experiments.sh` Troubleshooting
+
+- `exit code: 127`: Python executable path is invalid. Set `PYTHON_CMD` to a valid interpreter (for example `.venv/bin/python`).
+- Frequent OOM errors: Reduce `BATCH_SIZES` in the script or use a smaller subset while validating.
+- `USE_SKIP_CPU=true` with no GPU: the script auto-disables this mode and logs a warning; either enable GPU or run CPU profiling.
+- Slow execution on shared/HPC nodes: set `FORCE_THREADS` to a suitable value for your allocation and reduce `MEASURE` during test runs.
+- Missing results for different batches: each run now writes to `.../batch_{N}/`; verify that path when inspecting outputs.
 
 ### Monitor Execution
 

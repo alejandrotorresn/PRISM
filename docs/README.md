@@ -65,10 +65,27 @@ python src/profiler.py \
 bash scripts/run_experiments.sh
 ```
 
+### Fast script smoke mode
+```bash
+SMOKE_MODE=true \
+USE_SKIP_CPU=true \
+FORCE_THREADS=4 \
+PYTHON_CMD=.venv/bin/python \
+bash scripts/run_experiments.sh
+```
+
+Useful script environment variables:
+- `SMOKE_MODE=true|false`: runs a minimal campaign (1 model × 1 optimizer × 1 precision × 1 batch).
+- `USE_SKIP_CPU=true|false`: enables GPU-only profiling mode.
+- `FORCE_THREADS=N`: passes CPU thread override to `--num_threads`.
+- `PYTHON_CMD=/path/to/python`: selects the interpreter used by the script.
+- `BASE_OUTPUT_DIR=...`, `LOG_DIR=...`, `WARMUP=N`, `MEASURE=N`: override default paths and run lengths.
+
 ## 4) Outputs
 
 - CSV metrics: `data/{model}_metrics.csv`
 - JSON metadata: `data/{model}_meta.json`
+- Grid execution output tree: `data/results/{model}/{optimizer}/{precision}/batch_{N}/`
 
 Both artifacts are designed to feed ILP parameterization workflows.
 
@@ -80,6 +97,8 @@ Both artifacts are designed to feed ILP parameterization workflows.
 | Slow CPU profiling on HPC | CPU affinity/core limitation | Use `--num_threads N` |
 | RAPL permission error | Missing access to `/sys/class/powercap` | Omit `--rapl` or grant read access |
 | CUDA OOM | Batch too large | Reduce `--batch_size` |
+| `exit code: 127` in `run_experiments.sh` | Invalid Python executable path | Set `PYTHON_CMD` (for example `.venv/bin/python`) |
+| `USE_SKIP_CPU=true` with no GPU | No valid execution target for GPU-only mode | Script auto-disables skip mode; run with GPU or keep CPU enabled |
 
 ## Documentation Index
 

@@ -1,0 +1,14 @@
+\begin{table}[t]
+\centering
+\caption{Best feasible ILP result per model under evaluated GPU memory budgets.}
+\label{tab:ilp-best-per-model}
+\begin{tabular}{lllllllrrr}
+\toprule
+Model & GPU Budget (MB) & ILP Obj & All-CPU Obj & Improve vs CPU (\%) & ILP GPU Mem (MB) & ILP CPU Mem (MB) & GPU Layers & CPU Layers & Cut Edges \\
+\midrule
+resnet50 & 1100 & 2101.868 & 2491.547 & 15.64 & 1063.37 & 681.50 & 5 & 121 & 9 \\
+vit_b16 & 1500 & 418.486 & 507.397 & 17.52 & 1483.36 & 454.81 & 4 & 96 & 3 \\
+\bottomrule
+\end{tabular}
+
+\end{table}

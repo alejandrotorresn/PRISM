@@ -50,6 +50,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip_cpu", action="store_true", help="Skip CPU profiling entirely")
     parser.add_argument("--num_threads", type=int, default=0, help="Force CPU thread count (0 = auto-detect)")
     parser.add_argument("--keep_partial_artifacts", action="store_true", help="Keep intermediate *_gpu_partial.csv/json artifacts after successful final save")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--run_id", type=str, default="run_001", help="Replica identifier (used in artifacts metadata)")
     return parser
 
 
@@ -139,7 +141,7 @@ def main() -> None:
     args = _build_parser().parse_args()
 
     configure_cpu_runtime(force_threads=args.num_threads)
-    set_determinism()
+    set_determinism(seed=args.seed)
     _initialize_precision_state(args)
 
     torch_dtype = _configure_precision(args)
