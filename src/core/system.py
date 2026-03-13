@@ -3,6 +3,7 @@ import logging
 import os
 import platform
 import random
+import socket
 import time
 from typing import Any, Dict
 
@@ -14,6 +15,41 @@ import torch
 PYRAPL_AVAILABLE = importlib.util.find_spec("pyRAPL") is not None
 
 logger = logging.getLogger(__name__)
+
+
+def get_hostname() -> str:
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "unknown_host"
+
+
+def normalize_output_dir_for_host(output_dir: str, host_name: str) -> str:
+    """
+    Ensure output paths under data/ are namespaced as data/<host>/... once.
+    This keeps historical paths stable while isolating per-node profiling artifacts.
+    """
+    if not output_dir:
+        return output_dir
+
+    normalized = output_dir.replace("\\", "/")
+    parts = [p for p in normalized.split("/") if p]
+    if not parts:
+        return output_dir
+
+    try:
+        data_idx = parts.index("data")
+    except ValueError:
+        # Not a data-rooted path; keep user-provided output unchanged.
+        return output_dir
+
+    if data_idx + 1 < len(parts) and parts[data_idx + 1] == host_name:
+        return output_dir
+
+    new_parts = parts[: data_idx + 1] + [host_name] + parts[data_idx + 1 :]
+    if normalized.startswith("/"):
+        return "/" + "/".join(new_parts)
+    return "/".join(new_parts)
 
 
 def set_determinism(seed: int = 42):
@@ -89,6 +125,7 @@ def get_cpu_model() -> str:
 def get_hardware_metadata() -> Dict[str, Any]:
     meta = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "host_name": get_hostname(),
         "torch_version": torch.__version__,
         "os": platform.platform(),
         "cpu_model": get_cpu_model(),

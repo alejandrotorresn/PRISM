@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -22,6 +23,51 @@ class ILPInputData:
     node_mem_cpu_mb: Dict[str, float]
     edges: List[Tuple[str, str]]
     edge_transfer_ms: Dict[Tuple[str, str], float]
+
+
+def _weighted_mean(values: List[float], weights: Optional[List[float]] = None) -> float:
+    if not values:
+        return 0.0
+    if not weights:
+        return float(sum(values) / len(values))
+    wsum = float(sum(weights))
+    if wsum <= 0:
+        return float(sum(values) / len(values))
+    return float(sum(v * w for v, w in zip(values, weights)) / wsum)
+
+
+def _weighted_std(values: List[float], weights: Optional[List[float]] = None) -> float:
+    if not values or len(values) == 1:
+        return 0.0
+    mu = _weighted_mean(values, weights)
+    if not weights:
+        var = sum((v - mu) ** 2 for v in values) / len(values)
+        return float(math.sqrt(max(var, 0.0)))
+    wsum = float(sum(weights))
+    if wsum <= 0:
+        var = sum((v - mu) ** 2 for v in values) / len(values)
+        return float(math.sqrt(max(var, 0.0)))
+    var = sum(w * ((v - mu) ** 2) for v, w in zip(values, weights)) / wsum
+    return float(math.sqrt(max(var, 0.0)))
+
+
+def _aggregate_values(
+    values: List[float],
+    strategy: str,
+    dispersion_k: float,
+    weights: Optional[List[float]] = None,
+) -> float:
+    if not values:
+        return 0.0
+    if strategy == "max":
+        return float(max(values))
+    if strategy == "mean":
+        mu = _weighted_mean(values, weights)
+        if dispersion_k <= 0:
+            return mu
+        sigma = _weighted_std(values, weights)
+        return float(mu + (dispersion_k * sigma))
+    raise ValueError(f"Unsupported multi-hardware aggregation strategy: {strategy}")
 
 
 def _require_columns(df: pd.DataFrame, columns: List[str], path: Path) -> None:
@@ -176,3 +222,66 @@ def load_ilp_inputs(
         edges=edges,
         edge_transfer_ms=edge_transfer_ms,
     )
+
+
+def merge_ilp_inputs_multi_hardware(
+    profiles: List[ILPInputData],
+    strategy: str = "max",
+    dispersion_k: float = 0.0,
+    weights: Optional[List[float]] = None,
+    strict_schema: bool = True,
+) -> ILPInputData:
+    if not profiles:
+        raise ValueError("profiles must contain at least one ILPInputData")
+    if dispersion_k < 0:
+        raise ValueError(f"dispersion_k must be >= 0, got {dispersion_k}")
+    if strategy not in {"max", "mean"}:
+        raise ValueError(f"Unsupported strategy: {strategy}")
+    if weights is not None and len(weights) != len(profiles):
+        raise ValueError("weights length must match number of profiles")
+
+    base_nodes = profiles[0].nodes
+    base_edges = profiles[0].edges
+    if strict_schema:
+        for idx, p in enumerate(profiles[1:], start=1):
+            if p.nodes != base_nodes:
+                raise ValueError(f"Node schema mismatch for hardware profile #{idx}")
+            if p.edges != base_edges:
+                raise ValueError(f"Edge schema mismatch for hardware profile #{idx}")
+
+    nodes = list(base_nodes)
+    edges = list(base_edges)
+
+    def agg_node(metric_getter):
+        out: Dict[str, float] = {}
+        for n in nodes:
+            vals = [float(metric_getter(p, n)) for p in profiles]
+            out[n] = _aggregate_values(vals, strategy=strategy, dispersion_k=dispersion_k, weights=weights)
+        return out
+
+    def agg_edge(metric_getter):
+        out: Dict[Tuple[str, str], float] = {}
+        for e in edges:
+            vals = [float(metric_getter(p, e)) for p in profiles]
+            out[e] = _aggregate_values(vals, strategy=strategy, dispersion_k=dispersion_k, weights=weights)
+        return out
+
+    merged = ILPInputData(
+        nodes=nodes,
+        node_cost_gpu_ms=agg_node(lambda p, n: p.node_cost_gpu_ms[n]),
+        node_cost_cpu_ms=agg_node(lambda p, n: p.node_cost_cpu_ms[n]),
+        node_energy_gpu_j=agg_node(lambda p, n: p.node_energy_gpu_j[n]),
+        node_energy_cpu_j=agg_node(lambda p, n: p.node_energy_cpu_j[n]),
+        node_mem_gpu_mb=agg_node(lambda p, n: p.node_mem_gpu_mb[n]),
+        node_mem_cpu_mb=agg_node(lambda p, n: p.node_mem_cpu_mb[n]),
+        edges=edges,
+        edge_transfer_ms=agg_edge(lambda p, e: p.edge_transfer_ms[e]),
+    )
+
+    logger.info(
+        "Merged %s hardware profiles into one ILPInputData (strategy=%s, dispersion_k=%.3f)",
+        len(profiles),
+        strategy,
+        dispersion_k,
+    )
+    return merged

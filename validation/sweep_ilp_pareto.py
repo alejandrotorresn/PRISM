@@ -17,6 +17,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 load_ilp_inputs = importlib.import_module("ilp.data_loader").load_ilp_inputs
+merge_ilp_inputs_multi_hardware = importlib.import_module("ilp.data_loader").merge_ilp_inputs_multi_hardware
 ILPConfig = importlib.import_module("ilp.model_builder").ILPConfig
 build_problem_data = importlib.import_module("ilp.model_builder").build_problem_data
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
@@ -28,12 +29,19 @@ def _default_paths(config_dir: Path, model_name: str):
         stats = config_dir / "metrics_stats.csv"
 
     run_dirs = sorted([p for p in config_dir.glob("run_*") if p.is_dir()])
-    if not run_dirs:
-        raise FileNotFoundError(f"No run_* directories found in: {config_dir}")
+    if run_dirs:
+        ref_run = run_dirs[0]
+        graph_edges = ref_run / f"{model_name}_graph_edges.csv"
+        transfer_edges = ref_run / f"{model_name}_transfer_edges.csv"
+    else:
+        graph_edges = config_dir / f"{model_name}_graph_edges.csv"
+        transfer_edges = config_dir / f"{model_name}_transfer_edges.csv"
 
-    ref_run = run_dirs[0]
-    graph_edges = ref_run / f"{model_name}_graph_edges.csv"
-    transfer_edges = ref_run / f"{model_name}_transfer_edges.csv"
+    if not graph_edges.exists() or not transfer_edges.exists():
+        raise FileNotFoundError(
+            "Could not resolve graph/transfer artifacts in config_dir. "
+            f"Expected either run_*/ files or direct files in: {config_dir}"
+        )
     return stats, graph_edges, transfer_edges
 
 
@@ -83,7 +91,8 @@ def _eval_fixed_policy(policy: str, data, cfg: Any) -> Dict[str, float | str | i
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep ILP over GPU memory budgets and compare baselines")
-    parser.add_argument("--config_dir", required=True)
+    parser.add_argument("--config_dir", default=None)
+    parser.add_argument("--config_dirs", default=None, help="Comma-separated batch directories for multi-hardware aggregation")
     parser.add_argument("--model", required=True)
     parser.add_argument("--gpu_budgets_mb", required=True, help="Comma-separated budgets, e.g. 400,600,800,1000")
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
@@ -94,24 +103,48 @@ def main() -> int:
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
+    parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
+    parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_csv", default=None)
     parser.add_argument("--output_json", default=None)
     args = parser.parse_args()
 
-    config_dir = Path(args.config_dir)
-    if not config_dir.exists():
-        raise FileNotFoundError(f"config_dir does not exist: {config_dir}")
+    config_dirs: list[Path]
+    if args.config_dirs:
+        config_dirs = [Path(p.strip()) for p in args.config_dirs.split(",") if p.strip()]
+        if not config_dirs:
+            raise ValueError("--config_dirs was provided but no valid paths were found")
+    else:
+        if not args.config_dir:
+            raise ValueError("Provide --config_dir or --config_dirs")
+        config_dirs = [Path(args.config_dir)]
 
-    stats_csv, graph_csv, transfer_csv = _default_paths(config_dir, args.model)
+    for cdir in config_dirs:
+        if not cdir.exists():
+            raise FileNotFoundError(f"config_dir does not exist: {cdir}")
 
-    data = load_ilp_inputs(
-        metrics_stats_csv=str(stats_csv),
-        graph_edges_csv=str(graph_csv),
-        transfer_edges_csv=str(transfer_csv),
-        k_sigma=args.k_sigma,
-        strict_graph_mapping=args.strict_graph_mapping,
-        strict_transfer_mapping=args.strict_transfer_mapping,
-    )
+    profiles = []
+    for cdir in config_dirs:
+        stats_csv, graph_csv, transfer_csv = _default_paths(cdir, args.model)
+        profile = load_ilp_inputs(
+            metrics_stats_csv=str(stats_csv),
+            graph_edges_csv=str(graph_csv),
+            transfer_edges_csv=str(transfer_csv),
+            k_sigma=args.k_sigma,
+            strict_graph_mapping=args.strict_graph_mapping,
+            strict_transfer_mapping=args.strict_transfer_mapping,
+        )
+        profiles.append(profile)
+
+    if len(profiles) == 1:
+        data = profiles[0]
+    else:
+        data = merge_ilp_inputs_multi_hardware(
+            profiles=profiles,
+            strategy=args.hw_aggregate,
+            dispersion_k=args.hw_dispersion_k,
+            strict_schema=True,
+        )
 
     budgets = _parse_budget_list(args.gpu_budgets_mb)
     rows = []
@@ -153,7 +186,8 @@ def main() -> int:
 
     out_df = pd.DataFrame(rows).sort_values(by=["gpu_budget_mb"], kind="stable")
 
-    out_csv = Path(args.output_csv) if args.output_csv else (config_dir / f"{args.model}_pareto_sweep.csv")
+    base_config_dir = config_dirs[0]
+    out_csv = Path(args.output_csv) if args.output_csv else (base_config_dir / f"{args.model}_pareto_sweep.csv")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out_csv, index=False)
 
@@ -171,7 +205,7 @@ def main() -> int:
         best_idx = feasible["ilp_objective"].astype(float).idxmin()
         summary["best_feasible_row"] = out_df.loc[best_idx].to_dict()
 
-    out_json = Path(args.output_json) if args.output_json else (config_dir / f"{args.model}_pareto_summary.json")
+    out_json = Path(args.output_json) if args.output_json else (base_config_dir / f"{args.model}_pareto_summary.json")
     with open(out_json, "w") as f:
         json.dump(summary, f, indent=4)
 

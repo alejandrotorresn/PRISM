@@ -130,6 +130,23 @@ class TrainingProfiler:
             self.hooks.append(module.register_forward_pre_hook(pre_hook(name)))
             self.hooks.append(module.register_forward_hook(post_hook(name)))
 
+    def _build_optimizer(self, params, opt_name: str, lr: float, momentum: float):
+        if opt_name == "SGD":
+            return torch.optim.SGD(params, lr=lr)
+        if opt_name == "SGD_momentum":
+            return torch.optim.SGD(params, lr=lr, momentum=momentum)
+        if opt_name == "Adam":
+            return torch.optim.Adam(params, lr=lr)
+        if opt_name == "AdamW":
+            return torch.optim.AdamW(params, lr=lr)
+        if opt_name == "RMSprop":
+            return torch.optim.RMSprop(params, lr=lr, momentum=momentum)
+        if opt_name == "Adagrad":
+            return torch.optim.Adagrad(params, lr=lr)
+        if opt_name == "Adadelta":
+            return torch.optim.Adadelta(params, lr=lr)
+        return torch.optim.SGD(params, lr=lr)
+
     def _run_epoch(self, input_data: Any, device: str, steps: int) -> Tuple[Optional[float], float]:
         device_str = f"cuda:{self.gpu_id}" if device == "cuda" else "cpu"
         self.model.to(device_str)
@@ -144,23 +161,7 @@ class TrainingProfiler:
         lr = getattr(self.args, "lr", 0.01)
         momentum = getattr(self.args, "momentum", 0.9)
         params = self.model.parameters()
-
-        if opt_name == "SGD":
-            opt = torch.optim.SGD(params, lr=lr)
-        elif opt_name == "SGD_momentum":
-            opt = torch.optim.SGD(params, lr=lr, momentum=momentum)
-        elif opt_name == "Adam":
-            opt = torch.optim.Adam(params, lr=lr)
-        elif opt_name == "AdamW":
-            opt = torch.optim.AdamW(params, lr=lr)
-        elif opt_name == "RMSprop":
-            opt = torch.optim.RMSprop(params, lr=lr, momentum=momentum)
-        elif opt_name == "Adagrad":
-            opt = torch.optim.Adagrad(params, lr=lr)
-        elif opt_name == "Adadelta":
-            opt = torch.optim.Adadelta(params, lr=lr)
-        else:
-            opt = torch.optim.SGD(params, lr=lr)
+        opt = self._build_optimizer(params=params, opt_name=opt_name, lr=lr, momentum=momentum)
 
         self.layer_stats = {}
         self._register_hooks(device)
@@ -206,6 +207,83 @@ class TrainingProfiler:
         self._last_opt_step_count = opt_step_count
 
         return total_energy_j, total_duration_sec
+
+    def _profile_device_phase(
+        self,
+        input_data: Any,
+        device: str,
+        measure: int,
+    ) -> Tuple[Optional[float], float, Dict[str, Dict[str, Any]], float]:
+        total_energy, run_time_sec = self._run_epoch(input_data, device, measure)
+        layer_stats = self.layer_stats.copy()
+        self.layer_stats = {}
+        measured_peak_tflops = self._measure_peak_flops(device)
+        return total_energy, run_time_sec, layer_stats, measured_peak_tflops
+
+    def _merge_layer_stats(
+        self,
+        cpu_layer_stats: Dict[str, Dict[str, Any]],
+        gpu_layer_stats: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        merged_layer_stats: Dict[str, Dict[str, Any]] = {}
+        for layer_name, layer_values in cpu_layer_stats.items():
+            merged_layer_stats[layer_name] = dict(layer_values)
+        for layer_name, layer_values in gpu_layer_stats.items():
+            if layer_name not in merged_layer_stats:
+                merged_layer_stats[layer_name] = {}
+            merged_layer_stats[layer_name].update(layer_values)
+        return merged_layer_stats
+
+    def _compute_phase_overheads(
+        self,
+        gpu_layer_stats: Dict[str, Dict[str, Any]],
+        cpu_layer_stats: Dict[str, Dict[str, Any]],
+        gpu_run_time_sec: float,
+        cpu_run_time_sec: float,
+        measure: int,
+    ) -> Dict[str, float]:
+        g_total_layers_ms = sum((gpu_layer_stats[l].get("time_ms_accum", 0) / measure) for l in gpu_layer_stats) or 1.0
+        c_total_layers_ms = sum((cpu_layer_stats[l].get("time_ms_accum", 0) / measure) for l in cpu_layer_stats) or 1.0
+
+        avg_step_time_gpu_ms = (gpu_run_time_sec * 1000.0) / measure
+        avg_step_time_cpu_ms = (cpu_run_time_sec * 1000.0) / measure
+
+        framework_overhead_gpu_ms = max(0.0, avg_step_time_gpu_ms - g_total_layers_ms)
+        framework_overhead_cpu_ms = max(0.0, avg_step_time_cpu_ms - c_total_layers_ms)
+
+        return {
+            "g_total_layers_ms": g_total_layers_ms,
+            "c_total_layers_ms": c_total_layers_ms,
+            "avg_step_time_gpu_ms": avg_step_time_gpu_ms,
+            "avg_step_time_cpu_ms": avg_step_time_cpu_ms,
+            "framework_overhead_gpu_ms": framework_overhead_gpu_ms,
+            "framework_overhead_cpu_ms": framework_overhead_cpu_ms,
+            "framework_overhead_ratio_gpu": (framework_overhead_gpu_ms / avg_step_time_gpu_ms) if avg_step_time_gpu_ms > 0 else 0.0,
+            "framework_overhead_ratio_cpu": (framework_overhead_cpu_ms / avg_step_time_cpu_ms) if avg_step_time_cpu_ms > 0 else 0.0,
+        }
+
+    def _export_graph_artifacts_safe(
+        self,
+        input_data: Any,
+        cpu_layer_stats: Dict[str, Dict[str, Any]],
+        gpu_layer_stats: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        try:
+            merged_layer_stats = self._merge_layer_stats(
+                cpu_layer_stats=cpu_layer_stats,
+                gpu_layer_stats=gpu_layer_stats,
+            )
+            return export_graph_artifacts(
+                model=self.model,
+                model_name=self.model_name,
+                output_dir=self.args.output_dir,
+                input_data=input_data,
+                layer_stats=merged_layer_stats,
+                include_records=True,
+            )
+        except Exception as e:
+            logger.warning(f"Graph artifact export failed (non-fatal): {e}")
+            return {}
 
     def _measure_pci_and_overlap(self) -> Dict[str, float]:
         if not self.has_gpu:
@@ -587,10 +665,12 @@ class TrainingProfiler:
 
         if self.has_gpu:
             logger.info("--> Profiling GPU Execution...")
-            gpu_total_energy, gpu_run_time_sec = self._run_epoch(input_data, "cuda", measure)
-            gpu_layer_stats = self.layer_stats.copy()
-            self.layer_stats = {}
-            measured_gpu_peak_tflops = self._measure_peak_flops("cuda")
+            (
+                gpu_total_energy,
+                gpu_run_time_sec,
+                gpu_layer_stats,
+                measured_gpu_peak_tflops,
+            ) = self._profile_device_phase(input_data=input_data, device="cuda", measure=measure)
             self._save_gpu_partial_results(
                 gpu_layer_stats=gpu_layer_stats,
                 gpu_total_energy=gpu_total_energy,
@@ -627,10 +707,12 @@ class TrainingProfiler:
                 logger.warning("Skipping CPU profiling: CPU FP16 model preflight failed and FP32 fallback is disabled.")
         else:
             logger.info("--> Profiling CPU Execution...")
-            cpu_total_energy, cpu_run_time_sec = self._run_epoch(input_data, "cpu", measure)
-            cpu_layer_stats = self.layer_stats.copy()
-            self.layer_stats = {}
-            measured_cpu_peak_tflops = self._measure_peak_flops("cpu")
+            (
+                cpu_total_energy,
+                cpu_run_time_sec,
+                cpu_layer_stats,
+                measured_cpu_peak_tflops,
+            ) = self._profile_device_phase(input_data=input_data, device="cpu", measure=measure)
 
         self.args.execution_status = "completed"
         self.args.abort_profiling_reason = ""
@@ -652,16 +734,21 @@ class TrainingProfiler:
         if not all_layers:
             logger.warning("No layers profiled on either device!")
 
-        g_total_layers_ms = sum((gpu_layer_stats[l].get("time_ms_accum", 0) / measure) for l in gpu_layer_stats) or 1.0
-        c_total_layers_ms = sum((cpu_layer_stats[l].get("time_ms_accum", 0) / measure) for l in cpu_layer_stats) or 1.0
-
-        avg_step_time_gpu_ms = (gpu_run_time_sec * 1000.0) / measure
-        avg_step_time_cpu_ms = (cpu_run_time_sec * 1000.0) / measure
-
-        framework_overhead_gpu_ms = max(0.0, avg_step_time_gpu_ms - g_total_layers_ms)
-        framework_overhead_cpu_ms = max(0.0, avg_step_time_cpu_ms - c_total_layers_ms)
-        framework_overhead_ratio_gpu = framework_overhead_gpu_ms / avg_step_time_gpu_ms if avg_step_time_gpu_ms > 0 else 0.0
-        framework_overhead_ratio_cpu = framework_overhead_cpu_ms / avg_step_time_cpu_ms if avg_step_time_cpu_ms > 0 else 0.0
+        phase_overheads = self._compute_phase_overheads(
+            gpu_layer_stats=gpu_layer_stats,
+            cpu_layer_stats=cpu_layer_stats,
+            gpu_run_time_sec=gpu_run_time_sec,
+            cpu_run_time_sec=cpu_run_time_sec,
+            measure=measure,
+        )
+        g_total_layers_ms = phase_overheads["g_total_layers_ms"]
+        c_total_layers_ms = phase_overheads["c_total_layers_ms"]
+        avg_step_time_gpu_ms = phase_overheads["avg_step_time_gpu_ms"]
+        avg_step_time_cpu_ms = phase_overheads["avg_step_time_cpu_ms"]
+        framework_overhead_gpu_ms = phase_overheads["framework_overhead_gpu_ms"]
+        framework_overhead_cpu_ms = phase_overheads["framework_overhead_cpu_ms"]
+        framework_overhead_ratio_gpu = phase_overheads["framework_overhead_ratio_gpu"]
+        framework_overhead_ratio_cpu = phase_overheads["framework_overhead_ratio_cpu"]
 
         rows = []
         framework_overhead_vector = []
@@ -672,26 +759,11 @@ class TrainingProfiler:
 
         total_model_flops = 0.0
 
-        graph_info: Dict[str, Any] = {}
-        try:
-            merged_layer_stats: Dict[str, Dict[str, Any]] = {}
-            for layer_name, layer_values in cpu_layer_stats.items():
-                merged_layer_stats[layer_name] = dict(layer_values)
-            for layer_name, layer_values in gpu_layer_stats.items():
-                if layer_name not in merged_layer_stats:
-                    merged_layer_stats[layer_name] = {}
-                merged_layer_stats[layer_name].update(layer_values)
-
-            graph_info = export_graph_artifacts(
-                model=self.model,
-                model_name=self.model_name,
-                output_dir=self.args.output_dir,
-                input_data=input_data,
-                layer_stats=merged_layer_stats,
-                include_records=True,
-            )
-        except Exception as e:
-            logger.warning(f"Graph artifact export failed (non-fatal): {e}")
+        graph_info = self._export_graph_artifacts_safe(
+            input_data=input_data,
+            cpu_layer_stats=cpu_layer_stats,
+            gpu_layer_stats=gpu_layer_stats,
+        )
 
         edge_transfer_rows, incoming_h2d_by_layer, outgoing_d2h_by_layer = self._build_edge_transfer_costs(
             graph_edges=graph_info.get("edges") if graph_info else None,

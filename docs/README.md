@@ -65,6 +65,14 @@ python src/profiler.py \
 bash scripts/run_experiments.sh
 ```
 
+### Full thesis smoke workflow (real machine, reduced scope)
+```bash
+# End-to-end: profiling (FP32 reduced grid) -> aggregation -> ILP -> pareto -> plots -> LaTeX
+bash scripts/run_thesis_smoke_workflow.sh
+```
+
+This script is intended for real operational verification with a small campaign (few models, optimizers, and batch sizes), while still exercising the complete thesis pipeline.
+
 ### Fast script smoke mode
 ```bash
 SMOKE_MODE=true \
@@ -83,13 +91,40 @@ Useful script environment variables:
 
 ## 4) Outputs
 
-- CSV metrics: `data/{model}_metrics.csv`
-- JSON metadata: `data/{model}_meta.json`
-- Grid execution output tree: `data/results/{model}/{optimizer}/{precision}/batch_{N}/`
+- Host-scoped root created automatically on each profiling run: `data/{hostname}/`
+- CSV metrics: `data/{hostname}/.../{model}_metrics.csv`
+- JSON metadata: `data/{hostname}/.../{model}_meta.json`
+- Grid execution output tree: `data/{hostname}/results/{model}/{optimizer}/{precision}/batch_{N}/`
 
 Both artifacts are designed to feed ILP parameterization workflows.
 
-## 5) Troubleshooting
+## 5) Multi-Node ILP (Hardware-Aware)
+
+When profiling is executed across multiple cluster nodes, each node can produce different costs (CPU/GPU/bus/memory). The ILP pipeline now supports merging multiple hardware profiles before solving:
+
+```bash
+python validation/run_ilp_partition.py \
+  --config_dirs "data/nodeA/results/simple_mlp/SGD/fp32/batch_8,data/nodeB/results/simple_mlp/SGD/fp32/batch_8" \
+  --model simple_mlp \
+  --hw_aggregate max \
+  --hw_dispersion_k 0.0
+```
+
+Hardware aggregation options:
+- `--hw_aggregate max`: conservative envelope (worst-case across nodes).
+- `--hw_aggregate mean --hw_dispersion_k K`: robust mean plus variability term (`mean + K*std`).
+
+Shell wrappers also support this mode via `CONFIG_DIRS`:
+- `scripts/run_ilp_partition.sh`
+- `scripts/run_ilp_pareto_sweep.sh`
+- `scripts/discover_ilp_config_dirs.sh` (autodiscovery + optional execution)
+
+Note: autodiscovery requires ILP-ready folders (stats + graph + transfer artifacts).
+
+Recommended: follow the full no-memory workflow in:
+- [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md)
+
+## 6) Troubleshooting
 
 | Issue | Cause | Action |
 |------|------|------|
@@ -106,9 +141,10 @@ Both artifacts are designed to feed ILP parameterization workflows.
 |----------|---------|
 | [../README.md](../README.md) | Project overview |
 | [documentation.md](documentation.md) | Full technical methodology and schema |
+| [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) | Step-by-step multi-node ILP workflow |
 | [TESTING_VALIDATION_MAP.md](TESTING_VALIDATION_MAP.md) | Validation strategy and runbook |
 | [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Architecture and folder map |
 
 ---
 
-*Last Updated*: March 1, 2026
+*Last Updated*: March 12, 2026

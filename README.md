@@ -180,7 +180,7 @@ python src/profiler.py \
 # - OPTIMIZERS: SGD, Adam, AdamW, etc.
 
 bash scripts/run_experiments.sh
-# Results: data/results/{model}/{optimizer}/{precision}/batch_{N}/
+# Results: data/{hostname}/results/{model}/{optimizer}/{precision}/batch_{N}/
 ```
 
 ### Run Fast Smoke Validation (Script Mode)
@@ -217,7 +217,7 @@ Useful environment variables for `scripts/run_experiments.sh`:
 tail -f logs/experiments_*.txt
 
 # Terminal 2: Check output directory
-watch -n 5 'ls -R data/results'
+watch -n 5 'ls -R data/*/results'
 ```
 
 ---

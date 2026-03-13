@@ -73,6 +73,42 @@ Figure X. Flow of profiler metrics into the ILP optimization model. Each profile
 - **Constraints**: Memory, energy, and overhead are enforced globally.  
 - **Objective**: Optimize for speed and energy efficiency simultaneously.  
 
+## End-to-End Pipeline (Mermaid)
+
+```mermaid
+flowchart LR
+  A[CLI\nsrc/profiler.py] --> B[Precision policy + runtime setup\ncore/precision_policy.py + core/system.py]
+  B --> C[Model/Input factory\nmodels/factory.py]
+  C --> D[Training profiling loop\nrunner/training_profiler.py]
+
+  D --> E1[Per-run metrics\n*_metrics.csv]
+  D --> E2[Per-run metadata\n*_meta.json]
+  D --> E3[Graph artifacts\n*_graph_nodes.csv + *_graph_edges.csv]
+  D --> E4[Transfer artifacts\n*_transfer_edges.csv]
+  D --> E5[GPU partial checkpoints\n*_gpu_partial.csv/json]
+
+  E1 --> F[Replicate aggregation\ncore/stats_aggregator.py]
+  F --> G[Robust stats\nmetrics_stats.csv]
+
+  G --> H[ILP input loader\nilp/data_loader.py]
+  E3 --> H
+  E4 --> H
+
+  H --> I[ILP model build\nilp/model_builder.py]
+  I --> J[ILP solve\nilp/solve.py]
+  J --> K[ILP export\nilp/export_solution.py]
+
+  K --> L1[ilp_assignment.csv]
+  K --> L2[ilp_cut_edges.csv]
+  K --> L3[ilp_solution_summary.json]
+
+  M[validation/run_ilp_partition.py] --> H
+  N[validation/sweep_ilp_pareto.py] --> H
+  O[scripts/run_experiments.sh] --> A
+  P[scripts/run_ilp_partition.sh] --> M
+  Q[scripts/run_ilp_pareto_sweep.sh] --> N
+```
+
 ---
 
 ### Introducción y objetivos generales

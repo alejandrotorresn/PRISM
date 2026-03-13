@@ -26,7 +26,8 @@ fi
 # Global Configuration
 PYTHON_CMD="${PYTHON_CMD:-python}"
 PROFILER_SCRIPT="${PROFILER_SCRIPT:-src/profiler.py}"
-BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/results}"
+HOST_TAG="${HOST_TAG:-$(hostname)}"
+BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results}"
 LOG_DIR="${LOG_DIR:-logs}"
 LOG_FILE="${LOG_DIR}/experiments_$(date +%Y%m%d_%H%M%S).txt"
 

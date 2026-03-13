@@ -13,6 +13,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 load_ilp_inputs = importlib.import_module("ilp.data_loader").load_ilp_inputs
+merge_ilp_inputs_multi_hardware = importlib.import_module("ilp.data_loader").merge_ilp_inputs_multi_hardware
 save_ilp_solution = importlib.import_module("ilp.export_solution").save_ilp_solution
 ILPConfig = importlib.import_module("ilp.model_builder").ILPConfig
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
@@ -24,18 +25,26 @@ def _default_paths(config_dir: Path, model_name: str):
         stats = config_dir / "metrics_stats.csv"
 
     run_dirs = sorted([p for p in config_dir.glob("run_*") if p.is_dir()])
-    if not run_dirs:
-        raise FileNotFoundError(f"No run_* directories found in: {config_dir}")
+    if run_dirs:
+        ref_run = run_dirs[0]
+        graph_edges = ref_run / f"{model_name}_graph_edges.csv"
+        transfer_edges = ref_run / f"{model_name}_transfer_edges.csv"
+    else:
+        graph_edges = config_dir / f"{model_name}_graph_edges.csv"
+        transfer_edges = config_dir / f"{model_name}_transfer_edges.csv"
 
-    ref_run = run_dirs[0]
-    graph_edges = ref_run / f"{model_name}_graph_edges.csv"
-    transfer_edges = ref_run / f"{model_name}_transfer_edges.csv"
+    if not graph_edges.exists() or not transfer_edges.exists():
+        raise FileNotFoundError(
+            "Could not resolve graph/transfer artifacts in config_dir. "
+            f"Expected either run_*/ files or direct files in: {config_dir}"
+        )
     return stats, graph_edges, transfer_edges
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Solve robust CPU/GPU layer partitioning ILP")
-    parser.add_argument("--config_dir", required=True, help="Path to batch directory containing run_* and metrics_stats")
+    parser.add_argument("--config_dir", default=None, help="Path to batch directory containing run_* and metrics_stats")
+    parser.add_argument("--config_dirs", default=None, help="Comma-separated batch directories for multi-hardware aggregation")
     parser.add_argument("--model", required=True, help="Model artifact prefix (e.g., simple_mlp)")
     parser.add_argument("--metrics_stats_csv", default=None, help="Explicit metrics stats CSV path")
     parser.add_argument("--graph_edges_csv", default=None, help="Explicit graph edges CSV path")
@@ -49,30 +58,63 @@ def main() -> int:
     parser.add_argument("--gpu_mem_budget_mb", type=float, default=1e18)
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
+    parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
+    parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_dir", default=None, help="Output folder for ILP solution files")
     args = parser.parse_args()
 
-    config_dir = Path(args.config_dir)
-    if not config_dir.exists():
-        raise FileNotFoundError(f"config_dir does not exist: {config_dir}")
+    config_dirs: list[Path]
+    if args.config_dirs:
+        config_dirs = [Path(p.strip()) for p in args.config_dirs.split(",") if p.strip()]
+        if not config_dirs:
+            raise ValueError("--config_dirs was provided but no valid paths were found")
+    else:
+        if not args.config_dir:
+            raise ValueError("Provide --config_dir or --config_dirs")
+        config_dirs = [Path(args.config_dir)]
 
-    if args.metrics_stats_csv and args.graph_edges_csv and args.transfer_edges_csv:
+    for cdir in config_dirs:
+        if not cdir.exists():
+            raise FileNotFoundError(f"config_dir does not exist: {cdir}")
+
+    base_output_dir = config_dirs[0]
+    output_dir = Path(args.output_dir) if args.output_dir else (base_output_dir / "ilp_solution")
+
+    if args.metrics_stats_csv and args.graph_edges_csv and args.transfer_edges_csv and len(config_dirs) == 1:
         stats_csv = Path(args.metrics_stats_csv)
         graph_csv = Path(args.graph_edges_csv)
         transfer_csv = Path(args.transfer_edges_csv)
+        data = load_ilp_inputs(
+            metrics_stats_csv=str(stats_csv),
+            graph_edges_csv=str(graph_csv),
+            transfer_edges_csv=str(transfer_csv),
+            k_sigma=args.k_sigma,
+            strict_graph_mapping=args.strict_graph_mapping,
+            strict_transfer_mapping=args.strict_transfer_mapping,
+        )
     else:
-        stats_csv, graph_csv, transfer_csv = _default_paths(config_dir, args.model)
+        profiles = []
+        for cdir in config_dirs:
+            stats_csv, graph_csv, transfer_csv = _default_paths(cdir, args.model)
+            profile = load_ilp_inputs(
+                metrics_stats_csv=str(stats_csv),
+                graph_edges_csv=str(graph_csv),
+                transfer_edges_csv=str(transfer_csv),
+                k_sigma=args.k_sigma,
+                strict_graph_mapping=args.strict_graph_mapping,
+                strict_transfer_mapping=args.strict_transfer_mapping,
+            )
+            profiles.append(profile)
 
-    output_dir = Path(args.output_dir) if args.output_dir else (config_dir / "ilp_solution")
-
-    data = load_ilp_inputs(
-        metrics_stats_csv=str(stats_csv),
-        graph_edges_csv=str(graph_csv),
-        transfer_edges_csv=str(transfer_csv),
-        k_sigma=args.k_sigma,
-        strict_graph_mapping=args.strict_graph_mapping,
-        strict_transfer_mapping=args.strict_transfer_mapping,
-    )
+        if len(profiles) == 1:
+            data = profiles[0]
+        else:
+            data = merge_ilp_inputs_multi_hardware(
+                profiles=profiles,
+                strategy=args.hw_aggregate,
+                dispersion_k=args.hw_dispersion_k,
+                strict_schema=True,
+            )
 
     cfg = ILPConfig(
         w_time=args.w_time,
@@ -95,6 +137,9 @@ def main() -> int:
     print(f"CPU mem used (MB): {sol.cpu_mem_used_mb:.3f}")
     print(f"Layers assigned: {len(sol.assignment)}")
     print(f"Cut edges: {len(sol.cut_edges)}")
+    if len(config_dirs) > 1:
+        print(f"Hardware profiles merged: {len(config_dirs)}")
+        print(f"Aggregation: {args.hw_aggregate} (k={args.hw_dispersion_k})")
     print(f"Assignment CSV: {out['assignment_csv']}")
     print(f"Cut edges CSV: {out['cut_edges_csv']}")
     print(f"Summary JSON: {out['summary_json']}")

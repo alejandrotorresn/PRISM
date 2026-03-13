@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 
 import torch
 
@@ -20,6 +21,7 @@ from core.precision_policy import (
     run_cpu_fp16_model_preflight,
 )
 from core.system import configure_cpu_runtime, set_determinism
+from core.system import get_hostname, normalize_output_dir_for_host
 from models.factory import SimpleMLP, build_model_and_input
 from runner.training_profiler import TrainingProfiler
 
@@ -139,6 +141,9 @@ def _configure_precision(args) -> torch.dtype:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    args.host_name = get_hostname()
+    os.makedirs(os.path.join("data", args.host_name), exist_ok=True)
+    args.output_dir = normalize_output_dir_for_host(args.output_dir, args.host_name)
 
     configure_cpu_runtime(force_threads=args.num_threads)
     set_determinism(seed=args.seed)
