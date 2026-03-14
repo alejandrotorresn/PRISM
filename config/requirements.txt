@@ -23,6 +23,12 @@ safetensors>=0.4.0
 # GPU monitoring and energy telemetry
 nvidia-ml-py>=12.535.0      # NVIDIA GPU metrics via NVML (module import: pynvml)
 
+# ILP solver (CBC backend embedded)
+pulp>=2.7
+
+# Plotting / report generation
+matplotlib>=3.7
+
 # CPU energy measurement (Intel RAPL via sysfs on Linux)
 # Requires: /sys/class/powercap/intel-rapl/* accessible (may need sudo)
 pyRAPL>=0.2.3

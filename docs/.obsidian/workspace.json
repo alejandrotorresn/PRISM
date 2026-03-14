@@ -1,0 +1,201 @@
+{
+  "main": {
+    "id": "de42f11fd2e6749d",
+    "type": "split",
+    "children": [
+      {
+        "id": "7c080bfc5b2269ac",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b7118e4c75c75494",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "GLOBAL_PROJECT_DOCUMENTATION_ES.md",
+                "mode": "preview",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "GLOBAL_PROJECT_DOCUMENTATION_ES"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "f39984db874498da",
+    "type": "split",
+    "children": [
+      {
+        "id": "b4374ba2966d1d26",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "544ccae0f1a7b8f1",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "d4b492c39d5580ce",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "44929a8db82e0d9e",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "6f7c950c3ba1de2e",
+    "type": "split",
+    "children": [
+      {
+        "id": "774bf93396dd82f5",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "e684d1f220b86ee2",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "CAPITULO_TESIS_PROFILING_ES.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for CAPITULO_TESIS_PROFILING_ES"
+            }
+          },
+          {
+            "id": "e36e73d2c1a6360a",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "CAPITULO_TESIS_PROFILING_ES.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from CAPITULO_TESIS_PROFILING_ES"
+            }
+          },
+          {
+            "id": "4e107f2c2063148c",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "8f64418108e8ed63",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "76a128eb2d358e1e",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "CAPITULO_TESIS_PROFILING_ES.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of CAPITULO_TESIS_PROFILING_ES"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "b7118e4c75c75494",
+  "lastOpenFiles": [
+    "TESTING_VALIDATION_MAP.md",
+    "SERVER_LAUNCH_PROFILES.md",
+    "README.md",
+    "PROJECT_STRUCTURE.md",
+    "MULTI_NODE_ILP_RUNBOOK.md",
+    "ILP_ROBUST_PARTITIONING_PLAN.md",
+    "GLOBAL_PROJECT_DOCUMENTATION_ES.md",
+    "GLOBAL_PROJECT_DOCUMENTATION.md",
+    "documentation.md",
+    "CAPITULO_TESIS_PROFILING_ES.md",
+    "CAPITULO_TESIS_ILP_ES.md",
+    "ARCHITECTURE_AUDIT.md"
+  ]
+}
