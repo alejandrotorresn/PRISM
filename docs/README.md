@@ -150,6 +150,10 @@ Recommended: follow the full no-memory workflow in:
 | Document | Purpose |
 |----------|---------|
 | [../README.md](../README.md) | Project overview |
+| [GLOBAL_PROJECT_DOCUMENTATION.md](GLOBAL_PROJECT_DOCUMENTATION.md) | Full end-to-end technical reference (profiling, graph, ILP, scripts, storage, equations) |
+| [GLOBAL_PROJECT_DOCUMENTATION_ES.md](GLOBAL_PROJECT_DOCUMENTATION_ES.md) | Version academica en espanol de la referencia tecnica integral |
+| [CAPITULO_TESIS_PROFILING_ES.md](CAPITULO_TESIS_PROFILING_ES.md) | Capitulo monografico doctoral en espanol: metodologia de profiling |
+| [CAPITULO_TESIS_ILP_ES.md](CAPITULO_TESIS_ILP_ES.md) | Capitulo monografico doctoral en espanol: formulacion y analisis ILP |
 | [documentation.md](documentation.md) | Full technical methodology and schema |
 | [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md) | Recommended launch configurations by server type |
 | [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) | Step-by-step multi-node ILP workflow |

@@ -211,6 +211,9 @@ Useful environment variables for `scripts/run_experiments.sh`:
 
 Recommended launch profiles for heterogeneous multi-server collection are documented in [docs/SERVER_LAUNCH_PROFILES.md](docs/SERVER_LAUNCH_PROFILES.md).
 
+Global technical documentation (full end-to-end architecture, data model, ILP mathematics, scripts, and artifact schemas) is available at [docs/GLOBAL_PROJECT_DOCUMENTATION.md](docs/GLOBAL_PROJECT_DOCUMENTATION.md).
+Spanish academic version is available at [docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md](docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md).
+
 #### `run_experiments.sh` Troubleshooting
 
 - `exit code: 127`: Python executable path is invalid. Set `PYTHON_CMD` to a valid interpreter (for example `.venv/bin/python`).
