@@ -84,10 +84,20 @@ bash scripts/run_experiments.sh
 
 Useful script environment variables:
 - `SMOKE_MODE=true|false`: runs a minimal campaign (1 model × 1 optimizer × 1 precision × 1 batch).
+- `MODELS_CSV=a,b,c`: overrides the default model grid without editing the script.
+- `BATCH_SIZES_CSV=8,16,32`: overrides batch sizes without editing the script.
+- `PRECISIONS_CSV=fp32,fp16`: overrides the precision grid without editing the script.
+- `OPTIMIZERS_CSV=SGD,AdamW`: overrides the optimizer grid without editing the script.
 - `USE_SKIP_CPU=true|false`: enables GPU-only profiling mode.
+- `ENABLE_RAPL=true|false`: controls whether `--rapl` is passed when CPU profiling is enabled.
 - `FORCE_THREADS=N`: passes CPU thread override to `--num_threads`.
 - `PYTHON_CMD=/path/to/python`: selects the interpreter used by the script.
+- `FAIL_FAST=true|false`: aborts the campaign on the first runtime or aggregation failure.
+- `DRY_RUN=true|false`: validates the campaign and prints commands without executing runs.
 - `BASE_OUTPUT_DIR=...`, `LOG_DIR=...`, `WARMUP=N`, `MEASURE=N`: override default paths and run lengths.
+
+Recommended production launch profiles for heterogeneous servers are documented in:
+- [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md)
 
 ## 4) Outputs
 
@@ -141,6 +151,7 @@ Recommended: follow the full no-memory workflow in:
 |----------|---------|
 | [../README.md](../README.md) | Project overview |
 | [documentation.md](documentation.md) | Full technical methodology and schema |
+| [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md) | Recommended launch configurations by server type |
 | [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) | Step-by-step multi-node ILP workflow |
 | [TESTING_VALIDATION_MAP.md](TESTING_VALIDATION_MAP.md) | Validation strategy and runbook |
 | [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Architecture and folder map |

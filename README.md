@@ -196,11 +196,20 @@ bash scripts/run_experiments.sh
 
 Useful environment variables for `scripts/run_experiments.sh`:
 - `SMOKE_MODE=true|false`: Enables minimal campaign for quick sanity checks.
+- `MODELS_CSV=a,b,c`: Override the model grid without editing the script.
+- `BATCH_SIZES_CSV=8,16,32`: Override batch sizes without editing the script.
+- `PRECISIONS_CSV=fp32,fp16`: Override the precision grid without editing the script.
+- `OPTIMIZERS_CSV=SGD,AdamW`: Override the optimizer grid without editing the script.
 - `USE_SKIP_CPU=true|false`: Enables GPU-only profiling mode.
+- `ENABLE_RAPL=true|false`: Controls whether CPU RAPL is requested when CPU profiling is enabled.
 - `FORCE_THREADS=N`: Forces CPU thread count passed to `--num_threads`.
 - `PYTHON_CMD=/path/to/python`: Selects interpreter (useful for `.venv`).
+- `FAIL_FAST=true|false`: Stop on the first run/aggregation failure.
+- `DRY_RUN=true|false`: Validate and print commands without executing the campaign.
 - `BASE_OUTPUT_DIR=...` and `LOG_DIR=...`: Override output and logs directories.
 - `WARMUP=N` and `MEASURE=N`: Override profiling iterations globally.
+
+Recommended launch profiles for heterogeneous multi-server collection are documented in [docs/SERVER_LAUNCH_PROFILES.md](docs/SERVER_LAUNCH_PROFILES.md).
 
 #### `run_experiments.sh` Troubleshooting
 

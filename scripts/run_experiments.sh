@@ -15,7 +15,7 @@
 # Dependencies: profiler.py, python3, nvidia-smi (optional)
 # =======================================================================================
 
-set -e  # Exit on error
+set -euo pipefail
 
 # Activate Conda Environment
 if [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
@@ -44,18 +44,22 @@ mkdir -p "$BASE_OUTPUT_DIR" "$LOG_DIR"
 # 1. Models: Vision (ResNet, ViT), NLP (BERT, GPT2), Baseline (MLP)
 MODELS=("resnet50" "resnet152" "vit_b16" "bert_base" "gpt2_small" "simple_mlp")
 # MODELS=("vit_b16")  # Fast test: single model
+MODELS_CSV="${MODELS_CSV:-}"
 
 # 2. Batch Sizes (Memory Scalability Analysis)
 BATCH_SIZES=(8 16 32 64 128 256)
 # BATCH_SIZES=(32)  # Fast test: single batch
+BATCH_SIZES_CSV="${BATCH_SIZES_CSV:-}"
 
 # 3. Precisions: FP32 (baseline), FP16 (mixed/tensor cores), BF16 (modern)
 PRECISIONS=("fp32" "fp16" "bf16")
 # PRECISIONS=("fp32")  # Fast test: single precision
+PRECISIONS_CSV="${PRECISIONS_CSV:-}"
 
 # 4. Optimizers (Memory State Overhead)
 OPTIMIZERS=("SGD" "SGD_momentum" "Adam" "AdamW" "RMSprop" "Adagrad" "Adadelta")
 # OPTIMIZERS=("SGD" "Adam")  # Fast test: two optimizers
+OPTIMIZERS_CSV="${OPTIMIZERS_CSV:-}"
 
 # Profiler Parameters
 WARMUP="${WARMUP:-3}"   # Number of warmup iterations
@@ -73,6 +77,9 @@ REPEATS="${REPEATS:-1}"                      # Number of replicated runs per con
 SEED_BASE="${SEED_BASE:-42}"                 # Seed base: seed_i = SEED_BASE + (i-1)
 AUTO_AGGREGATE_STATS="${AUTO_AGGREGATE_STATS:-true}"  # true = create metrics_stats.csv per config folder
 AGGREGATOR_SCRIPT="${AGGREGATOR_SCRIPT:-validation/aggregate_metrics_stats.py}"
+ENABLE_RAPL="${ENABLE_RAPL:-true}"          # true = pass --rapl when CPU profiling is enabled
+FAIL_FAST="${FAIL_FAST:-false}"             # true = abort the campaign on first profiler/aggregation failure
+DRY_RUN="${DRY_RUN:-false}"                 # true = print commands and validate preflight without executing runs
 
 if [ "$SMOKE_MODE" = true ]; then
     # Smoke mode intentionally shrinks the grid for a fast end-to-end health check.
@@ -93,16 +100,137 @@ log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$LOG_FILE"
 }
 
-check_gpu() {
-    if command -v nvidia-smi &> /dev/null; then
-        GPU_COUNT=$(nvidia-smi --list-gpus | wc -l)
-        GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1)
-        log_msg "✓ Detected $GPU_COUNT GPU(s): $GPU_NAME"
-        return 0
-    else
-        log_msg "⚠ WARNING: nvidia-smi not found. Running in CPU-only mode."
-        return 1
+is_true() {
+    [ "$1" = true ]
+}
+
+trim_spaces() {
+    local value="$1"
+    value="${value#${value%%[![:space:]]*}}"
+    value="${value%${value##*[![:space:]]}}"
+    printf '%s' "$value"
+}
+
+apply_csv_override() {
+    local csv_value="$1"
+    local array_name="$2"
+    local label="$3"
+    local numeric_only="${4:-false}"
+    local IFS=','
+    local raw_items=()
+    local parsed_items=()
+    local raw_item
+    local item
+    local parsed_item
+
+    [ -n "$csv_value" ] || return 0
+
+    read -r -a raw_items <<< "$csv_value"
+    for raw_item in "${raw_items[@]}"; do
+        item="$(trim_spaces "$raw_item")"
+        [ -n "$item" ] || continue
+        if [ "$numeric_only" = true ] && ! [[ "$item" =~ ^[0-9]+$ ]]; then
+            log_msg "[ERROR] $label override contains a non-integer value: $item"
+            exit 1
+        fi
+        parsed_items+=("$item")
+    done
+
+    if [ ${#parsed_items[@]} -eq 0 ]; then
+        log_msg "[ERROR] $label override was provided but no valid values were parsed."
+        exit 1
     fi
+
+    eval "$array_name=()"
+    for parsed_item in "${parsed_items[@]}"; do
+        eval "$array_name+=(\"\$parsed_item\")"
+    done
+}
+
+apply_grid_overrides() {
+    apply_csv_override "$MODELS_CSV" MODELS "MODELS_CSV"
+    apply_csv_override "$BATCH_SIZES_CSV" BATCH_SIZES "BATCH_SIZES_CSV" true
+    apply_csv_override "$PRECISIONS_CSV" PRECISIONS "PRECISIONS_CSV"
+    apply_csv_override "$OPTIMIZERS_CSV" OPTIMIZERS "OPTIMIZERS_CSV"
+}
+
+require_command_or_executable() {
+    local cmd="$1"
+    local label="$2"
+
+    if [[ "$cmd" == *" "* ]]; then
+        log_msg "[ERROR] $label must be a single executable path or command name. Got: $cmd"
+        exit 1
+    fi
+
+    if [[ "$cmd" == */* ]]; then
+        if [ ! -x "$cmd" ]; then
+            log_msg "[ERROR] $label is not executable: $cmd"
+            exit 1
+        fi
+        return 0
+    fi
+
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        log_msg "[ERROR] $label not found in PATH: $cmd"
+        exit 1
+    fi
+}
+
+run_python_help_check() {
+    local script_path="$1"
+    local label="$2"
+
+    if [ ! -f "$script_path" ]; then
+        log_msg "[ERROR] $label not found: $script_path"
+        exit 1
+    fi
+
+    if ! "$PYTHON_CMD" "$script_path" --help >/dev/null 2>&1; then
+        log_msg "[ERROR] Preflight failed for $label: $script_path"
+        log_msg "[ERROR] Check PYTHON_CMD, dependencies, and local imports before launching the campaign."
+        exit 1
+    fi
+}
+
+handle_failure() {
+    local exit_code="$1"
+    local context="$2"
+
+    if is_true "$FAIL_FAST"; then
+        log_msg "  FAIL_FAST=true -> aborting campaign at: $context"
+        exit "$exit_code"
+    fi
+}
+
+preflight_checks() {
+    require_command_or_executable "$PYTHON_CMD" "PYTHON_CMD"
+    run_python_help_check "$PROFILER_SCRIPT" "Profiler script"
+
+    if is_true "$AUTO_AGGREGATE_STATS"; then
+        run_python_help_check "$AGGREGATOR_SCRIPT" "Aggregator script"
+    fi
+}
+
+check_gpu() {
+    local gpu_info
+    local gpu_count
+    local gpu_name
+
+    if gpu_info=$("$PYTHON_CMD" -c 'import torch; count = torch.cuda.device_count(); name = torch.cuda.get_device_name(0) if count > 0 else ""; print(f"{count}|{name}")' 2>/dev/null); then
+        gpu_count="${gpu_info%%|*}"
+        gpu_name="${gpu_info#*|}"
+        if [ "$gpu_count" -gt 0 ]; then
+            if command -v nvidia-smi >/dev/null 2>&1; then
+                gpu_name="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1)"
+            fi
+            log_msg "✓ Detected $gpu_count GPU(s): $gpu_name"
+            return 0
+        fi
+    fi
+
+    log_msg "⚠ WARNING: No CUDA GPU detected by PyTorch. Running in CPU-only mode."
+    return 1
 }
 
 print_summary() {
@@ -118,11 +246,18 @@ print_summary() {
     log_msg "Optimizers: ${OPTIMIZERS[*]}"
     log_msg "Warmup Steps: $WARMUP | Measurement Steps: $MEASURE"
     log_msg "Skip CPU Profiling: $USE_SKIP_CPU"
+    log_msg "Enable RAPL: $ENABLE_RAPL"
     log_msg "Force CPU Threads: $FORCE_THREADS (0=auto)"
     log_msg "Smoke Mode: $SMOKE_MODE"
     log_msg "Replicates per configuration: $REPEATS"
     log_msg "Seed Base: $SEED_BASE"
     log_msg "Auto Aggregate Stats: $AUTO_AGGREGATE_STATS"
+    log_msg "Fail Fast: $FAIL_FAST"
+    log_msg "Dry Run: $DRY_RUN"
+    log_msg "MODELS_CSV Override: ${MODELS_CSV:-<none>}"
+    log_msg "BATCH_SIZES_CSV Override: ${BATCH_SIZES_CSV:-<none>}"
+    log_msg "PRECISIONS_CSV Override: ${PRECISIONS_CSV:-<none>}"
+    log_msg "OPTIMIZERS_CSV Override: ${OPTIMIZERS_CSV:-<none>}"
     log_msg "========================================================"
 }
 
@@ -136,7 +271,9 @@ print_summary() {
 # D) Build profiler command safely as argument array (space-safe, no eval).
 # E) Execute, log success/failure, and continue the campaign.
 
+apply_grid_overrides
 log_msg "Starting Advanced Profiler Experiment Campaign"
+preflight_checks
 print_summary
 if check_gpu; then
     HAS_GPU=true
@@ -150,7 +287,10 @@ if [ "$USE_SKIP_CPU" = true ] && [ "$HAS_GPU" = false ]; then
 fi
 
 TOTAL_EXPERIMENTS=$((${#MODELS[@]} * ${#OPTIMIZERS[@]} * ${#PRECISIONS[@]} * ${#BATCH_SIZES[@]} * REPEATS))
-COMPLETED=0
+ATTEMPTED=0
+SUCCEEDED_RUNS=0
+FAILED_RUNS=0
+FAILED_AGGREGATIONS=0
 
 # Main Loop: Model -> Optimizer -> Precision -> Batch Size
 # Each loop iteration corresponds to one profiler execution and one output folder.
@@ -170,8 +310,8 @@ for model in "${MODELS[@]}"; do
                 mkdir -p "$OUT_DIR"
 
                 for ((repeat_idx=1; repeat_idx<=REPEATS; repeat_idx++)); do
-                    COMPLETED=$((COMPLETED + 1))
-                    PROGRESS="[$COMPLETED/$TOTAL_EXPERIMENTS]"
+                    ATTEMPTED=$((ATTEMPTED + 1))
+                    PROGRESS="[$ATTEMPTED/$TOTAL_EXPERIMENTS]"
                     RUN_ID=$(printf "run_%03d" "$repeat_idx")
                     RUN_SEED=$((SEED_BASE + repeat_idx - 1))
                     RUN_OUT_DIR="$OUT_DIR/$RUN_ID"
@@ -192,7 +332,7 @@ for model in "${MODELS[@]}"; do
                         --seed "$RUN_SEED"
                         --run_id "$RUN_ID"
                     )
-                    if [ "$USE_SKIP_CPU" = false ]; then
+                    if [ "$USE_SKIP_CPU" = false ] && [ "$ENABLE_RAPL" = true ]; then
                         # RAPL is only meaningful when CPU profiling is enabled.
                         CMD+=(--rapl)  # Enable CPU RAPL energy measurement
                     fi
@@ -207,17 +347,19 @@ for model in "${MODELS[@]}"; do
                         log_msg "  → Forcing $FORCE_THREADS CPU threads (--num_threads)"
                     fi
 
+                    if [ "$DRY_RUN" = true ]; then
+                        log_msg "  [DRY_RUN] ${CMD[*]}"
+                        SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                     # Execute profiler with error handling
-                    if "${CMD[@]}" >> "$LOG_FILE" 2>&1; then
+                    elif "${CMD[@]}" >> "$LOG_FILE" 2>&1; then
+                        SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                         log_msg "  ✓ SUCCESS: Batch $batch replicate $RUN_ID complete"
                     else
                         EXIT_CODE=$?
+                        FAILED_RUNS=$((FAILED_RUNS + 1))
                         log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
                         log_msg "  Probable causes: Out of Memory (OOM), unsupported precision, or hardware constraint"
-
-                        # Optional: uncomment to skip remaining batches on first failure
-                        # log_msg "  Skipping remaining batches for this block..."
-                        # break
+                        handle_failure "$EXIT_CODE" "$model/$optimizer/$precision/batch_${batch}/$RUN_ID"
                     fi
 
                     # Allow GPU memory to cool down
@@ -225,15 +367,15 @@ for model in "${MODELS[@]}"; do
                 done
 
                 if [ "$AUTO_AGGREGATE_STATS" = true ]; then
-                    if [ -f "$AGGREGATOR_SCRIPT" ]; then
-                        AGG_OUT="$OUT_DIR/${model}_metrics_stats.csv"
-                        if "$PYTHON_CMD" "$AGGREGATOR_SCRIPT" --input_dir "$OUT_DIR" --output_csv "$AGG_OUT" >> "$LOG_FILE" 2>&1; then
-                            log_msg "  ✓ STATS: Aggregated replicate metrics -> $AGG_OUT"
-                        else
-                            log_msg "  ⚠ STATS WARNING: Aggregation failed for $OUT_DIR (continuing)"
-                        fi
+                    AGG_OUT="$OUT_DIR/${model}_metrics_stats.csv"
+                    if [ "$DRY_RUN" = true ]; then
+                        log_msg "  [DRY_RUN] $PYTHON_CMD $AGGREGATOR_SCRIPT --input_dir $OUT_DIR --output_csv $AGG_OUT"
+                    elif "$PYTHON_CMD" "$AGGREGATOR_SCRIPT" --input_dir "$OUT_DIR" --output_csv "$AGG_OUT" >> "$LOG_FILE" 2>&1; then
+                        log_msg "  ✓ STATS: Aggregated replicate metrics -> $AGG_OUT"
                     else
-                        log_msg "  ⚠ STATS WARNING: Aggregator script not found at $AGGREGATOR_SCRIPT"
+                        FAILED_AGGREGATIONS=$((FAILED_AGGREGATIONS + 1))
+                        log_msg "  ✗ STATS FAILURE: Aggregation failed for $OUT_DIR"
+                        handle_failure 1 "$model/$optimizer/$precision/batch_${batch}/aggregation"
                     fi
                 fi
             done
@@ -249,7 +391,10 @@ log_msg "========================================================"
 log_msg "EXPERIMENT CAMPAIGN COMPLETED"
 log_msg "========================================================"
 log_msg "Total Experiments: $TOTAL_EXPERIMENTS"
-log_msg "Completed: $COMPLETED"
+log_msg "Attempted Runs: $ATTEMPTED"
+log_msg "Successful Runs: $SUCCEEDED_RUNS"
+log_msg "Failed Runs: $FAILED_RUNS"
+log_msg "Failed Aggregations: $FAILED_AGGREGATIONS"
 log_msg "Output Directory: $BASE_OUTPUT_DIR"
 log_msg "Log File: $LOG_FILE"
 log_msg ""
@@ -258,3 +403,8 @@ log_msg "  1. Check log file for errors: cat $LOG_FILE"
 log_msg "  2. Verify output structure: ls -R $BASE_OUTPUT_DIR"
 log_msg "  3. Analyze results with ILP model (see thesis Chapter 3)"
 log_msg "========================================================"
+
+if [ "$FAILED_RUNS" -gt 0 ] || [ "$FAILED_AGGREGATIONS" -gt 0 ]; then
+    log_msg "[ERROR] Campaign finished with failures. Review $LOG_FILE before using the collected data."
+    exit 1
+fi
