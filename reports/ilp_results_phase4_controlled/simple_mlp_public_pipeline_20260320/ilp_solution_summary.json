@@ -1,0 +1,20 @@
+{
+    "status": "optimal",
+    "backend": "greedy_phase4",
+    "objective_value": 1.9802281509413586,
+    "gpu_mem_used_mb": 96.72216796875,
+    "cpu_mem_used_mb": 0.00811767578125,
+    "layers_total": 5,
+    "layers_gpu_forward": 5,
+    "layers_cpu_forward": 0,
+    "layers_gpu_backward": 3,
+    "layers_cpu_backward": 2,
+    "cut_edges_forward": 0,
+    "cut_edges_backward": 1,
+    "cross_phase_edges": 2,
+    "activation_strategy_counts": {
+        "retain": 5,
+        "recompute": 0,
+        "checkpoint": 0
+    }
+}

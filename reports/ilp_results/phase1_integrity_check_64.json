@@ -1,0 +1,37 @@
+{
+    "model": "simple_mlp",
+    "rows": 1,
+    "gpu_budgets_mb": [
+        64.0
+    ],
+    "backend_requested": "auto",
+    "output_csv": "reports/ilp_results/phase1_integrity_check_64.csv",
+    "best_feasible_row": {
+        "model": "simple_mlp",
+        "gpu_budget_mb": 64.0,
+        "cpu_budget_mb": 1e+18,
+        "backend": "pulp_cbc_dual",
+        "ilp_status": "optimal",
+        "ilp_objective": 2.6287884324760737,
+        "ilp_gpu_mem_mb": 58.02734375,
+        "ilp_cpu_mem_mb": 0.00811767578125,
+        "ilp_layers_gpu": 3,
+        "ilp_layers_cpu": 2,
+        "ilp_cut_edges": 1,
+        "all_cpu_status": "feasible",
+        "all_cpu_objective": 38.42543274517063,
+        "all_cpu_gpu_mem_mb": 0.0,
+        "all_cpu_cpu_mem_mb": 0.04718017578125,
+        "all_gpu_status": "infeasible",
+        "all_gpu_objective": Infinity,
+        "all_gpu_gpu_mem_mb": 96.72054036458334,
+        "all_gpu_cpu_mem_mb": 0.0,
+        "greedy_status": "feasible",
+        "greedy_objective": 2.5566424804348635,
+        "greedy_gpu_mem_mb": 38.677083333333336,
+        "greedy_cpu_mem_mb": 0.02374267578125,
+        "greedy_layers_gpu": 2,
+        "greedy_layers_cpu": 3,
+        "greedy_cut_edges": 3
+    }
+}

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -199,7 +199,7 @@ def simulate_plan(
     warnings: List[str] = []
     violations: List[str] = []
 
-    assigned_layers = set(plan.assignment.keys())
+    assigned_layers = set(plan.assignment_forward.keys()) | set(plan.assignment_backward.keys())
     profile_layers = set(prof_map.keys())
 
     missing_profiles = sorted(assigned_layers - profile_layers)
@@ -216,13 +216,13 @@ def simulate_plan(
 
     graph_set = set(graph_edges)
     if cfg.strict_graph_subset:
-        missing_graph = [e for e in plan.cut_edges if e not in graph_set]
+        missing_graph = [e for e in (plan.cut_edges_forward + plan.cut_edges_backward) if e not in graph_set]
         if missing_graph:
             violations.append(
                 f"{len(missing_graph)} cut edges are not present in graph_edges"
             )
 
-    topo_warnings, topo_violations = _validate_topology(set(plan.assignment.keys()), graph_edges)
+    topo_warnings, topo_violations = _validate_topology(assigned_layers, graph_edges)
     warnings.extend(topo_warnings)
     if cfg.strict_topology:
         violations.extend(topo_violations)
@@ -232,17 +232,21 @@ def simulate_plan(
     # Topology and transfer validation on cut edges.
     transfer_missing = 0
     transfer_missing_edges: List[Tuple[str, str]] = []
-    for (u, v) in plan.cut_edges:
-        if u not in plan.assignment or v not in plan.assignment:
-            violations.append(f"Cut edge ({u}, {v}) references unknown layer")
-            continue
-        if plan.assignment[u] == plan.assignment[v]:
-            violations.append(
-                f"Cut edge ({u}, {v}) is not a cut: both endpoints assigned to {plan.assignment[u]}"
-            )
-        if (u, v) not in transfer_costs:
-            transfer_missing += 1
-            transfer_missing_edges.append((u, v))
+    for phase_name, phase_edges, assignment in [
+        ("forward", plan.cut_edges_forward, plan.assignment_forward),
+        ("backward", plan.cut_edges_backward, plan.assignment_backward),
+    ]:
+        for (u, v) in phase_edges:
+            if u not in assignment or v not in assignment:
+                violations.append(f"{phase_name.title()} cut edge ({u}, {v}) references unknown layer")
+                continue
+            if assignment[u] == assignment[v]:
+                violations.append(
+                    f"{phase_name.title()} cut edge ({u}, {v}) is not a cut: both endpoints assigned to {assignment[u]}"
+                )
+            if (u, v) not in transfer_costs:
+                transfer_missing += 1
+                transfer_missing_edges.append((u, v))
 
     if transfer_missing > 0:
         msg = f"Missing transfer costs for {transfer_missing} cut edges; defaulting to 0.0"
@@ -254,35 +258,60 @@ def simulate_plan(
     # Cost aggregation.
     total_time_ms = 0.0
     total_energy_j = 0.0
-    gpu_mem_used_mb = 0.0
-    cpu_mem_used_mb = 0.0
+    gpu_mem_forward_mb = 0.0
+    cpu_mem_forward_mb = 0.0
+    gpu_mem_backward_mb = 0.0
+    cpu_mem_backward_mb = 0.0
 
-    for layer, device in sorted(plan.assignment.items()):
+    for layer, device in sorted(plan.assignment_forward.items()):
         if layer not in prof_map:
             continue
         row = prof_map[layer]
         if device == "GPU":
-            total_time_ms += float(row["gpu_time_ms"])
-            total_energy_j += float(row["gpu_energy_j"])
-            gpu_mem_used_mb += float(row["gpu_mem_mb"])
+            total_time_ms += float(row["gpu_time_ms"]) * 0.5
+            total_energy_j += float(row["gpu_energy_j"]) * 0.5
+            gpu_mem_forward_mb += float(row["gpu_mem_mb"])
         elif device == "CPU":
-            total_time_ms += float(row["cpu_time_ms"])
-            total_energy_j += float(row["cpu_energy_j"])
-            cpu_mem_used_mb += float(row["cpu_mem_mb"])
+            total_time_ms += float(row["cpu_time_ms"]) * 0.5
+            total_energy_j += float(row["cpu_energy_j"]) * 0.5
+            cpu_mem_forward_mb += float(row["cpu_mem_mb"])
         else:
-            violations.append(f"Invalid device '{device}' for layer '{layer}'")
+            violations.append(f"Invalid forward device '{device}' for layer '{layer}'")
+
+    for layer, device in sorted(plan.assignment_backward.items()):
+        if layer not in prof_map:
+            continue
+        row = prof_map[layer]
+        if device == "GPU":
+            total_time_ms += float(row["gpu_time_ms"]) * 0.5
+            total_energy_j += float(row["gpu_energy_j"]) * 0.5
+            gpu_mem_backward_mb += float(row["gpu_mem_mb"])
+        elif device == "CPU":
+            total_time_ms += float(row["cpu_time_ms"]) * 0.5
+            total_energy_j += float(row["cpu_energy_j"]) * 0.5
+            cpu_mem_backward_mb += float(row["cpu_mem_mb"])
+        else:
+            violations.append(f"Invalid backward device '{device}' for layer '{layer}'")
 
     total_transfer_ms = 0.0
-    for edge in plan.cut_edges:
+    for edge in plan.cut_edges_forward:
         total_transfer_ms += float(transfer_costs.get(edge, 0.0))
+    for edge in plan.cut_edges_backward:
+        total_transfer_ms += float(transfer_costs.get(edge, 0.0))
+    for layer, _ in plan.cross_phase_edges:
+        if layer in prof_map:
+            total_transfer_ms += float(prof_map[layer]["gpu_time_ms"]) * 0.15
 
-    if gpu_mem_used_mb > cfg.gpu_mem_budget_mb:
+    gpu_mem_used_mb = max(gpu_mem_forward_mb, gpu_mem_backward_mb)
+    cpu_mem_used_mb = max(cpu_mem_forward_mb, cpu_mem_backward_mb)
+
+    if gpu_mem_forward_mb > cfg.gpu_mem_budget_mb or gpu_mem_backward_mb > cfg.gpu_mem_budget_mb:
         violations.append(
-            f"GPU memory violation: used={gpu_mem_used_mb:.6f} > budget={cfg.gpu_mem_budget_mb:.6f}"
+            f"GPU memory violation: forward={gpu_mem_forward_mb:.6f}, backward={gpu_mem_backward_mb:.6f}, budget={cfg.gpu_mem_budget_mb:.6f}"
         )
-    if cpu_mem_used_mb > cfg.cpu_mem_budget_mb:
+    if cpu_mem_forward_mb > cfg.cpu_mem_budget_mb or cpu_mem_backward_mb > cfg.cpu_mem_budget_mb:
         violations.append(
-            f"CPU memory violation: used={cpu_mem_used_mb:.6f} > budget={cfg.cpu_mem_budget_mb:.6f}"
+            f"CPU memory violation: forward={cpu_mem_forward_mb:.6f}, backward={cpu_mem_backward_mb:.6f}, budget={cfg.cpu_mem_budget_mb:.6f}"
         )
 
     objective = (
@@ -293,8 +322,8 @@ def simulate_plan(
 
     status = "ok" if not violations else "invalid"
 
-    layers_gpu = sum(1 for d in plan.assignment.values() if d == "GPU")
-    layers_cpu = sum(1 for d in plan.assignment.values() if d == "CPU")
+    layers_gpu = sum(1 for d in plan.assignment_forward.values() if d == "GPU")
+    layers_cpu = sum(1 for d in plan.assignment_forward.values() if d == "CPU")
 
     return SimulationResult(
         status=status,
@@ -304,10 +333,109 @@ def simulate_plan(
         total_transfer_ms=float(total_transfer_ms),
         gpu_mem_used_mb=float(gpu_mem_used_mb),
         cpu_mem_used_mb=float(cpu_mem_used_mb),
-        layers_total=len(plan.assignment),
+        layers_total=len(plan.assignment_forward),
         layers_gpu=layers_gpu,
         layers_cpu=layers_cpu,
-        cut_edges_count=len(plan.cut_edges),
+        cut_edges_count=len(plan.cut_edges_forward) + len(plan.cut_edges_backward) + len(plan.cross_phase_edges),
         violations=violations,
         warnings=warnings,
+    )
+
+
+@dataclass
+class SimulationResult4(SimulationResult):
+    """Extended simulation result for Phase 4 with activation strategy costs."""
+
+    activation_strategies: Dict[str, str] = field(default_factory=dict)
+    recompute_layers: List[str] = field(default_factory=list)
+    checkpoint_layers: List[str] = field(default_factory=list)
+    total_recompute_cost_ms: float = 0.0
+    total_checkpoint_cost_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, object]:
+        base_dict = super().to_dict()
+        base_dict.update(
+            {
+                "activation_strategies": self.activation_strategies,
+                "recompute_layers": self.recompute_layers,
+                "checkpoint_layers": self.checkpoint_layers,
+                "total_recompute_cost_ms": self.total_recompute_cost_ms,
+                "total_checkpoint_cost_ms": self.total_checkpoint_cost_ms,
+            }
+        )
+        return base_dict
+
+
+def simulate_plan_phase4(
+    plan: ExecutionPlan,
+    metrics_stats_csv: str | Path,
+    graph_edges: List[Tuple[str, str]],
+    transfer_costs: Dict[Tuple[str, str], float],
+    cfg: SimulationConfig,
+    activation_strategies: Optional[Dict[str, str]] = None,
+    recompute_cost_fraction: float = 0.50,
+    checkpoint_cost_fraction: float = 0.15,
+) -> SimulationResult4:
+    """Simulate a plan under Phase 4 activation persistence strategies."""
+
+    base_result = simulate_plan(plan, metrics_stats_csv, graph_edges, transfer_costs, cfg)
+
+    if activation_strategies is None:
+        activation_strategies = {layer: "retain" for layer in plan.assignment_forward}
+
+    prof = _layer_profiles(metrics_stats_csv, mode=cfg.mode, k_sigma=cfg.k_sigma)
+    prof_map = {str(r["layer"]): r for _, r in prof.iterrows()}
+
+    recompute_layers: List[str] = []
+    checkpoint_layers: List[str] = []
+    total_recompute_cost_ms = 0.0
+    total_checkpoint_cost_ms = 0.0
+    adjusted_time_ms = base_result.total_time_ms
+
+    for layer, strategy in activation_strategies.items():
+        if layer not in plan.assignment_forward or layer not in prof_map:
+            continue
+
+        row = prof_map[layer]
+        device = plan.assignment_forward[layer]
+        forward_time = (
+            float(row["gpu_time_ms"]) if device == "GPU" else float(row["cpu_time_ms"])
+        ) * 0.5
+
+        if strategy == "recompute":
+            recompute_cost = forward_time * recompute_cost_fraction
+            adjusted_time_ms += recompute_cost
+            total_recompute_cost_ms += recompute_cost
+            recompute_layers.append(layer)
+        elif strategy == "checkpoint":
+            checkpoint_cost = forward_time * checkpoint_cost_fraction
+            adjusted_time_ms += checkpoint_cost
+            total_checkpoint_cost_ms += checkpoint_cost
+            checkpoint_layers.append(layer)
+
+    adjusted_objective = (
+        (cfg.w_time * adjusted_time_ms)
+        + (cfg.w_energy * base_result.total_energy_j)
+        + (cfg.w_transfer * base_result.total_transfer_ms)
+    )
+
+    return SimulationResult4(
+        status=base_result.status,
+        objective_value=float(adjusted_objective),
+        total_time_ms=float(adjusted_time_ms),
+        total_energy_j=base_result.total_energy_j,
+        total_transfer_ms=base_result.total_transfer_ms,
+        gpu_mem_used_mb=base_result.gpu_mem_used_mb,
+        cpu_mem_used_mb=base_result.cpu_mem_used_mb,
+        layers_total=base_result.layers_total,
+        layers_gpu=base_result.layers_gpu,
+        layers_cpu=base_result.layers_cpu,
+        cut_edges_count=base_result.cut_edges_count,
+        violations=base_result.violations,
+        warnings=base_result.warnings,
+        activation_strategies=activation_strategies,
+        recompute_layers=recompute_layers,
+        checkpoint_layers=checkpoint_layers,
+        total_recompute_cost_ms=total_recompute_cost_ms,
+        total_checkpoint_cost_ms=total_checkpoint_cost_ms,
     )

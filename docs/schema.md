@@ -20,7 +20,7 @@ Cada capítulo se construye con evidencia tangible del software y cierra los gap
 
 Este capítulo presenta el marco doctoral con la máxima precisión. No se trata solo de motivar el problema, sino de delimitarlo explícitamente: qué implementa la tesis y qué deja para trabajo futuro.
 
-Como resultado del cierre de Fase 0, el alcance queda fijado en su formulacion fuerte: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP y scheduling asincrono para streaming/prefetching.
+Como resultado del cierre de Fase 0 y su materializacion tecnica en Fase 4, el alcance queda fijado en su formulacion fuerte: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP y ejecucion asincrona CPU-GPU en runtime con soporte de prefetching explicito.
 
 **Secciones**:
 
@@ -45,13 +45,13 @@ Como resultado del cierre de Fase 0, el alcance queda fijado en su formulacion f
 - **Específicos**:
   - Implementar asignación independiente para forward y backward en el ILP y en el runtime
   - Modelar persistencia de activaciones como decisión binaria
-  - Implementar scheduling asíncrono para streaming/prefetching
+  - Implementar transferencia asíncrona CPU↔GPU mediante CUDA streams en el runtime híbrido
   - Validar comparativamente contra baselines y verificar exactitud final
 
 1.6 Alcance decisional fijado (resultado de Fase 0)
 - Asignación forward/backward separada como compromiso obligatorio del modelo
 - Persistencia de activaciones como variable binaria ILP obligatoria
-- Streaming/prefetching implementados mediante scheduling asíncrono en runtime
+- Transferencia asíncrona de tensores CPU↔GPU mediante CUDA streams en el runtime de ejecución híbrida (Fase 3/4), junto con prefetching explícito look-ahead en la ruta de ejecución operacional.
 
 1.7 Metodología general y validación
 - Pipeline experimental: profiling → agregación → ILP → simulación → ejecución → medición

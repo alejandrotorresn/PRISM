@@ -54,6 +54,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--strict_plan", action="store_true")
+    parser.add_argument("--enable_async_transfer", action="store_true")
+    parser.add_argument("--enable_prefetch", action="store_true")
     parser.add_argument("--rapl", action="store_true", help="Enable RAPL CPU energy monitor when applicable")
     parser.add_argument("--energy_sample_interval", type=float, default=0.05)
     parser.add_argument(
@@ -98,12 +100,15 @@ def main() -> int:
         model=model,
         input_data=inp,
         plan=device_plan,
+        activation_strategies=device_plan.activation_strategies,
         steps=args.steps,
         lr=args.lr,
         gpu_id=args.gpu_id,
         strict_plan=args.strict_plan,
         enable_rapl=args.rapl,
         energy_sample_interval=args.energy_sample_interval,
+        enable_async_transfer=args.enable_async_transfer,
+        enable_prefetch=args.enable_prefetch,
     )
 
     out_dir = Path(args.output_dir) if args.output_dir else (solution_dir / "hybrid_execution")
@@ -126,6 +131,8 @@ def main() -> int:
                     "strict_plan": args.strict_plan,
                     "rapl": args.rapl,
                     "energy_sample_interval": args.energy_sample_interval,
+                    "enable_async_transfer": args.enable_async_transfer,
+                    "enable_prefetch": args.enable_prefetch,
                 },
             },
             f,

@@ -19,7 +19,8 @@ if SRC_DIR not in sys.path:
 load_ilp_inputs = importlib.import_module("ilp.data_loader").load_ilp_inputs
 merge_ilp_inputs_multi_hardware = importlib.import_module("ilp.data_loader").merge_ilp_inputs_multi_hardware
 ILPConfig = importlib.import_module("ilp.model_builder").ILPConfig
-build_problem_data = importlib.import_module("ilp.model_builder").build_problem_data
+ILPProblemData = importlib.import_module("ilp.model_builder").ILPProblemData
+build_problem_data_dual = importlib.import_module("ilp.model_builder").build_problem_data_dual
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
 
 
@@ -45,6 +46,34 @@ def _default_paths(config_dir: Path, model_name: str):
     return stats, graph_edges, transfer_edges
 
 
+def _build_effective_from_dual(data, cfg) -> Any:
+    """Build baselines with the same dual objective used by solve_partition_ilp.
+
+    The ILP solver accounts for forward and backward costs independently
+    (build_problem_data_dual). This helper collapses them into per-node
+    effective costs (fwd + bwd) so that greedy / all-cpu / all-gpu baselines
+    are evaluated in the same objective space, enabling apples-to-apples
+    comparison in Phase 1 Pareto reports.
+    """
+    dual = build_problem_data_dual(data, cfg)
+    return ILPProblemData(
+        objective_node_gpu={
+            n: dual.objective_fwd_gpu[n] + dual.objective_bwd_gpu[n]
+            for n in data.nodes
+        },
+        objective_node_cpu={
+            n: dual.objective_fwd_cpu[n] + dual.objective_bwd_cpu[n]
+            for n in data.nodes
+        },
+        objective_edge_cut={
+            e: dual.objective_edge_cut_forward[e] + dual.objective_edge_cut_backward[e]
+            for e in data.edges
+        },
+        gpu_mem=dual.gpu_mem,
+        cpu_mem=dual.cpu_mem,
+    )
+
+
 def _parse_budget_list(text: str) -> List[float]:
     vals = []
     for chunk in text.split(","):
@@ -58,7 +87,7 @@ def _parse_budget_list(text: str) -> List[float]:
 
 
 def _eval_fixed_policy(policy: str, data, cfg: Any) -> Dict[str, float | str | int]:
-    problem = build_problem_data(data, cfg)
+    problem = _build_effective_from_dual(data, cfg)
 
     if policy == "all_gpu":
         bits = {n: 1 for n in data.nodes}
@@ -90,7 +119,7 @@ def _eval_fixed_policy(policy: str, data, cfg: Any) -> Dict[str, float | str | i
 
 
 def _eval_bits_policy(bits: Dict[str, int], data, cfg: Any) -> Dict[str, float | str | int]:
-    problem = build_problem_data(data, cfg)
+    problem = _build_effective_from_dual(data, cfg)
 
     gpu_mem = sum(problem.gpu_mem[n] for n in data.nodes if bits[n] == 1)
     cpu_mem = sum(problem.cpu_mem[n] for n in data.nodes if bits[n] == 0)
@@ -119,7 +148,7 @@ def _eval_bits_policy(bits: Dict[str, int], data, cfg: Any) -> Dict[str, float |
 
 
 def _greedy_bits(data, cfg: Any) -> Dict[str, int] | None:
-    problem = build_problem_data(data, cfg)
+    problem = _build_effective_from_dual(data, cfg)
 
     # Start from per-layer local best (ignores graph cuts by design).
     bits = {

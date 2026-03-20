@@ -1,0 +1,15 @@
+\begin{table}[t]
+\centering
+\caption{ILP Pareto sweep with baseline comparison across GPU memory budgets.}
+\label{tab:ilp-budget-sweep}
+\begin{tabular}{lllllllllllr}
+\toprule
+Model & GPU Budget (MB) & ILP Status & ILP Obj & Greedy Obj & All-CPU Obj & All-GPU Status & Improve vs CPU (\%) & Improve vs Greedy (\%) & ILP GPU Mem (MB) & ILP CPU Mem (MB) & Cut Edges \\
+\midrule
+simple_mlp & 500 & optimal & 2.629 & 2.557 & 38.425 & feasible & 93.16 & -2.82 & 58.03 & 0.01 & 1 \\
+simple_mlp & 1000 & optimal & 2.629 & 2.557 & 38.425 & feasible & 93.16 & -2.82 & 58.03 & 0.01 & 1 \\
+simple_mlp & 2000 & optimal & 2.629 & 2.557 & 38.425 & feasible & 93.16 & -2.82 & 58.03 & 0.01 & 1 \\
+\bottomrule
+\end{tabular}
+
+\end{table}

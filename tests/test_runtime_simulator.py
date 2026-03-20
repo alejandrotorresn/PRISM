@@ -59,8 +59,11 @@ def test_simulate_plan_flags_non_cut_edge(tmp_path: Path) -> None:
     _write_metrics(metrics_csv)
 
     plan = ExecutionPlan(
-        assignment={"a": "GPU", "b": "GPU"},
-        cut_edges=[("a", "b")],
+        assignment_forward={"a": "GPU", "b": "GPU"},
+        assignment_backward={"a": "GPU", "b": "GPU"},
+        cut_edges_forward=[("a", "b")],
+        cut_edges_backward=[],
+        cross_phase_edges=[],
     )
 
     cfg = SimulationConfig(mode="nominal", w_time=1.0, w_energy=0.0, w_transfer=1.0)
@@ -81,8 +84,11 @@ def test_simulate_plan_nominal_computes_objective(tmp_path: Path) -> None:
     _write_metrics(metrics_csv)
 
     plan = ExecutionPlan(
-        assignment={"a": "GPU", "b": "CPU"},
-        cut_edges=[("a", "b")],
+        assignment_forward={"a": "GPU", "b": "CPU"},
+        assignment_backward={"a": "GPU", "b": "CPU"},
+        cut_edges_forward=[("a", "b")],
+        cut_edges_backward=[],
+        cross_phase_edges=[],
     )
 
     cfg = SimulationConfig(
@@ -102,8 +108,8 @@ def test_simulate_plan_nominal_computes_objective(tmp_path: Path) -> None:
         cfg=cfg,
     )
 
-    # Time = a on GPU (2.0) + b on CPU (5.0) = 7.0
-    # Transfer = 0.4 ; objective = 7.4
+    # Forward+backward time = a on GPU (1.0+1.0) + b on CPU (2.5+2.5) = 7.0
+    # Transfer only in forward = 0.4 ; objective = 7.4
     assert result.status == "ok"
     assert abs(result.total_time_ms - 7.0) < 1e-9
     assert abs(result.total_transfer_ms - 0.4) < 1e-9
@@ -115,8 +121,11 @@ def test_simulate_plan_strict_topology_flags_cycle(tmp_path: Path) -> None:
     _write_metrics(metrics_csv)
 
     plan = ExecutionPlan(
-        assignment={"a": "GPU", "b": "CPU"},
-        cut_edges=[("a", "b")],
+        assignment_forward={"a": "GPU", "b": "CPU"},
+        assignment_backward={"a": "CPU", "b": "CPU"},
+        cut_edges_forward=[("a", "b")],
+        cut_edges_backward=[],
+        cross_phase_edges=[("a", "a")],
     )
 
     cfg = SimulationConfig(
@@ -134,3 +143,28 @@ def test_simulate_plan_strict_topology_flags_cycle(tmp_path: Path) -> None:
 
     assert result.status == "invalid"
     assert any("not a DAG" in msg for msg in result.violations)
+
+
+def test_load_execution_plan_supports_dual_assignment_columns(tmp_path: Path) -> None:
+    assignment = tmp_path / "ilp_assignment.csv"
+    cut_edges = tmp_path / "ilp_cut_edges.csv"
+
+    pd.DataFrame(
+        [
+            {"layer": "a", "device_forward": "GPU", "device_backward": "CPU"},
+            {"layer": "b", "device_forward": "CPU", "device_backward": "CPU"},
+        ]
+    ).to_csv(assignment, index=False)
+    pd.DataFrame(
+        [
+            {"src_layer": "a", "dst_layer": "b", "phase": "forward"},
+            {"src_layer": "a", "dst_layer": "a", "phase": "cross_phase"},
+        ]
+    ).to_csv(cut_edges, index=False)
+
+    plan = load_execution_plan(assignment_csv=assignment, cut_edges_csv=cut_edges)
+
+    assert plan.assignment_forward["a"] == "GPU"
+    assert plan.assignment_backward["a"] == "CPU"
+    assert plan.cut_edges_forward == [("a", "b")]
+    assert plan.cross_phase_edges == [("a", "a")]

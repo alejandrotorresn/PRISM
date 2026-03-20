@@ -31,6 +31,13 @@ Quinto, la secuencia de fases debe preservar valor incluso si el proyecto se det
 | Fase 4 | Extender el modelo con memoria de activaciones | Tesis alineada con rematerializacion y persistencia |
 | Fase 5 | Validacion doctoral completa | Resultados finales, analisis y capitulos cerrados |
 
+### 3.1 Veredicto por fases (actualizado a 2026-03-20)
+
+- **Fase 1**: funcional, pero con riesgo metodologico en comparabilidad ILP vs greedy (corregido en `validation/sweep_ilp_pareto.py` al evaluar baselines en el mismo espacio objetivo dual).
+- **Fase 2**: funcional y validada.
+- **Fase 3**: funcional y validada.
+- **Fase 4**: totalmente funcional (dual + activaciones + async transfer + prefetching explicito en runtime), con cierre operacional validado por pruebas y ejecucion fisica.
+
 ## 4. Fase 0: congelacion de alcance y contrato cientifico
 
 ### 4.1 Objetivo
@@ -41,7 +48,7 @@ Resolver las ambiguedades de diseno que hoy impiden avanzar sin riesgo de rehace
 
 1. Formalizar la semantica final del ILP con asignacion independiente por fase (forward y backward).
 2. Formalizar persistencia de activaciones, rematerializacion y checkpointing como variables explicitas del modelo.
-3. Formalizar streaming y prefetching como capacidades a implementar en runtime mediante scheduling asincrono.
+3. Formalizar transferencia asincrona CPU-GPU en runtime e incorporar prefetching explicito como politica operativa auditable en ejecucion hibrida.
 4. Actualizar la documentacion metodologica para que no existan afirmaciones incompatibles con estas decisiones.
 
 ### 4.3 Archivos afectados
@@ -68,7 +75,7 @@ La Fase 0 queda formalmente cerrada con las siguientes decisiones vinculantes pa
 
 1. La asignacion de dispositivo se define de forma independiente para forward y backward.
 2. La persistencia de activaciones se modela como decision binaria explicita del ILP.
-3. El soporte de streaming/prefetching se implementa en runtime mediante scheduling asincrono.
+3. El runtime implementa transferencia asincrona CPU-GPU mediante `torch.cuda.Stream` y prefetching explicito de activaciones con look-ahead entre capas en ejecucion hibrida.
 
 Estas decisiones dejan sin validez cualquier redaccion alternativa basada en bifurcacion de alcance. Desde esta fecha, las Fases 1-5 se ejecutan sobre la ruta unica completa y toda evidencia experimental debe reportarse bajo ese contrato metodologico.
 
@@ -223,7 +230,7 @@ Para preservar rigor metodologico, el CLI aborta por defecto si el plan requiere
 
 ### 8.1 Objetivo
 
-Incorporar al modelo y al runtime las capacidades descritas en la tesis y ya fijadas en Fase 0: persistencia de activaciones, rematerializacion, checkpointing y variantes de streaming/prefetching con scheduling asincrono.
+Incorporar al modelo y al runtime las capacidades descritas en la tesis y ya fijadas en Fase 0: persistencia de activaciones, rematerializacion, checkpointing y transferencia asincrona CPU-GPU con trazabilidad operacional.
 
 ### 8.2 Dependencia critica
 
@@ -256,6 +263,26 @@ Esta fase solo debe arrancar despues de que el simulador y el runtime MVP exista
 - Las nuevas variables tienen semantica operacional clara y validacion estructural.
 - El simulador y el runtime pueden consumir al menos una parte de la extension.
 - La tesis puede afirmar con evidencia que la persistencia de activaciones no es solo una idea, sino una decision modelada y contrastada.
+
+## 8.7 Avance operativo de Fase 4 (2026-03-20)
+
+Esta seccion documenta un corte intermedio de la misma fecha (previo al acta formal de cierre incluida en la seccion 8.8). En ese corte, la Fase 4 ya no debe describirse como trabajo puramente prospectivo: se incorporo un tramo operativo verificable que extiende de forma coordinada el ILP, el simulador y el runtime.
+
+En la capa de modelado se introdujo `src/ilp/advanced_terms.py`, junto con extensiones en `src/ilp/model_builder.py`, `src/ilp/data_loader.py` y `src/ilp/solve.py`, para representar estrategias de persistencia de activaciones bajo tres semanticas diferenciadas: retencion, recomputacion y checkpointing. Sobre esa base se habilito una solucion extendida de Fase 4 con heuristica inicial para decidir recomputacion bajo presion de memoria. Adicionalmente, el ILP ya soporta asignacion independiente de dispositivo para forward y backward, con exportacion de planes duales y costos de transferencia intra-fase y entre fases.
+
+En la capa de simulacion, `src/runtime/simulator.py` ya consume tanto estrategias de activacion como asignaciones independientes de forward y backward, estimando el costo temporal y de transferencia de cortes en forward, cortes en backward y cruces entre fases. En la capa de ejecucion real, `src/runtime/hybrid_executor.py` soporta tres mecanismos operativos auditables: recomputacion por capa mediante `torch.utils.checkpoint`, checkpointing en memoria CPU de tensores guardados para backward mediante hooks de autograd y, cuando el plan dual realmente asigna dispositivos distintos y el entorno lo permite, una ruta de backward materializada en dispositivo distinto a forward mediante recomputacion autograd controlada por capa. Esta ampliacion conserva la trazabilidad previa de tiempo, memoria, energia y transferencias, y agrega contadores explicitos por paso para recomputacion, checkpointing y relocation de backward.
+
+La verificacion automatizada ya acredita consistencia funcional del avance. La suite conjunta de runtime y Fase 4 ejecuta satisfactoriamente pruebas unitarias e integradas sobre estrategias de activacion sinteticas y sobre la compatibilidad con el ejecutor hibrido existente. Ademas, un smoke end-to-end sobre `data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8` confirma que el solver dual (`pulp_cbc_dual`) exporta un plan consumible por `validation/validate_ilp_pipeline.py` y por `validation/run_hybrid_execution.py`, con objetivo reproducido de 2.031104 en simulacion y ejecucion fisica observada valida sobre hardware CPU-GPU. Debe advertirse, no obstante, que ese plan smoke concreto no activa relocation efectiva de backward porque su optimo asigna las mismas capas al mismo dispositivo en ambas fases; la evidencia de materializacion dual del runtime queda por ahora acreditada por pruebas controladas y por la capacidad implementada, no por ese caso smoke particular.
+
+No obstante, este corte intermedio no constituye acta de cierre por si mismo. Los pendientes consignados aqui quedaron resueltos posteriormente dentro de la misma fecha y su formalizacion final se registra en la seccion 8.8.
+
+## 8.8 Acta de cierre de Fase 4 (2026-03-20)
+
+La Fase 4 queda formalmente cerrada al haberse satisfecho sus criterios de aceptacion con evidencia operacional y documental suficiente. El cierre se sustenta en tres bloques ya convergentes. Primero, el modelo extendido incorpora semantica explicita de persistencia de activaciones mediante retencion, recomputacion y checkpointing, junto con asignacion independiente de dispositivo para forward y backward, todo ello implementado en `src/ilp/advanced_terms.py`, `src/ilp/data_loader.py`, `src/ilp/model_builder.py` y `src/ilp/solve.py`. Segundo, el simulador y el runtime consumen esa ampliacion sin degradar el contrato previo de auditabilidad, trazando memoria, tiempo, energia, transferencias y ahora tambien recomputacion, checkpointing, prefetching y relocation de backward. Tercero, la cobertura automatizada ya valida consistencia funcional del modelo extendido mediante pruebas unitarias e integradas en `tests/test_phase4_activation.py`, `tests/test_phase4_synthetic.py`, `tests/test_phase4_comparison.py`, `tests/test_runtime_simulator.py` y `tests/test_hybrid_executor.py`.
+
+La evidencia empirica de cierre no descansa unicamente en pruebas sinteticas. Sobre el dataset real `data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8` se construyo y ejecuto un caso dual controlado versionado en `reports/ilp_results_phase4_controlled/simple_mlp_dual_runtime_evidence`. Dicho artefacto fija una colocacion no trivial donde `net.0` se ejecuta en GPU durante forward y en CPU durante backward, preservando el resto del modelo en CPU. El simulador valida topologia y costos del plan sin violaciones, con objetivo robusto de 19.884783, tiempo total estimado de 19.547401 ms, energia estimada de 0.145244 J y dos cortes contabilizados al considerar el cruce forward y el cruce entre fases. La ejecucion fisica mediante `validation/run_hybrid_execution.py` completa correctamente el paso de entrenamiento sobre hardware CPU-GPU y registra en sus artefactos observados `backward_relocation_layers = ["net.0"]` y `backward_relocation_count = 1`, lo que acredita materializacion efectiva de la asignacion dual en runtime sobre un caso real y no meramente simulado. Adicionalmente, en corrida con `--enable_async_transfer --enable_prefetch` sobre ese mismo plan dual se verifica activacion operacional de prefetch (`total_prefetch_events = 1`, `total_prefetch_mb = 0.015625`, `prefetch_layers = ["net.1"]`) en `/tmp/phase4_full_hybrid_prefetch_dual/hybrid_execution_summary.json`.
+
+En consecuencia, la tesis ya puede afirmar con evidencia que la persistencia de activaciones y la separacion forward/backward no son una extension prospectiva, sino una capacidad implementada, simulable, ejecutable y auditable en el pipeline actual. Las comparaciones experimentales mas amplias frente a configuraciones base y la explotacion masiva de la matriz final dejan de ser condicion de cierre de Fase 4 y pasan a integrarse en la Fase 5 como trabajo de validacion doctoral integral y consolidacion monografica.
 
 ## 9. Fase 5: validacion doctoral integral y cierre de monografia
 

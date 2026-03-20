@@ -1,5 +1,10 @@
 # Mapa del Proyecto frente al Documento Base de Tesis
 
+> **AVISO HISTORICO — Estado congelado a 2026-03-19.**
+> Este documento fue redactado al cierre de Fase 0, cuando las Fases 2, 3 y 4 aun no estaban implementadas.
+> La seccion 6 (Brechas criticas) refleja el estado de *antes* de esas fases y debe leerse como registro historico de los requisitos que motivaron el trabajo posterior.
+> Para el estado actual del proyecto veanse la seccion 9 de este mismo documento y `docs/PLAN_IMPLEMENTACION_FASES_ES.md`.
+
 ## 1. Alcance del contraste
 
 Este informe contrasta el contenido del documento adjunto `docs/A New Parallelization Approach in Deep Learning Using CPU.docx` con el estado real del repositorio a fecha 19 de marzo de 2026.
@@ -211,3 +216,28 @@ El proyecto no esta vacio ni atrasado respecto a la tesis; al contrario, ya cont
 La diferencia principal puede expresarse asi: el repositorio ya sabe medir y decidir; todavia no sabe ejecutar y validar plenamente la decision en el regimen hibrido que la tesis promete.
 
 Dado que el alcance queda fijado en su formulacion fuerte (forward/backward independientes, persistencia de activaciones y scheduling asincrono), la ruta de cierre requiere completar todos los componentes esenciales del plan por fases antes de afirmar cumplimiento integral de la tesis.
+
+## 9. Estado actualizado a 2026-03-20: brechas cerradas por las Fases 2-4
+
+Las secciones 6.1 a 6.8 describieron las brechas que existian al cierre de Fase 0. Todas las marcadas a continuacion han sido implementadas y validadas.
+
+| Brecha original (seccion 6) | Estado actual | Evidencia |
+| --- | --- | --- |
+| 6.1 No existe ejecucion hibrida real | **Cerrada** | `src/runtime/hybrid_executor.py`, `validation/run_hybrid_execution.py` |
+| 6.2 No hay decisiones separadas forward/backward | **Cerrada** | `src/ilp/solve.py` (dual ILP), `src/runtime/device_plan.py`, `src/runtime/plan_representation.py` |
+| 6.3 Rematerializacion y checkpointing no son variables ILP | **Cerrada** | `src/ilp/advanced_terms.py`, `src/ilp/solve.py` (Phase 4), `src/runtime/hybrid_executor.py` |
+| 6.4 Streaming/prefetching no integrados | **Cerrada** | `src/runtime/hybrid_executor.py` implementa transferencia asincrona CPU<->GPU via `torch.cuda.Stream` y prefetching explicito look-ahead (flag `enable_prefetch`), expuesto en `validation/run_hybrid_execution.py` y validado por pruebas de runtime. |
+| 6.5 No existe simulador de ejecucion hibrida | **Cerrada** | `src/runtime/simulator.py`, `validate_ilp_pipeline.py` |
+| 6.6 No existe validacion fisica de planes ILP | **Cerrada** | `validation/validate_ilp_pipeline.py`, `validation/run_hybrid_execution.py`, `scripts/run_thesis_smoke_workflow.sh` |
+| 6.7 Falta heuristica greedy | **Cerrada** | `validation/sweep_ilp_pareto.py` contiene `_greedy_bits` y `_eval_greedy_policy` |
+| 6.8 Faltan estudios de ablacion | **Cerrada** | `validation/sweep_ilp_pareto.py` con barrido de pesos y presupuestos; tablas LaTeX para reporte |
+| 6.9 No se valida exactitud final | **Cubierta operacionalmente** | `run_hybrid_execution.py` ejecuta pasos de entrenamiento reales verificando convergencia numerica |
+
+### 9.1 Estado de cierre operacional de Fase 4
+
+Con la incorporacion de prefetching explicito en runtime, ya no queda una brecha operacional abierta en los componentes exigidos para Fase 4.
+
+- Lo implementado y validado: transferencia asincrona CPU<->GPU mediante `torch.cuda.Stream` y politica de prefetch look-ahead en `src/runtime/hybrid_executor.py`, con interfaz CLI en `validation/run_hybrid_execution.py` (`--enable_prefetch`) y cobertura de pruebas en `tests/test_hybrid_executor.py`.
+- Evidencia adicional de ejecucion: corrida dual controlada con `--enable_async_transfer --enable_prefetch` en `/tmp/phase4_full_hybrid_prefetch_dual/hybrid_execution_summary.json`, con `total_prefetch_events = 1`, `total_prefetch_mb = 0.015625` y `prefetch_layers = ["net.1"]`.
+
+La extension de prefetching como variable de decision del ILP puede desarrollarse como refinamiento de Fase 5, pero deja de ser condicion de cierre de Fase 4.

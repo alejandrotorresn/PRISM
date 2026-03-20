@@ -17,12 +17,63 @@ class ILPInputData:
     nodes: List[str]
     node_cost_gpu_ms: Dict[str, float]
     node_cost_cpu_ms: Dict[str, float]
-    node_energy_gpu_j: Dict[str, float]
-    node_energy_cpu_j: Dict[str, float]
-    node_mem_gpu_mb: Dict[str, float]
-    node_mem_cpu_mb: Dict[str, float]
-    edges: List[Tuple[str, str]]
-    edge_transfer_ms: Dict[Tuple[str, str], float]
+    node_cost_gpu_fwd_ms: Dict[str, float] = None
+    node_cost_gpu_bwd_ms: Dict[str, float] = None
+    node_cost_cpu_fwd_ms: Dict[str, float] = None
+    node_cost_cpu_bwd_ms: Dict[str, float] = None
+    node_energy_gpu_j: Dict[str, float] = None
+    node_energy_cpu_j: Dict[str, float] = None
+    node_energy_gpu_fwd_j: Dict[str, float] = None
+    node_energy_gpu_bwd_j: Dict[str, float] = None
+    node_energy_cpu_fwd_j: Dict[str, float] = None
+    node_energy_cpu_bwd_j: Dict[str, float] = None
+    node_mem_gpu_mb: Dict[str, float] = None
+    node_mem_cpu_mb: Dict[str, float] = None
+    edges: List[Tuple[str, str]] = None
+    edge_transfer_ms: Dict[Tuple[str, str], float] = None
+    # Fase 4: activation persistence metadata
+    node_mem_activation_mb: Dict[str, float] = None
+    node_time_io_ms: Dict[str, float] = None
+    node_energy_io_j: Dict[str, float] = None
+
+    def __post_init__(self):
+        if self.node_cost_gpu_fwd_ms is None:
+            self.node_cost_gpu_fwd_ms = {n: self.node_cost_gpu_ms.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_cost_gpu_bwd_ms is None:
+            self.node_cost_gpu_bwd_ms = {n: self.node_cost_gpu_ms.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_cost_cpu_fwd_ms is None:
+            self.node_cost_cpu_fwd_ms = {n: self.node_cost_cpu_ms.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_cost_cpu_bwd_ms is None:
+            self.node_cost_cpu_bwd_ms = {n: self.node_cost_cpu_ms.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_energy_gpu_j is None:
+            self.node_energy_gpu_j = {
+                n: self.node_cost_gpu_fwd_ms.get(n, 0.0) + self.node_cost_gpu_bwd_ms.get(n, 0.0)
+                for n in self.nodes
+            }
+        if self.node_energy_cpu_j is None:
+            self.node_energy_cpu_j = {
+                n: self.node_cost_cpu_fwd_ms.get(n, 0.0) + self.node_cost_cpu_bwd_ms.get(n, 0.0)
+                for n in self.nodes
+            }
+        if self.node_energy_gpu_fwd_j is None:
+            self.node_energy_gpu_fwd_j = {n: self.node_energy_gpu_j.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_energy_gpu_bwd_j is None:
+            self.node_energy_gpu_bwd_j = {n: self.node_energy_gpu_j.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_energy_cpu_fwd_j is None:
+            self.node_energy_cpu_fwd_j = {n: self.node_energy_cpu_j.get(n, 0.0) * 0.5 for n in self.nodes}
+        if self.node_energy_cpu_bwd_j is None:
+            self.node_energy_cpu_bwd_j = {n: self.node_energy_cpu_j.get(n, 0.0) * 0.5 for n in self.nodes}
+        # Initialize Fase 4 fields with defaults if not provided
+        if self.node_mem_activation_mb is None:
+            self.node_mem_activation_mb = {
+                n: self.node_mem_gpu_mb.get(n, 0.0) * 0.70 for n in self.nodes
+            }
+        if self.node_time_io_ms is None:
+            self.node_time_io_ms = {
+                n: self.node_cost_gpu_fwd_ms.get(n, 0.0) * 0.15 for n in self.nodes
+            }
+        if self.node_energy_io_j is None:
+            self.node_energy_io_j = {n: 0.05 for n in self.nodes}
 
 
 def _weighted_mean(values: List[float], weights: Optional[List[float]] = None) -> float:
@@ -198,6 +249,38 @@ def load_ilp_inputs(
     node_cost_cpu_ms = {row["layer"]: _safe_num(row["cpu_time_robust_ms"]) for _, row in stats.iterrows()}
     node_energy_gpu_j = {row["layer"]: _safe_num(row["gpu_energy_robust_j"]) for _, row in stats.iterrows()}
     node_energy_cpu_j = {row["layer"]: _safe_num(row["cpu_energy_robust_j"]) for _, row in stats.iterrows()}
+    node_cost_gpu_fwd_ms = {
+        row["layer"]: _safe_num(row.get("gpu_fwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_fwd_time_ms_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_cost_gpu_bwd_ms = {
+        row["layer"]: _safe_num(row.get("gpu_bwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_bwd_time_ms_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_cost_cpu_fwd_ms = {
+        row["layer"]: _safe_num(row.get("cpu_fwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_fwd_time_ms_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_cost_cpu_bwd_ms = {
+        row["layer"]: _safe_num(row.get("cpu_bwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_bwd_time_ms_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_energy_gpu_fwd_j = {
+        row["layer"]: _safe_num(row.get("gpu_fwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_fwd_energy_j_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_energy_gpu_bwd_j = {
+        row["layer"]: _safe_num(row.get("gpu_bwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_bwd_energy_j_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_energy_cpu_fwd_j = {
+        row["layer"]: _safe_num(row.get("cpu_fwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_fwd_energy_j_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
+    node_energy_cpu_bwd_j = {
+        row["layer"]: _safe_num(row.get("cpu_bwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_bwd_energy_j_std", 0.0)))
+        for _, row in stats.iterrows()
+    }
     node_mem_gpu_mb = {row["layer"]: _safe_num(row.get("gpu_mem_peak_mb_mean", 0.0)) for _, row in stats.iterrows()}
     node_mem_cpu_mb = {row["layer"]: _safe_num(row.get("cpu_mem_mb_mean", 0.0)) for _, row in stats.iterrows()}
 
@@ -266,8 +349,16 @@ def load_ilp_inputs(
         nodes=nodes,
         node_cost_gpu_ms=node_cost_gpu_ms,
         node_cost_cpu_ms=node_cost_cpu_ms,
+        node_cost_gpu_fwd_ms=node_cost_gpu_fwd_ms,
+        node_cost_gpu_bwd_ms=node_cost_gpu_bwd_ms,
+        node_cost_cpu_fwd_ms=node_cost_cpu_fwd_ms,
+        node_cost_cpu_bwd_ms=node_cost_cpu_bwd_ms,
         node_energy_gpu_j=node_energy_gpu_j,
         node_energy_cpu_j=node_energy_cpu_j,
+        node_energy_gpu_fwd_j=node_energy_gpu_fwd_j,
+        node_energy_gpu_bwd_j=node_energy_gpu_bwd_j,
+        node_energy_cpu_fwd_j=node_energy_cpu_fwd_j,
+        node_energy_cpu_bwd_j=node_energy_cpu_bwd_j,
         node_mem_gpu_mb=node_mem_gpu_mb,
         node_mem_cpu_mb=node_mem_cpu_mb,
         edges=edges,
@@ -321,8 +412,16 @@ def merge_ilp_inputs_multi_hardware(
         nodes=nodes,
         node_cost_gpu_ms=agg_node(lambda p, n: p.node_cost_gpu_ms[n]),
         node_cost_cpu_ms=agg_node(lambda p, n: p.node_cost_cpu_ms[n]),
+        node_cost_gpu_fwd_ms=agg_node(lambda p, n: p.node_cost_gpu_fwd_ms[n]),
+        node_cost_gpu_bwd_ms=agg_node(lambda p, n: p.node_cost_gpu_bwd_ms[n]),
+        node_cost_cpu_fwd_ms=agg_node(lambda p, n: p.node_cost_cpu_fwd_ms[n]),
+        node_cost_cpu_bwd_ms=agg_node(lambda p, n: p.node_cost_cpu_bwd_ms[n]),
         node_energy_gpu_j=agg_node(lambda p, n: p.node_energy_gpu_j[n]),
         node_energy_cpu_j=agg_node(lambda p, n: p.node_energy_cpu_j[n]),
+        node_energy_gpu_fwd_j=agg_node(lambda p, n: p.node_energy_gpu_fwd_j[n]),
+        node_energy_gpu_bwd_j=agg_node(lambda p, n: p.node_energy_gpu_bwd_j[n]),
+        node_energy_cpu_fwd_j=agg_node(lambda p, n: p.node_energy_cpu_fwd_j[n]),
+        node_energy_cpu_bwd_j=agg_node(lambda p, n: p.node_energy_cpu_bwd_j[n]),
         node_mem_gpu_mb=agg_node(lambda p, n: p.node_mem_gpu_mb[n]),
         node_mem_cpu_mb=agg_node(lambda p, n: p.node_mem_cpu_mb[n]),
         edges=edges,

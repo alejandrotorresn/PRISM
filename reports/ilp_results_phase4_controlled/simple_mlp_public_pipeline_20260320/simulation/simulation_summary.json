@@ -1,0 +1,50 @@
+{
+    "status": "ok",
+    "objective_value": 2.1063087108960947,
+    "total_time_ms": 1.8032720461540086,
+    "total_energy_j": 0.6197241510305952,
+    "total_transfer_ms": 0.30303666474208607,
+    "gpu_mem_used_mb": 96.72216796875,
+    "cpu_mem_used_mb": 0.00811767578125,
+    "layers_total": 5,
+    "layers_gpu": 5,
+    "layers_cpu": 0,
+    "cut_edges_count": 3,
+    "violations": [],
+    "warnings": [
+        "1 assigned layers are isolated in graph topology"
+    ],
+    "activation_strategies": {
+        "net.0": "retain",
+        "net.1": "retain",
+        "net.2": "retain",
+        "net.3": "retain",
+        "net.4": "retain"
+    },
+    "recompute_layers": [],
+    "checkpoint_layers": [],
+    "total_recompute_cost_ms": 0.0,
+    "total_checkpoint_cost_ms": 0.0,
+    "inputs": {
+        "config_dir": "data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8",
+        "solution_dir": "reports/ilp_results_phase4_controlled/simple_mlp_public_pipeline_20260320",
+        "assignment_csv": "reports/ilp_results_phase4_controlled/simple_mlp_public_pipeline_20260320/ilp_assignment.csv",
+        "cut_edges_csv": "reports/ilp_results_phase4_controlled/simple_mlp_public_pipeline_20260320/ilp_cut_edges.csv",
+        "ilp_summary_json": "reports/ilp_results_phase4_controlled/simple_mlp_public_pipeline_20260320/ilp_solution_summary.json",
+        "metrics_stats_csv": "data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8/simple_mlp_metrics_stats.csv",
+        "graph_edges_csv": "data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8/run_001/simple_mlp_graph_edges.csv",
+        "transfer_edges_csv": "data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8/run_001/simple_mlp_transfer_edges.csv"
+    },
+    "config": {
+        "mode": "robust",
+        "k_sigma": 1.0,
+        "w_time": 1.0,
+        "w_energy": 0.0,
+        "w_transfer": 1.0,
+        "gpu_mem_budget_mb": 1e+18,
+        "cpu_mem_budget_mb": 1e+18,
+        "strict_graph_subset": false,
+        "strict_transfer_mapping": false,
+        "strict_topology": false
+    }
+}

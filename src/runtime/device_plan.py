@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 import torch
@@ -11,15 +11,35 @@ from .plan_representation import ExecutionPlan
 
 @dataclass
 class DevicePlan:
-    assignment: Dict[str, str]
-    cut_edges: List[Tuple[str, str]]
+    assignment_forward: Dict[str, str]
+    assignment_backward: Dict[str, str]
+    cut_edges_forward: List[Tuple[str, str]]
+    cut_edges_backward: List[Tuple[str, str]]
+    cross_phase_edges: List[Tuple[str, str]]
+    activation_strategies: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def assignment(self) -> Dict[str, str]:
+        return self.assignment_forward
+
+    @property
+    def cut_edges(self) -> List[Tuple[str, str]]:
+        return self.cut_edges_forward
 
     @classmethod
     def from_execution_plan(cls, plan: ExecutionPlan) -> "DevicePlan":
-        return cls(assignment=dict(plan.assignment), cut_edges=list(plan.cut_edges))
+        return cls(
+            assignment_forward=dict(plan.assignment_forward),
+            assignment_backward=dict(plan.assignment_backward),
+            cut_edges_forward=list(plan.cut_edges_forward),
+            cut_edges_backward=list(plan.cut_edges_backward),
+            cross_phase_edges=list(plan.cross_phase_edges),
+            activation_strategies=dict(plan.activation_strategies),
+        )
 
-    def resolve_torch_device(self, layer_name: str, gpu_id: int = 0) -> torch.device:
-        label = self.assignment.get(layer_name, "CPU").upper()
+    def resolve_torch_device(self, layer_name: str, gpu_id: int = 0, phase: str = "forward") -> torch.device:
+        assignment = self.assignment_forward if phase == "forward" else self.assignment_backward
+        label = assignment.get(layer_name, "CPU").upper()
         if label == "GPU" and torch.cuda.is_available():
             return torch.device(f"cuda:{gpu_id}")
         return torch.device("cpu")
@@ -34,7 +54,9 @@ def collect_leaf_module_names(model: nn.Module) -> List[str]:
 
 
 def plan_requests_gpu(plan: DevicePlan) -> bool:
-    return any(str(dev).upper() == "GPU" for dev in plan.assignment.values())
+    return any(str(dev).upper() == "GPU" for dev in plan.assignment_forward.values()) or any(
+        str(dev).upper() == "GPU" for dev in plan.assignment_backward.values()
+    )
 
 
 def validate_plan_coverage(
@@ -44,7 +66,7 @@ def validate_plan_coverage(
 ) -> List[str]:
     warnings: List[str] = []
     leaf_names = set(collect_leaf_module_names(model))
-    plan_layers = set(plan.assignment.keys())
+    plan_layers = set(plan.assignment_forward.keys()) | set(plan.assignment_backward.keys())
 
     missing_in_model = sorted(plan_layers - leaf_names)
     missing_in_plan = sorted(leaf_names - plan_layers)

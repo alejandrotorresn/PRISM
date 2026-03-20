@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -12,8 +12,20 @@ VALID_DEVICES = {"CPU", "GPU"}
 
 @dataclass
 class ExecutionPlan:
-    assignment: Dict[str, str]
-    cut_edges: List[Tuple[str, str]]
+    assignment_forward: Dict[str, str]
+    assignment_backward: Dict[str, str]
+    cut_edges_forward: List[Tuple[str, str]]
+    cut_edges_backward: List[Tuple[str, str]]
+    cross_phase_edges: List[Tuple[str, str]]
+    activation_strategies: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def assignment(self) -> Dict[str, str]:
+        return self.assignment_forward
+
+    @property
+    def cut_edges(self) -> List[Tuple[str, str]]:
+        return self.cut_edges_forward
 
 
 @dataclass
@@ -69,7 +81,7 @@ def load_execution_plan(assignment_csv: str | Path, cut_edges_csv: str | Path) -
     except EmptyDataError:
         cut_df = pd.DataFrame(columns=["src_layer", "dst_layer"])
 
-    required_assign = {"layer", "device"}
+    required_assign = {"layer"}
     required_cut = {"src_layer", "dst_layer"}
 
     if not required_assign.issubset(assign_df.columns):
@@ -83,21 +95,47 @@ def load_execution_plan(assignment_csv: str | Path, cut_edges_csv: str | Path) -
             f"{sorted(required_cut - set(cut_df.columns))}"
         )
 
-    assignment: Dict[str, str] = {}
+    forward_col = "device_forward" if "device_forward" in assign_df.columns else "device"
+    backward_col = "device_backward" if "device_backward" in assign_df.columns else forward_col
+
+    assignment_forward: Dict[str, str] = {}
+    assignment_backward: Dict[str, str] = {}
+    activation_strategies: Dict[str, str] = {}
     for _, row in assign_df.iterrows():
         layer = str(row["layer"])
-        device = str(row["device"]).upper()
-        if device not in VALID_DEVICES:
-            raise ValueError(
-                f"Invalid device '{device}' for layer '{layer}'. Expected one of {sorted(VALID_DEVICES)}"
-            )
-        if layer in assignment:
+        device_forward = str(row[forward_col]).upper()
+        device_backward = str(row[backward_col]).upper()
+        for device in [device_forward, device_backward]:
+            if device not in VALID_DEVICES:
+                raise ValueError(
+                    f"Invalid device '{device}' for layer '{layer}'. Expected one of {sorted(VALID_DEVICES)}"
+                )
+        if layer in assignment_forward:
             raise ValueError(f"Duplicated layer in assignment CSV: {layer}")
-        assignment[layer] = device
+        assignment_forward[layer] = device_forward
+        assignment_backward[layer] = device_backward
+        strategy = str(row.get("activation_strategy", "retain")).lower()
+        if strategy in {"", "nan", "none"}:
+            strategy = "retain"
+        activation_strategies[layer] = strategy
 
-    cut_edges = [(str(r["src_layer"]), str(r["dst_layer"])) for _, r in cut_df.iterrows()]
+    if "phase" in cut_df.columns:
+        cut_edges_forward = [(str(r["src_layer"]), str(r["dst_layer"])) for _, r in cut_df[cut_df["phase"] == "forward"].iterrows()]
+        cut_edges_backward = [(str(r["src_layer"]), str(r["dst_layer"])) for _, r in cut_df[cut_df["phase"] == "backward"].iterrows()]
+        cross_phase_edges = [(str(r["src_layer"]), str(r["dst_layer"])) for _, r in cut_df[cut_df["phase"] == "cross_phase"].iterrows()]
+    else:
+        cut_edges_forward = [(str(r["src_layer"]), str(r["dst_layer"])) for _, r in cut_df.iterrows()]
+        cut_edges_backward = list(cut_edges_forward)
+        cross_phase_edges = []
 
-    return ExecutionPlan(assignment=assignment, cut_edges=cut_edges)
+    return ExecutionPlan(
+        assignment_forward=assignment_forward,
+        assignment_backward=assignment_backward,
+        cut_edges_forward=cut_edges_forward,
+        cut_edges_backward=cut_edges_backward,
+        cross_phase_edges=cross_phase_edges,
+        activation_strategies=activation_strategies,
+    )
 
 
 def load_graph_edges(graph_edges_csv: str | Path) -> List[Tuple[str, str]]:

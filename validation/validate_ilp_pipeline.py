@@ -26,6 +26,7 @@ load_transfer_costs = plan_mod.load_transfer_costs
 
 SimulationConfig = sim_mod.SimulationConfig
 simulate_plan = sim_mod.simulate_plan
+simulate_plan_phase4 = sim_mod.simulate_plan_phase4
 
 
 def _resolve_solution_paths(solution_dir: Path):
@@ -103,13 +104,23 @@ def main() -> int:
         strict_topology=args.strict_topology,
     )
 
-    result = simulate_plan(
-        plan=plan,
-        metrics_stats_csv=metrics_stats_csv,
-        graph_edges=graph_edges,
-        transfer_costs=transfer_costs,
-        cfg=cfg,
-    )
+    if getattr(plan, "activation_strategies", None):
+        result = simulate_plan_phase4(
+            plan=plan,
+            metrics_stats_csv=metrics_stats_csv,
+            graph_edges=graph_edges,
+            transfer_costs=transfer_costs,
+            cfg=cfg,
+            activation_strategies=plan.activation_strategies,
+        )
+    else:
+        result = simulate_plan(
+            plan=plan,
+            metrics_stats_csv=metrics_stats_csv,
+            graph_edges=graph_edges,
+            transfer_costs=transfer_costs,
+            cfg=cfg,
+        )
 
     output_dir = Path(args.output_dir) if args.output_dir else (solution_dir / "simulation")
     output_dir.mkdir(parents=True, exist_ok=True)

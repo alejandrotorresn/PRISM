@@ -1,0 +1,46 @@
+{
+    "status": "ok",
+    "steps": 1,
+    "avg_step_ms": 147.63805999973556,
+    "avg_power_w": 11.507333333333333,
+    "total_energy_j": 1.7035515759530748,
+    "energy_source": "nvml",
+    "total_transfer_mb": 0.03955078125,
+    "total_transfer_events": 2,
+    "peak_gpu_mem_mb": 10.69775390625,
+    "recompute_layers": [],
+    "checkpoint_layers": [],
+    "backward_relocation_layers": [
+        "net.0"
+    ],
+    "unsupported_checkpoint_layers": [],
+    "warnings": [],
+    "per_step": [
+        {
+            "step": 0,
+            "total_ms": 147.63805999973556,
+            "forward_ms": 146.1049939998702,
+            "backward_ms": 0.7703670007686014,
+            "optimizer_ms": 0.6031999992046622,
+            "transfer_count": 2,
+            "transfer_total_mb": 0.03955078125,
+            "peak_gpu_mem_mb": 10.69775390625,
+            "recompute_count": 0,
+            "checkpoint_count": 0,
+            "backward_relocation_count": 1
+        }
+    ],
+    "inputs": {
+        "config_dir": "data/zephyr/results_smoke/simple_mlp/SGD/fp32/batch_8",
+        "assignment_csv": "reports/ilp_results_phase4_controlled/simple_mlp_dual_runtime_evidence/ilp_assignment.csv",
+        "cut_edges_csv": "reports/ilp_results_phase4_controlled/simple_mlp_dual_runtime_evidence/ilp_cut_edges.csv",
+        "batch_size": 8,
+        "steps": 1,
+        "lr": 0.01,
+        "seed": 42,
+        "gpu_id": 0,
+        "strict_plan": true,
+        "rapl": false,
+        "energy_sample_interval": 0.05
+    }
+}

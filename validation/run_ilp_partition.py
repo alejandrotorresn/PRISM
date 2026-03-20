@@ -16,13 +16,16 @@ load_ilp_inputs = importlib.import_module("ilp.data_loader").load_ilp_inputs
 merge_ilp_inputs_multi_hardware = importlib.import_module("ilp.data_loader").merge_ilp_inputs_multi_hardware
 save_ilp_solution = importlib.import_module("ilp.export_solution").save_ilp_solution
 ILPConfig = importlib.import_module("ilp.model_builder").ILPConfig
+ILPConfig4 = importlib.import_module("ilp.model_builder").ILPConfig4
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
+solve_partition_ilp_phase4 = importlib.import_module("ilp.solve").solve_partition_ilp_phase4
 load_execution_plan = importlib.import_module("runtime.plan_representation").load_execution_plan
 infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
 load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
 load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
 SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
 simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
+simulate_plan_phase4 = importlib.import_module("runtime.simulator").simulate_plan_phase4
 
 
 def _default_paths(config_dir: Path, model_name: str):
@@ -67,6 +70,13 @@ def main() -> int:
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_dir", default=None, help="Output folder for ILP solution files")
+    parser.add_argument("--phase4_activation", action="store_true", help="Enable Phase 4 activation-strategy optimization")
+    parser.add_argument("--phase4_backend", choices=["greedy"], default="greedy")
+    parser.add_argument("--phase4_enable_recompute", action="store_true")
+    parser.add_argument("--phase4_enable_checkpoint", action="store_true")
+    parser.add_argument("--phase4_w_io", type=float, default=0.0)
+    parser.add_argument("--phase4_recompute_penalty", type=float, default=0.5)
+    parser.add_argument("--phase4_checkpoint_penalty", type=float, default=0.3)
     parser.add_argument("--no_simulate", action="store_true", help="Disable automatic post-solve simulation")
     parser.add_argument("--simulate_mode", choices=["robust", "nominal"], default="robust")
     parser.add_argument("--strict_graph_subset", action="store_true")
@@ -126,15 +136,29 @@ def main() -> int:
                 strict_schema=True,
             )
 
-    cfg = ILPConfig(
-        w_time=args.w_time,
-        w_energy=args.w_energy,
-        w_transfer=args.w_transfer,
-        gpu_mem_budget_mb=args.gpu_mem_budget_mb,
-        cpu_mem_budget_mb=args.cpu_mem_budget_mb,
-    )
-
-    sol = solve_partition_ilp(data, cfg, backend=args.backend)
+    if args.phase4_activation:
+        cfg4 = ILPConfig4(
+            w_time=args.w_time,
+            w_energy=args.w_energy,
+            w_transfer=args.w_transfer,
+            gpu_mem_budget_mb=args.gpu_mem_budget_mb,
+            cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            w_io=args.phase4_w_io,
+            w_recompute_penalty=args.phase4_recompute_penalty,
+            w_checkpoint_penalty=args.phase4_checkpoint_penalty,
+            enable_recompute=args.phase4_enable_recompute,
+            enable_checkpoint=args.phase4_enable_checkpoint,
+        )
+        sol = solve_partition_ilp_phase4(data, cfg4, backend=args.phase4_backend)
+    else:
+        cfg = ILPConfig(
+            w_time=args.w_time,
+            w_energy=args.w_energy,
+            w_transfer=args.w_transfer,
+            gpu_mem_budget_mb=args.gpu_mem_budget_mb,
+            cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+        )
+        sol = solve_partition_ilp(data, cfg, backend=args.backend)
     out = save_ilp_solution(sol, str(output_dir))
 
     print("=" * 80)
@@ -177,13 +201,23 @@ def main() -> int:
             strict_topology=args.strict_topology,
         )
 
-        sim_result = simulate_plan(
-            plan=sim_plan,
-            metrics_stats_csv=inferred.metrics_stats_csv,
-            graph_edges=graph_edges,
-            transfer_costs=transfer_costs,
-            cfg=sim_cfg,
-        )
+        if getattr(sim_plan, "activation_strategies", None):
+            sim_result = simulate_plan_phase4(
+                plan=sim_plan,
+                metrics_stats_csv=inferred.metrics_stats_csv,
+                graph_edges=graph_edges,
+                transfer_costs=transfer_costs,
+                cfg=sim_cfg,
+                activation_strategies=sim_plan.activation_strategies,
+            )
+        else:
+            sim_result = simulate_plan(
+                plan=sim_plan,
+                metrics_stats_csv=inferred.metrics_stats_csv,
+                graph_edges=graph_edges,
+                transfer_costs=transfer_costs,
+                cfg=sim_cfg,
+            )
 
         sim_out_dir = output_dir / "simulation"
         sim_out_dir.mkdir(parents=True, exist_ok=True)
