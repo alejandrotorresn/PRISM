@@ -4,6 +4,8 @@
 
 Este documento constituye la referencia tecnica integral del proyecto.
 
+Desde el cierre de Fase 0 del plan de implementacion (2026-03-19), el alcance metodologico del proyecto queda fijado sin bifurcaciones: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP y soporte de streaming/prefetching mediante scheduling asincrono en runtime.
+
 Explica, con trazabilidad directa al codigo:
 
 - como se capturan datos de profiling (tiempo, energia, memoria, FLOPs, transferencia)

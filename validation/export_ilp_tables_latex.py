@@ -25,6 +25,13 @@ def _prepare_best_table(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: _safe_improvement(float(r["all_cpu_objective"]), float(r["ilp_objective"])),
         axis=1,
     )
+    if "greedy_objective" in out.columns:
+        out["impr_vs_greedy_pct"] = out.apply(
+            lambda r: _safe_improvement(float(r["greedy_objective"]), float(r["ilp_objective"])),
+            axis=1,
+        )
+    else:
+        out["impr_vs_greedy_pct"] = float("nan")
 
     keep = pd.DataFrame(
         {
@@ -32,7 +39,9 @@ def _prepare_best_table(df: pd.DataFrame) -> pd.DataFrame:
             "GPU Budget (MB)": out["gpu_budget_mb"].map(lambda v: _fmt_float(v, 0)),
             "ILP Obj": out["ilp_objective"].map(lambda v: _fmt_float(v, 3)),
             "All-CPU Obj": out["all_cpu_objective"].map(lambda v: _fmt_float(v, 3)),
+            "Greedy Obj": out["greedy_objective"].map(lambda v: _fmt_float(v, 3)) if "greedy_objective" in out.columns else "-",
             "Improve vs CPU (\\%)": out["impr_vs_cpu_pct"].map(lambda v: _fmt_float(v, 2)),
+            "Improve vs Greedy (\\%)": out["impr_vs_greedy_pct"].map(lambda v: _fmt_float(v, 2)),
             "ILP GPU Mem (MB)": out["ilp_gpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
             "ILP CPU Mem (MB)": out["ilp_cpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
             "GPU Layers": out["ilp_layers_gpu"].astype(int),
@@ -49,6 +58,13 @@ def _prepare_budget_table(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: _safe_improvement(float(r["all_cpu_objective"]), float(r["ilp_objective"])),
         axis=1,
     )
+    if "greedy_objective" in out.columns:
+        out["impr_vs_greedy_pct"] = out.apply(
+            lambda r: _safe_improvement(float(r["greedy_objective"]), float(r["ilp_objective"])),
+            axis=1,
+        )
+    else:
+        out["impr_vs_greedy_pct"] = float("nan")
 
     keep = pd.DataFrame(
         {
@@ -56,12 +72,36 @@ def _prepare_budget_table(df: pd.DataFrame) -> pd.DataFrame:
             "GPU Budget (MB)": out["gpu_budget_mb"].map(lambda v: _fmt_float(v, 0)),
             "ILP Status": out["ilp_status"],
             "ILP Obj": out["ilp_objective"].map(lambda v: _fmt_float(v, 3)),
+            "Greedy Obj": out["greedy_objective"].map(lambda v: _fmt_float(v, 3)) if "greedy_objective" in out.columns else "-",
             "All-CPU Obj": out["all_cpu_objective"].map(lambda v: _fmt_float(v, 3)),
             "All-GPU Status": out["all_gpu_status"],
             "Improve vs CPU (\\%)": out["impr_vs_cpu_pct"].map(lambda v: _fmt_float(v, 2)),
+            "Improve vs Greedy (\\%)": out["impr_vs_greedy_pct"].map(lambda v: _fmt_float(v, 2)),
             "ILP GPU Mem (MB)": out["ilp_gpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
             "ILP CPU Mem (MB)": out["ilp_cpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
             "Cut Edges": out["ilp_cut_edges"].astype(int),
+        }
+    )
+    return keep
+
+
+def _prepare_ablation_table(df: pd.DataFrame) -> pd.DataFrame:
+    feasible = df[df["ilp_status"].isin(["optimal", "feasible"])].copy()
+    if feasible.empty:
+        return feasible
+    idx = feasible.groupby(["model", "variant"], sort=False)["ilp_objective"].idxmin()
+    best = feasible.loc[idx].sort_values(by=["model", "variant"], kind="stable")
+
+    keep = pd.DataFrame(
+        {
+            "Model": best["model"],
+            "Variant": best["variant"],
+            "GPU Budget (MB)": best["gpu_budget_mb"].map(lambda v: _fmt_float(v, 0)),
+            "ILP Obj": best["ilp_objective"].map(lambda v: _fmt_float(v, 3)),
+            "Delta vs Full": best["delta_vs_full_obj"].map(lambda v: _fmt_float(v, 3)),
+            "Cut Edges": best["ilp_cut_edges"].astype(int),
+            "GPU Layers": best["ilp_layers_gpu"].astype(int),
+            "CPU Layers": best["ilp_layers_cpu"].astype(int),
         }
     )
     return keep
@@ -86,11 +126,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Export ILP result tables to LaTeX")
     parser.add_argument("--best_csv", default="reports/ilp_results/ilp_best_per_model.csv")
     parser.add_argument("--consolidated_csv", default="reports/ilp_results/ilp_pareto_consolidated.csv")
+    parser.add_argument("--ablation_csv", default="reports/ilp_results/ilp_ablation_consolidated.csv")
     parser.add_argument("--output_dir", default="reports/ilp_results/latex")
     args = parser.parse_args()
 
     best_path = Path(args.best_csv)
     cons_path = Path(args.consolidated_csv)
+    abl_path = Path(args.ablation_csv)
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -118,17 +160,34 @@ def main() -> int:
 
     best_path_tex = out_dir / "ilp_best_per_model.tex"
     budget_path_tex = out_dir / "ilp_budget_sweep.tex"
+    ablation_path_tex = out_dir / "ilp_ablation_best_per_variant.tex"
     all_path_tex = out_dir / "ilp_tables.tex"
 
     best_path_tex.write_text(best_tex)
     budget_path_tex.write_text(budget_tex)
-    all_path_tex.write_text(best_tex + "\n" + budget_tex)
+    combined_tex = best_tex + "\n" + budget_tex
+
+    if abl_path.exists():
+        abl_df = pd.read_csv(abl_path)
+        abl_tbl = _prepare_ablation_table(abl_df)
+        if not abl_tbl.empty:
+            abl_tex = _latex_table(
+                abl_tbl,
+                caption="Best feasible ablation result per model and variant.",
+                label="tab:ilp-ablation-best-per-variant",
+            )
+            ablation_path_tex.write_text(abl_tex)
+            combined_tex += "\n" + abl_tex
+
+    all_path_tex.write_text(combined_tex)
 
     print("=" * 80)
     print("ILP LATEX TABLES EXPORTED")
     print("=" * 80)
     print(f"Best table: {best_path_tex}")
     print(f"Budget sweep table: {budget_path_tex}")
+    if ablation_path_tex.exists():
+        print(f"Ablation table: {ablation_path_tex}")
     print(f"Combined tables: {all_path_tex}")
     print("=" * 80)
     return 0

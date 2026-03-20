@@ -1,0 +1,25 @@
+\chapter{Profiling Empirico para Particion Heterogenea CPU-GPU}
+
+\section{4.1 Motivacion empirica y preguntas de medicion}
+Se formulan preguntas de medicion orientadas a cuantificar costo por capa y costo de comunicacion en escenarios heterogeneos.
+
+\section{4.2 Arquitectura de instrumentacion}
+Se documenta el mecanismo de captura de tiempos y memoria con granularidad por etapa del entrenamiento.
+
+\section{4.3 Modelo de energia y carga computacional}
+Se presenta el tratamiento operativo de energia y proxy de carga para incorporacion en la funcion objetivo.
+
+\section{4.4 Politica de precision y validez}
+Se describen reglas de precision soportada y verificaciones de consistencia experimental.
+
+\section{4.5 Extraccion estructural del grafo}
+Se explica la derivacion de nodos y aristas para construir una topologia compatible con el optimizador.
+
+\section{4.6 Modelo de transferencia consciente de arista}
+Se introduce la estimacion de costo de transferencia asociada a cortes en el grafo de ejecucion.
+
+\section{4.7 Agregacion estadistica robusta}
+Se consolidan estadisticas robustas por capa y se incluyen indicadores de calidad muestral para auditar coeficientes.
+
+\section{4.8 Validez experimental y reproducibilidad}
+Se establecen controles de trazabilidad, repetibilidad y limites de inferencia para campanas smoke y futuras campanas reales.

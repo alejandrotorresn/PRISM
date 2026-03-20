@@ -1,0 +1,48 @@
+\begin{table}[t]
+\centering
+\caption{Best feasible ILP result per model under evaluated GPU memory budgets.}
+\label{tab:ilp-best-per-model}
+\begin{tabular}{lllllllllrrr}
+\toprule
+Model & GPU Budget (MB) & ILP Obj & All-CPU Obj & Greedy Obj & Improve vs CPU (\%) & Improve vs Greedy (\%) & ILP GPU Mem (MB) & ILP CPU Mem (MB) & GPU Layers & CPU Layers & Cut Edges \\
+\midrule
+simple_mlp & 16 & 0.000 & 0.000 & 0.000 & 0.00 & 0.00 & 0.00 & 0.00 & 0 & 5 & 0 \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{ILP Pareto sweep with baseline comparison across GPU memory budgets.}
+\label{tab:ilp-budget-sweep}
+\begin{tabular}{lllllllllllr}
+\toprule
+Model & GPU Budget (MB) & ILP Status & ILP Obj & Greedy Obj & All-CPU Obj & All-GPU Status & Improve vs CPU (\%) & Improve vs Greedy (\%) & ILP GPU Mem (MB) & ILP CPU Mem (MB) & Cut Edges \\
+\midrule
+simple_mlp & 16 & optimal & 0.000 & 0.000 & 0.000 & infeasible & 0.00 & 0.00 & 0.00 & 0.00 & 0 \\
+simple_mlp & 32 & optimal & 0.000 & 0.000 & 0.000 & infeasible & 0.00 & 0.00 & 0.00 & 0.00 & 0 \\
+simple_mlp & 64 & optimal & 0.000 & 0.000 & 0.000 & infeasible & 0.00 & 0.00 & 0.00 & 0.00 & 0 \\
+simple_mlp & 128 & optimal & 0.000 & 0.000 & 0.000 & feasible & 0.00 & 0.00 & 0.00 & 0.00 & 0 \\
+simple_mlp & 256 & optimal & 0.000 & 0.000 & 0.000 & feasible & 0.00 & 0.00 & 0.00 & 0.00 & 0 \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Best feasible ablation result per model and variant.}
+\label{tab:ilp-ablation-best-per-variant}
+\begin{tabular}{lllllrrr}
+\toprule
+Model & Variant & GPU Budget (MB) & ILP Obj & Delta vs Full & Cut Edges & GPU Layers & CPU Layers \\
+\midrule
+simple_mlp & full_model & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+simple_mlp & no_robustification & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+simple_mlp & no_topology & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+simple_mlp & no_transfer_edges & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+\bottomrule
+\end{tabular}
+
+\end{table}

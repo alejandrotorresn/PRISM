@@ -89,6 +89,109 @@ def _eval_fixed_policy(policy: str, data, cfg: Any) -> Dict[str, float | str | i
     }
 
 
+def _eval_bits_policy(bits: Dict[str, int], data, cfg: Any) -> Dict[str, float | str | int]:
+    problem = build_problem_data(data, cfg)
+
+    gpu_mem = sum(problem.gpu_mem[n] for n in data.nodes if bits[n] == 1)
+    cpu_mem = sum(problem.cpu_mem[n] for n in data.nodes if bits[n] == 0)
+    feasible = (gpu_mem <= cfg.gpu_mem_budget_mb) and (cpu_mem <= cfg.cpu_mem_budget_mb)
+
+    obj = 0.0
+    for n in data.nodes:
+        obj += problem.objective_node_gpu[n] if bits[n] == 1 else problem.objective_node_cpu[n]
+
+    cut_edges = 0
+    for e in data.edges:
+        u, v = e
+        if bits[u] != bits[v]:
+            obj += problem.objective_edge_cut[e]
+            cut_edges += 1
+
+    return {
+        "status": "feasible" if feasible else "infeasible",
+        "objective_value": float(obj) if feasible else float("inf"),
+        "gpu_mem_used_mb": float(gpu_mem),
+        "cpu_mem_used_mb": float(cpu_mem),
+        "layers_gpu": int(sum(1 for v in bits.values() if v == 1)),
+        "layers_cpu": int(sum(1 for v in bits.values() if v == 0)),
+        "cut_edges": cut_edges,
+    }
+
+
+def _greedy_bits(data, cfg: Any) -> Dict[str, int] | None:
+    problem = build_problem_data(data, cfg)
+
+    # Start from per-layer local best (ignores graph cuts by design).
+    bits = {
+        n: 1 if problem.objective_node_gpu[n] <= problem.objective_node_cpu[n] else 0
+        for n in data.nodes
+    }
+
+    def _gpu_mem() -> float:
+        return float(sum(problem.gpu_mem[n] for n in data.nodes if bits[n] == 1))
+
+    def _cpu_mem() -> float:
+        return float(sum(problem.cpu_mem[n] for n in data.nodes if bits[n] == 0))
+
+    gpu_mem = _gpu_mem()
+    cpu_mem = _cpu_mem()
+
+    while gpu_mem > cfg.gpu_mem_budget_mb:
+        candidates = []
+        for n in data.nodes:
+            if bits[n] != 1:
+                continue
+            new_cpu_mem = cpu_mem + problem.cpu_mem[n]
+            if new_cpu_mem > cfg.cpu_mem_budget_mb:
+                continue
+            obj_penalty = max(0.0, problem.objective_node_cpu[n] - problem.objective_node_gpu[n])
+            gpu_reduction = max(problem.gpu_mem[n], 1e-12)
+            score = obj_penalty / gpu_reduction
+            candidates.append((score, n))
+        if not candidates:
+            return None
+        _, pick = min(candidates)
+        bits[pick] = 0
+        gpu_mem -= problem.gpu_mem[pick]
+        cpu_mem += problem.cpu_mem[pick]
+
+    while cpu_mem > cfg.cpu_mem_budget_mb:
+        candidates = []
+        for n in data.nodes:
+            if bits[n] != 0:
+                continue
+            new_gpu_mem = gpu_mem + problem.gpu_mem[n]
+            if new_gpu_mem > cfg.gpu_mem_budget_mb:
+                continue
+            obj_penalty = max(0.0, problem.objective_node_gpu[n] - problem.objective_node_cpu[n])
+            cpu_reduction = max(problem.cpu_mem[n], 1e-12)
+            score = obj_penalty / cpu_reduction
+            candidates.append((score, n))
+        if not candidates:
+            return None
+        _, pick = min(candidates)
+        bits[pick] = 1
+        gpu_mem += problem.gpu_mem[pick]
+        cpu_mem -= problem.cpu_mem[pick]
+
+    return bits
+
+
+def _eval_greedy_policy(data, cfg: Any) -> Dict[str, float | str | int]:
+    bits = _greedy_bits(data, cfg)
+    if bits is None:
+        return {
+            "status": "infeasible",
+            "objective_value": float("inf"),
+            "gpu_mem_used_mb": float("nan"),
+            "cpu_mem_used_mb": float("nan"),
+            "layers_gpu": 0,
+            "layers_cpu": 0,
+            "cut_edges": 0,
+        }
+    return _eval_bits_policy(bits, data, cfg)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep ILP over GPU memory budgets and compare baselines")
     parser.add_argument("--config_dir", default=None)
@@ -161,6 +264,7 @@ def main() -> int:
         ilp = solve_partition_ilp(data, cfg, backend=args.backend)
         all_cpu = _eval_fixed_policy("all_cpu", data, cfg)
         all_gpu = _eval_fixed_policy("all_gpu", data, cfg)
+        greedy = _eval_greedy_policy(data, cfg)
 
         rows.append({
             "model": args.model,
@@ -182,6 +286,13 @@ def main() -> int:
             "all_gpu_objective": all_gpu["objective_value"],
             "all_gpu_gpu_mem_mb": all_gpu["gpu_mem_used_mb"],
             "all_gpu_cpu_mem_mb": all_gpu["cpu_mem_used_mb"],
+            "greedy_status": greedy["status"],
+            "greedy_objective": greedy["objective_value"],
+            "greedy_gpu_mem_mb": greedy["gpu_mem_used_mb"],
+            "greedy_cpu_mem_mb": greedy["cpu_mem_used_mb"],
+            "greedy_layers_gpu": greedy["layers_gpu"],
+            "greedy_layers_cpu": greedy["layers_cpu"],
+            "greedy_cut_edges": greedy["cut_edges"],
         })
 
     out_df = pd.DataFrame(rows).sort_values(by=["gpu_budget_mb"], kind="stable")

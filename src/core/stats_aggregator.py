@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import logging
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# Minimum number of independent runs recommended for reliable coefficient estimation.
+MIN_RECOMMENDED_RUNS: int = 3
+# Coefficient-of-variation threshold above which timing estimates are flagged as
+# high-dispersion (std/|mean| > 30 % is considered unreliable for ILP regression).
+HIGH_CV_THRESHOLD: float = 0.30
+
+# Key timing columns used to derive the quality flag; energy columns are excluded
+# because they may legitimately be absent in CPU-only or GPU-only profiles.
+KEY_TIME_COLUMNS: List[str] = [
+    "gpu_fwd_time_ms",
+    "gpu_bwd_time_ms",
+    "cpu_fwd_time_ms",
+    "cpu_bwd_time_ms",
+]
 
 
 DEFAULT_METRIC_COLUMNS = [
@@ -66,6 +85,19 @@ def _load_frames(paths: List[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _coefficient_of_variation(group: pd.DataFrame, col: str) -> Optional[float]:
+    """Return std/|mean| for *col* in *group*, or None when not computable."""
+    if col not in group.columns:
+        return None
+    s = pd.to_numeric(group[col], errors="coerce").dropna()
+    if len(s) < 2:
+        return None
+    mean = s.mean()
+    if mean == 0.0:
+        return None
+    return float(s.std(ddof=1) / abs(mean))
+
+
 def _stat_series(group: pd.DataFrame, col: str) -> Dict[str, float]:
     s = pd.to_numeric(group[col], errors="coerce").dropna()
     if s.empty:
@@ -125,7 +157,27 @@ def aggregate_metrics_stats(
     for keys, g in grouped:
         row: Dict[str, object] = {GROUP_COLUMNS[i]: keys[i] for i in range(len(GROUP_COLUMNS))}
         row["n_samples"] = int(len(g))
-        row["n_runs"] = int(g["run_id"].nunique()) if "run_id" in g.columns else int(len(g))
+        n_runs = int(g["run_id"].nunique()) if "run_id" in g.columns else int(len(g))
+        row["n_runs"] = n_runs
+
+        # --- Coefficient of variation for key time metrics --------------------
+        cv_values: List[float] = []
+        for kcol in KEY_TIME_COLUMNS:
+            cv = _coefficient_of_variation(g, kcol)
+            row[f"{kcol}_cv"] = round(cv, 4) if cv is not None else float("nan")
+            if cv is not None:
+                cv_values.append(cv)
+
+        max_cv = max(cv_values) if cv_values else float("nan")
+        row["max_cv_key_metrics"] = round(max_cv, 4) if cv_values else float("nan")
+
+        # --- Quality flag -----------------------------------------------------
+        if n_runs < MIN_RECOMMENDED_RUNS:
+            row["quality_flag"] = "low_sample"
+        elif cv_values and max_cv > HIGH_CV_THRESHOLD:
+            row["quality_flag"] = "high_dispersion"
+        else:
+            row["quality_flag"] = "ok"
 
         for col in metric_cols:
             row.update(_stat_series(g, col))
@@ -144,10 +196,27 @@ def aggregate_metrics_stats(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out_path, index=False)
 
+    flagged_rows = [r for r in rows if r.get("quality_flag") != "ok"]
+    if flagged_rows:
+        layer_names = [str(r.get("layer", r)) for r in flagged_rows]
+        msg = (
+            f"Sample quality issues detected in {len(flagged_rows)} layer(s): "
+            f"{', '.join(layer_names)}. "
+            f"Check 'quality_flag' column in output CSV for details."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        logger.warning(msg)
+
+    low_sample = [r.get("layer") for r in rows if r.get("quality_flag") == "low_sample"]
+    high_disp  = [r.get("layer") for r in rows if r.get("quality_flag") == "high_dispersion"]
+
     return {
         "output_csv": str(out_path),
         "input_files": len(metric_files),
         "rows_in": int(len(df)),
         "rows_out": int(len(out_df)),
         "metric_columns": metric_cols,
+        "flagged_layers_count": len(flagged_rows),
+        "low_sample_layers": low_sample,
+        "high_dispersion_layers": high_disp,
     }

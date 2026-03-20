@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{Best feasible ablation result per model and variant.}
+\label{tab:ilp-ablation-best-per-variant}
+\begin{tabular}{lllllrrr}
+\toprule
+Model & Variant & GPU Budget (MB) & ILP Obj & Delta vs Full & Cut Edges & GPU Layers & CPU Layers \\
+\midrule
+simple_mlp & full_model & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+simple_mlp & no_robustification & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+simple_mlp & no_topology & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+simple_mlp & no_transfer_edges & 16 & 0.000 & 0.000 & 0 & 0 & 5 \\
+\bottomrule
+\end{tabular}
+
+\end{table}

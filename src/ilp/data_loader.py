@@ -169,22 +169,39 @@ def load_ilp_inputs(
 
     edges_raw = []
     dropped_graph_edges = 0
+    dropped_boundary_edges = 0
+    dropped_mismatch_edges = 0
     for _, row in graph.iterrows():
         u = str(row["producer_name"])
         v = str(row["consumer_name"])
-        if u in node_cost_gpu_ms and v in node_cost_gpu_ms:
+        u_in = u in node_cost_gpu_ms
+        v_in = v in node_cost_gpu_ms
+        if u_in and v_in:
             edges_raw.append((u, v))
         else:
             dropped_graph_edges += 1
 
-    if dropped_graph_edges > 0:
+            # Boundary edges are expected in FX graphs (e.g., input placeholder -> first module,
+            # or last module -> output node) and should not be treated as mapping errors.
+            if u_in ^ v_in:
+                dropped_boundary_edges += 1
+            else:
+                dropped_mismatch_edges += 1
+
+    if dropped_mismatch_edges > 0:
         msg = (
-            f"Dropped {dropped_graph_edges} graph edges due to node-name mismatch between "
+            f"Dropped {dropped_mismatch_edges} graph edges due to node-name mismatch between "
             f"graph_edges and metrics_stats layer names"
         )
         if strict_graph_mapping:
             raise ValueError(msg)
         logger.warning(msg)
+
+    if dropped_boundary_edges > 0:
+        logger.info(
+            "Dropped %s boundary graph edges (expected placeholder/output nodes not present in layer metrics)",
+            dropped_boundary_edges,
+        )
 
     transfer_map: Dict[Tuple[str, str], float] = {}
     for _, row in transfer.iterrows():

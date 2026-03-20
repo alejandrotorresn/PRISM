@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "GLOBAL_PROJECT_DOCUMENTATION_ES.md",
+                "file": "SERVER_LAUNCH_PROFILES.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "GLOBAL_PROJECT_DOCUMENTATION_ES"
+              "title": "SERVER_LAUNCH_PROFILES"
             }
           }
         ]
@@ -185,17 +185,17 @@
   },
   "active": "b7118e4c75c75494",
   "lastOpenFiles": [
-    "TESTING_VALIDATION_MAP.md",
-    "SERVER_LAUNCH_PROFILES.md",
     "README.md",
     "PROJECT_STRUCTURE.md",
     "MULTI_NODE_ILP_RUNBOOK.md",
     "ILP_ROBUST_PARTITIONING_PLAN.md",
-    "GLOBAL_PROJECT_DOCUMENTATION_ES.md",
     "GLOBAL_PROJECT_DOCUMENTATION.md",
     "documentation.md",
     "CAPITULO_TESIS_PROFILING_ES.md",
-    "CAPITULO_TESIS_ILP_ES.md",
-    "ARCHITECTURE_AUDIT.md"
+    "ARCHITECTURE_AUDIT.md",
+    "SERVER_LAUNCH_PROFILES.md",
+    "GLOBAL_PROJECT_DOCUMENTATION_ES.md",
+    "TESTING_VALIDATION_MAP.md",
+    "CAPITULO_TESIS_ILP_ES.md"
   ]
 }

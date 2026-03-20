@@ -1,0 +1,40 @@
+\chapter{Formulacion ILP Robusta para Particion Heterogenea CPU-GPU}
+
+\section{5.1 Introduccion y alcance del modelo (congelado en Fase 0)}
+Esta seccion fija la semantica del modelo y su coherencia con el alcance metodologico aprobado.
+
+\section{5.2 Notacion formal}
+Se introduce la notacion de conjuntos, parametros y funciones de costo utilizadas en la formulacion.
+
+\section{5.3 Variables de decision}
+Se especifican variables binarias de asignacion y variables de corte para capturar transferencia inter-dispositivo.
+
+\section{5.4 Funcion objetivo multicriterio}
+La funcion objetivo integra tiempo, energia y transferencia con pesos calibrables segun escenario experimental.
+
+\section{5.5 Linealizaciones exactas y restricciones}
+Se detallan restricciones de memoria, consistencia y linealizaciones necesarias para resolver con ILP.
+
+\section{5.6 Robustificacion estadistica}
+Se incorpora el esquema $\mu + k\sigma$ para amortiguar variabilidad de mediciones por capa.
+
+\section{5.7 Integracion multi-hardware}
+Se documenta la fusion de perfiles de hardware cuando se dispone de multiples configuraciones.
+
+\section{5.8 Complejidad y trazabilidad}
+Se discuten costo computacional, limites de escalabilidad y artefactos de auditoria del solver.
+
+\section{5.9 Validacion comparativa contra baselines (habilitada por Fase 1)}
+Se presentan comparativas contra all-CPU, all-GPU y greedy con salida estructurada reproducible.
+
+\section{5.10 Estudios de sensibilidad (habilitados por Fase 1)}
+Se analiza sensibilidad de resultados frente a $k\_\sigma$, $w\_{transfer}$ y presupuesto de memoria GPU.
+
+\section{5.11 Ablaciones formales (habilitadas por Fase 1)}
+Se cuantifica el aporte incremental de topologia, transferencia por arista y robustificacion.
+
+\section{5.12 Extension avanzada: persistencia de activaciones y rematerializacion (Fase 4)}
+Se define la extension planificada para decision explicita de retencion de activaciones y su impacto en memoria-tiempo.
+
+\section{5.13 Amenazas a la validez}
+Se explicitan limites de generalizacion, sesgos de muestreo y supuestos de modelado pendientes de validacion real.

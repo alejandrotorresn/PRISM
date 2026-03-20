@@ -26,7 +26,6 @@ dependencies:
   - pulp>=2.7
   # Plotting / report generation
   - matplotlib>=3.7
-
   - pip:
       # CPU energy (RAPL). Requires read access to /sys/class/powercap/intel-rapl/* on Linux
       - pyRAPL>=0.2.3

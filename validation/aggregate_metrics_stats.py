@@ -31,6 +31,17 @@ def main() -> int:
     print(f"Rows in: {result['rows_in']}")
     print(f"Rows out: {result['rows_out']}")
     print(f"Output: {result['output_csv']}")
+    flagged = result.get("flagged_layers_count", 0)
+    if flagged == 0:
+        print("Quality flags: all layers OK")
+    else:
+        print(f"Quality flags: {flagged} layer(s) flagged")
+        low = result.get("low_sample_layers") or []
+        hd  = result.get("high_dispersion_layers") or []
+        if low:
+            print(f"  low_sample      : {', '.join(str(l) for l in low)}")
+        if hd:
+            print(f"  high_dispersion : {', '.join(str(l) for l in hd)}")
     print("=" * 80)
     return 0
 
