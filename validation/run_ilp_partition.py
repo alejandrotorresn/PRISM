@@ -17,6 +17,12 @@ merge_ilp_inputs_multi_hardware = importlib.import_module("ilp.data_loader").mer
 save_ilp_solution = importlib.import_module("ilp.export_solution").save_ilp_solution
 ILPConfig = importlib.import_module("ilp.model_builder").ILPConfig
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
+load_execution_plan = importlib.import_module("runtime.plan_representation").load_execution_plan
+infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
+load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
+load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
+SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
+simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
 
 
 def _default_paths(config_dir: Path, model_name: str):
@@ -61,6 +67,10 @@ def main() -> int:
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_dir", default=None, help="Output folder for ILP solution files")
+    parser.add_argument("--no_simulate", action="store_true", help="Disable automatic post-solve simulation")
+    parser.add_argument("--simulate_mode", choices=["robust", "nominal"], default="robust")
+    parser.add_argument("--strict_graph_subset", action="store_true")
+    parser.add_argument("--strict_topology", action="store_true")
     args = parser.parse_args()
 
     config_dirs: list[Path]
@@ -143,6 +153,72 @@ def main() -> int:
     print(f"Assignment CSV: {out['assignment_csv']}")
     print(f"Cut edges CSV: {out['cut_edges_csv']}")
     print(f"Summary JSON: {out['summary_json']}")
+
+    if not args.no_simulate:
+        sim_plan = load_execution_plan(
+            assignment_csv=out["assignment_csv"],
+            cut_edges_csv=out["cut_edges_csv"],
+        )
+
+        inferred = infer_ilp_input_paths(config_dir=config_dirs[0], model_name=args.model)
+        graph_edges = load_graph_edges(inferred.graph_edges_csv)
+        transfer_costs = load_transfer_costs(inferred.transfer_edges_csv)
+
+        sim_cfg = SimulationConfig(
+            mode=args.simulate_mode,
+            k_sigma=args.k_sigma,
+            w_time=args.w_time,
+            w_energy=args.w_energy,
+            w_transfer=args.w_transfer,
+            gpu_mem_budget_mb=args.gpu_mem_budget_mb,
+            cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            strict_transfer_mapping=args.strict_transfer_mapping,
+            strict_graph_subset=args.strict_graph_subset,
+            strict_topology=args.strict_topology,
+        )
+
+        sim_result = simulate_plan(
+            plan=sim_plan,
+            metrics_stats_csv=inferred.metrics_stats_csv,
+            graph_edges=graph_edges,
+            transfer_costs=transfer_costs,
+            cfg=sim_cfg,
+        )
+
+        sim_out_dir = output_dir / "simulation"
+        sim_out_dir.mkdir(parents=True, exist_ok=True)
+
+        sim_summary_path = sim_out_dir / "simulation_summary.json"
+        import json
+
+        with open(sim_summary_path, "w") as f:
+            json.dump(
+                {
+                    **sim_result.to_dict(),
+                    "inputs": {
+                        "metrics_stats_csv": str(inferred.metrics_stats_csv),
+                        "graph_edges_csv": str(inferred.graph_edges_csv),
+                        "transfer_edges_csv": str(inferred.transfer_edges_csv),
+                    },
+                },
+                f,
+                indent=4,
+            )
+
+        print("-" * 80)
+        print("POST-SOLVE SIMULATION")
+        print("-" * 80)
+        print(f"Simulation status: {sim_result.status}")
+        print(f"Simulation objective: {sim_result.objective_value:.6f}")
+        print(f"Simulation summary JSON: {sim_summary_path}")
+        if sim_result.warnings:
+            print("Simulation warnings:")
+            for msg in sim_result.warnings:
+                print(f"  - {msg}")
+        if sim_result.violations:
+            print("Simulation violations:")
+            for msg in sim_result.violations:
+                print(f"  - {msg}")
     print("=" * 80)
 
     return 0

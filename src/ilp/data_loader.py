@@ -106,6 +106,7 @@ def load_ilp_inputs(
     k_sigma: float = 1.0,
     strict_graph_mapping: bool = False,
     strict_transfer_mapping: bool = False,
+    strict_metric_validity: bool = True,
 ) -> ILPInputData:
     if k_sigma < 0:
         raise ValueError(f"k_sigma must be >= 0, got {k_sigma}")
@@ -147,6 +148,39 @@ def load_ilp_inputs(
 
     stats = stats.copy()
     stats["layer"] = stats["layer"].astype(str)
+
+    # Guardrail against degenerate profiling datasets that produce invalid ILP
+    # conclusions (e.g., all CPU times equal to zero across layers).
+    cpu_time_mean = (
+        pd.to_numeric(stats["cpu_fwd_time_ms_mean"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(stats["cpu_bwd_time_ms_mean"], errors="coerce").fillna(0.0)
+    )
+    gpu_time_mean = (
+        pd.to_numeric(stats["gpu_fwd_time_ms_mean"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(stats["gpu_bwd_time_ms_mean"], errors="coerce").fillna(0.0)
+    )
+
+    if (cpu_time_mean < 0).any() or (gpu_time_mean < 0).any():
+        raise ValueError("Invalid profiling data: negative timing values detected")
+
+    all_cpu_zero = bool((cpu_time_mean <= 0).all())
+    all_gpu_zero = bool((gpu_time_mean <= 0).all())
+    if all_cpu_zero or all_gpu_zero:
+        bad = "CPU" if all_cpu_zero else "GPU"
+        raise ValueError(
+            "Invalid profiling data for ILP: "
+            f"all {bad} mean times are zero across layers in {stats_path}. "
+            "This dataset is degenerate for comparative partitioning."
+        )
+
+    if strict_metric_validity:
+        zero_layer_count = int(((cpu_time_mean <= 0) | (gpu_time_mean <= 0)).sum())
+        if zero_layer_count > 0:
+            raise ValueError(
+                "Invalid profiling data for ILP: "
+                f"{zero_layer_count} layer(s) have non-positive CPU or GPU mean time. "
+                "Disable strict_metric_validity only for explicit diagnostic runs."
+            )
 
     gpu_time = _robust_value(stats, "gpu_fwd_time_ms", k_sigma) + _robust_value(stats, "gpu_bwd_time_ms", k_sigma)
     cpu_time = _robust_value(stats, "cpu_fwd_time_ms", k_sigma) + _robust_value(stats, "cpu_bwd_time_ms", k_sigma)

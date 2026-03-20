@@ -162,6 +162,14 @@ Crear una capa intermedia entre solucion ILP y ejecucion real. El simulador debe
 
 Esta fase cierra el nucleo del capitulo de resolucion y simulacion, y reduce el salto conceptual entre formulacion matematica y experimento fisico.
 
+## 6.7 Acta de cierre de Fase 2 (2026-03-19)
+
+La Fase 2 queda formalmente cerrada tras verificar, sobre el pipeline activo del proyecto, que la solucion ILP puede transformarse en un plan ejecutable auditable y evaluarse de forma determinista antes de la ejecucion fisica. El cierre se sustenta en la incorporacion de una representacion formal del plan en `src/runtime/plan_representation.py`, un simulador de costos y restricciones en `src/runtime/simulator.py`, y una interfaz de validacion reproducible en `validation/validate_ilp_pipeline.py`, complementadas con su integracion opcional post-solve en `validation/run_ilp_partition.py`.
+
+La verificacion funcional confirma el cumplimiento integral de los criterios de aceptacion. Para artefactos validos, el simulador produce resumen JSON y desglose CSV con estabilidad bit a bit en ejecuciones repetidas, lo que acredita reproducibilidad operativa. Para escenarios de inconsistencia, el sistema detecta y reporta de manera explicita incoherencias topologicas y de corte, ausencia de costos de transferencia cuando aplica modo estricto, y violaciones de presupuesto de memoria por dispositivo, emitiendo estado invalido y codigo de salida de error. En consecuencia, los reportes de simulacion quedan habilitados como evidencia pre-ejecucion citable en la tesis.
+
+Durante el cierre se introdujo ademas un refuerzo metodologico en la carga de datos ILP (`src/ilp/data_loader.py`) para bloquear datasets degenerados con tiempos no positivos que inducen conclusiones espurias. Esta salvaguarda no altera el alcance de la fase, pero fortalece la validez interna de toda evidencia derivada de la simulacion y preserva la coherencia cientifica del programa doctoral.
+
 ## 7. Fase 3: ejecutor hibrido real guiado por ILP
 
 ### 7.1 Objetivo

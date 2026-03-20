@@ -21,7 +21,7 @@ def save_ilp_solution(solution: ILPSolution, output_dir: str) -> Dict[str, str]:
     pd.DataFrame(assign_rows).to_csv(assign_path, index=False)
 
     cut_rows = [{"src_layer": u, "dst_layer": v} for (u, v) in solution.cut_edges]
-    pd.DataFrame(cut_rows).to_csv(cut_path, index=False)
+    pd.DataFrame(cut_rows, columns=["src_layer", "dst_layer"]).to_csv(cut_path, index=False)
 
     payload = {
         "status": solution.status,
