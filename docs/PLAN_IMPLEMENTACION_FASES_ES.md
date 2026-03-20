@@ -211,6 +211,14 @@ El primer objetivo no debe ser soportar todos los modelos complejos del reposito
 
 Esta fase transforma la tesis de una propuesta de optimizacion offline a una contribucion de sistemas con evidencia operacional real.
 
+## 7.8 Acta de cierre de Fase 3 (2026-03-19)
+
+La Fase 3 queda formalmente cerrada tras validar, en hardware CPU-GPU del entorno de desarrollo, la ejecucion hibrida guiada por plan ILP sobre el modelo piloto `simple_mlp`. El cierre se sustenta en la incorporacion de `src/runtime/device_plan.py` y `src/runtime/hybrid_executor.py`, junto con la interfaz reproducible `validation/run_hybrid_execution.py` y su cobertura de pruebas en `tests/test_hybrid_executor.py`.
+
+La validacion confirma cumplimiento de los criterios de aceptacion de la fase. El runtime ejecuta el plan sin violar integridad funcional, emite trazas por paso (forward, backward, optimizacion y transferencias), y reporta memoria maxima en GPU y eventos de cruce CPU-GPU. Adicionalmente, se cierra de forma explicita el requisito de energia observada: la ejecucion exporta potencia promedio y energia total medida en artefactos JSON/CSV, con fuente de medicion declarada (`nvml` para GPU o `rapl` para CPU cuando aplica).
+
+Para preservar rigor metodologico, el CLI aborta por defecto si el plan requiere GPU y CUDA no esta disponible, evitando evidencia degradada no declarada. El fallback a CPU queda permitido solo bajo bandera explicita para diagnostico (`--allow_cpu_fallback`). En consecuencia, la Fase 3 queda habilitada como evidencia de ejecucion fisica auditable y comparable contra predicciones del simulador.
+
 ## 8. Fase 4: extensiones del modelo con persistencia de activaciones
 
 ### 8.1 Objetivo
