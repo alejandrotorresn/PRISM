@@ -107,6 +107,25 @@ def _prepare_ablation_table(df: pd.DataFrame) -> pd.DataFrame:
     return keep
 
 
+def _prepare_hybrid_table(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy().sort_values(by=["model"], kind="stable")
+    keep = pd.DataFrame(
+        {
+            "Model": out["model"],
+            "Optimizer": out["config_optimizer"].fillna("-"),
+            "Precision": out["config_precision"].fillna("-"),
+            "Batch": out["config_batch_size"].map(lambda v: _fmt_float(v, 0)),
+            "Avg Step (ms)": out["avg_step_ms"].map(lambda v: _fmt_float(v, 3)),
+            "Final Loss": out["final_loss"].map(lambda v: _fmt_float(v, 3)),
+            "Metric": out["quality_metric_name"].fillna("-"),
+            "Metric Value": out["final_quality_metric"].map(lambda v: _fmt_float(v, 3)),
+            "Dataset": out["dataset_name"].fillna("-"),
+            "Input Source": out["input_source"].fillna("-"),
+        }
+    )
+    return keep
+
+
 def _latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
     body = df.to_latex(index=False, escape=False)
     return "\n".join(
@@ -127,12 +146,14 @@ def main() -> int:
     parser.add_argument("--best_csv", default="reports/ilp_results/ilp_best_per_model.csv")
     parser.add_argument("--consolidated_csv", default="reports/ilp_results/ilp_pareto_consolidated.csv")
     parser.add_argument("--ablation_csv", default="reports/ilp_results/ilp_ablation_consolidated.csv")
+    parser.add_argument("--hybrid_csv", default="reports/ilp_results/hybrid_execution_best_per_model.csv")
     parser.add_argument("--output_dir", default="reports/ilp_results/latex")
     args = parser.parse_args()
 
     best_path = Path(args.best_csv)
     cons_path = Path(args.consolidated_csv)
     abl_path = Path(args.ablation_csv)
+    hybrid_path = Path(args.hybrid_csv)
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,6 +182,7 @@ def main() -> int:
     best_path_tex = out_dir / "ilp_best_per_model.tex"
     budget_path_tex = out_dir / "ilp_budget_sweep.tex"
     ablation_path_tex = out_dir / "ilp_ablation_best_per_variant.tex"
+    hybrid_path_tex = out_dir / "ilp_hybrid_best_per_model.tex"
     all_path_tex = out_dir / "ilp_tables.tex"
 
     best_path_tex.write_text(best_tex)
@@ -179,6 +201,18 @@ def main() -> int:
             ablation_path_tex.write_text(abl_tex)
             combined_tex += "\n" + abl_tex
 
+    if hybrid_path.exists():
+        hybrid_df = pd.read_csv(hybrid_path)
+        if not hybrid_df.empty:
+            hybrid_tbl = _prepare_hybrid_table(hybrid_df)
+            hybrid_tex = _latex_table(
+                hybrid_tbl,
+                caption="Best observed hybrid runtime row per model with task-quality metric and dataset provenance.",
+                label="tab:ilp-hybrid-best-per-model",
+            )
+            hybrid_path_tex.write_text(hybrid_tex)
+            combined_tex += "\n" + hybrid_tex
+
     all_path_tex.write_text(combined_tex)
 
     print("=" * 80)
@@ -188,6 +222,8 @@ def main() -> int:
     print(f"Budget sweep table: {budget_path_tex}")
     if ablation_path_tex.exists():
         print(f"Ablation table: {ablation_path_tex}")
+    if hybrid_path_tex.exists():
+        print(f"Hybrid table: {hybrid_path_tex}")
     print(f"Combined tables: {all_path_tex}")
     print("=" * 80)
     return 0

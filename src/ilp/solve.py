@@ -10,6 +10,17 @@ from .model_builder import ILPConfig, build_problem_data, build_problem_data_dua
 from .advanced_terms import ActivationStrategy
 
 
+def _sanitize_lp_name(name: str) -> str:
+    """Sanitize a layer name for use as a PuLP/CBC variable identifier.
+    CBC rejects variable names that contain dots, brackets, or hyphens."""
+    return (
+        name.replace(".", "_")
+            .replace("[", "_lb_")
+            .replace("]", "_rb_")
+            .replace("-", "_")
+    )
+
+
 @dataclass
 class ILPSolution:
     status: str
@@ -109,9 +120,9 @@ def _solve_with_pulp(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     problem_data = build_problem_data(data, cfg)
     prob = pulp.LpProblem("cpu_gpu_partition", pulp.LpMinimize)
 
-    x = {n: pulp.LpVariable(f"x_{n}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    x = {n: pulp.LpVariable(f"x_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
     y = {
-        e: pulp.LpVariable(f"y_{e[0]}__{e[1]}", lowBound=0, upBound=1, cat=pulp.LpBinary)
+        e: pulp.LpVariable(f"y_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary)
         for e in data.edges
     }
 
@@ -174,11 +185,15 @@ def _eval_assignment_dual(
     cpu_mem_fwd = sum(problem.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0)
     gpu_mem_bwd = sum(problem.gpu_mem[n] for n in data.nodes if bwd_bits[n] == 1)
     cpu_mem_bwd = sum(problem.cpu_mem[n] for n in data.nodes if bwd_bits[n] == 0)
+    # During backward pass, forward activations must remain resident alongside the
+    # backward computation tensors, so the combined memory of both phases must fit.
     if (
         gpu_mem_fwd > cfg.gpu_mem_budget_mb
         or cpu_mem_fwd > cfg.cpu_mem_budget_mb
         or gpu_mem_bwd > cfg.gpu_mem_budget_mb
         or cpu_mem_bwd > cfg.cpu_mem_budget_mb
+        or (gpu_mem_fwd + gpu_mem_bwd) > cfg.gpu_mem_budget_mb
+        or (cpu_mem_fwd + cpu_mem_bwd) > cfg.cpu_mem_budget_mb
     ):
         return None
 
@@ -201,7 +216,7 @@ def _eval_assignment_dual(
             cut_edges_bwd.append(e)
 
     cross_phase_edges = [(n, n) for n in data.nodes if fwd_bits[n] != bwd_bits[n]]
-    return obj, max(gpu_mem_fwd, gpu_mem_bwd), max(cpu_mem_fwd, cpu_mem_bwd), cut_edges_fwd, cut_edges_bwd, cross_phase_edges
+    return obj, gpu_mem_fwd + gpu_mem_bwd, cpu_mem_fwd + cpu_mem_bwd, cut_edges_fwd, cut_edges_bwd, cross_phase_edges
 
 
 def _solve_exhaustive_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
@@ -278,11 +293,11 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     problem_data = build_problem_data_dual(data, cfg)
     prob = pulp.LpProblem("cpu_gpu_partition_dual", pulp.LpMinimize)
 
-    xf = {n: pulp.LpVariable(f"xf_{n}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
-    xb = {n: pulp.LpVariable(f"xb_{n}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
-    yf = {e: pulp.LpVariable(f"yf_{e[0]}__{e[1]}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
-    yb = {e: pulp.LpVariable(f"yb_{e[0]}__{e[1]}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
-    z = {n: pulp.LpVariable(f"z_{n}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    xf = {n: pulp.LpVariable(f"xf_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    xb = {n: pulp.LpVariable(f"xb_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    yf = {e: pulp.LpVariable(f"yf_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
+    yb = {e: pulp.LpVariable(f"yb_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
+    z = {n: pulp.LpVariable(f"z_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
 
     prob += (
         pulp.lpSum(problem_data.objective_fwd_gpu[n] * xf[n] + problem_data.objective_fwd_cpu[n] * (1 - xf[n]) for n in data.nodes)
@@ -313,6 +328,17 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     prob += pulp.lpSum(problem_data.gpu_mem[n] * xb[n] for n in data.nodes) <= cfg.gpu_mem_budget_mb
     prob += pulp.lpSum(problem_data.cpu_mem[n] * (1 - xb[n]) for n in data.nodes) <= cfg.cpu_mem_budget_mb
 
+    # Combined peak: during backward pass, forward activations are retained alongside
+    # backward computation tensors; both phases' memory is simultaneously required.
+    prob += (
+        pulp.lpSum(problem_data.gpu_mem[n] * xf[n] for n in data.nodes)
+        + pulp.lpSum(problem_data.gpu_mem[n] * xb[n] for n in data.nodes)
+    ) <= cfg.gpu_mem_budget_mb
+    prob += (
+        pulp.lpSum(problem_data.cpu_mem[n] * (1 - xf[n]) for n in data.nodes)
+        + pulp.lpSum(problem_data.cpu_mem[n] * (1 - xb[n]) for n in data.nodes)
+    ) <= cfg.cpu_mem_budget_mb
+
     solver = pulp.PULP_CBC_CMD(msg=False)
     prob.solve(solver)
 
@@ -339,13 +365,13 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     cut_edges_fwd = [e for e in data.edges if fwd_bits[e[0]] != fwd_bits[e[1]]]
     cut_edges_bwd = [e for e in data.edges if bwd_bits[e[0]] != bwd_bits[e[1]]]
     cross_edges = [(n, n) for n in data.nodes if fwd_bits[n] != bwd_bits[n]]
-    gpu_mem = max(
-        sum(problem_data.gpu_mem[n] for n in data.nodes if fwd_bits[n] == 1),
-        sum(problem_data.gpu_mem[n] for n in data.nodes if bwd_bits[n] == 1),
+    gpu_mem = (
+        sum(problem_data.gpu_mem[n] for n in data.nodes if fwd_bits[n] == 1)
+        + sum(problem_data.gpu_mem[n] for n in data.nodes if bwd_bits[n] == 1)
     )
-    cpu_mem = max(
-        sum(problem_data.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0),
-        sum(problem_data.cpu_mem[n] for n in data.nodes if bwd_bits[n] == 0),
+    cpu_mem = (
+        sum(problem_data.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0)
+        + sum(problem_data.cpu_mem[n] for n in data.nodes if bwd_bits[n] == 0)
     )
 
     return ILPSolution(
@@ -484,13 +510,20 @@ def _solve_phase4_greedy(data: ILPInputData, cfg: ILPConfig4) -> ILPSolution4:
 
         candidates.sort(key=lambda item: item[0], reverse=True)
         selected: set[str] = set()
-        target_gpu_mem = min(gpu_budget, gpu_mem_used) * 0.90
+        target_gpu_mem = 0.60 * gpu_budget  # reduce to just below the trigger threshold
 
         for _, node, strategy_name in candidates:
             if node in selected:
                 continue
             if gpu_mem_used <= target_gpu_mem:
                 break
+            # Before applying a checkpoint strategy, verify it won't violate the
+            # CPU memory budget.  Checkpointing moves activation memory from GPU
+            # to CPU; if the CPU budget is already tight, skip this candidate.
+            if strategy_name == "checkpoint" and forward_assignment.get(node, "CPU") == "GPU":
+                act_mem = float(problem4.activation_meta.node_mem_activation_mb.get(node, 0.0))
+                if cpu_mem_used + act_mem > cfg.cpu_mem_budget_mb:
+                    continue
             _apply_strategy(node, strategy_name)
             selected.add(node)
     
@@ -512,10 +545,147 @@ def _solve_phase4_greedy(data: ILPInputData, cfg: ILPConfig4) -> ILPSolution4:
     )
 
 
+def _solve_phase4_exhaustive(data: ILPInputData, cfg: ILPConfig4) -> ILPSolution4:
+    """Phase 4 exhaustive strategy search on top of dual placement baseline."""
+    baseline_solution = solve_partition_ilp(data, cfg, backend="auto")
+
+    if baseline_solution.status != "optimal":
+        return ILPSolution4(
+            status=baseline_solution.status,
+            backend="exhaustive_phase4",
+            objective_value=baseline_solution.objective_value,
+            assignment=baseline_solution.assignment,
+            gpu_mem_used_mb=baseline_solution.gpu_mem_used_mb,
+            cpu_mem_used_mb=baseline_solution.cpu_mem_used_mb,
+            cut_edges=baseline_solution.cut_edges,
+            forward_assignment=baseline_solution.forward_assignment,
+            backward_assignment=baseline_solution.backward_assignment,
+            backward_cut_edges=baseline_solution.backward_cut_edges,
+            cross_phase_edges=baseline_solution.cross_phase_edges,
+            activation_strategies={n: ActivationStrategy(n, retain=True) for n in data.nodes},
+            mode="phase3",
+        )
+
+    if len(data.nodes) > 18:
+        raise RuntimeError(
+            f"Exhaustive Phase 4 backend is limited to <=18 nodes, got {len(data.nodes)}. "
+            "Use backend='greedy' for larger graphs."
+        )
+
+    problem4 = build_problem_data_phase4(data, cfg)
+    forward_assignment = baseline_solution.forward_assignment or baseline_solution.assignment
+    backward_assignment = baseline_solution.backward_assignment or baseline_solution.assignment
+
+    options_by_node: Dict[str, List[str]] = {n: ["retain"] for n in data.nodes}
+    for n in data.nodes:
+        if cfg.enable_recompute:
+            options_by_node[n].append("recompute")
+        if cfg.enable_checkpoint:
+            options_by_node[n].append("checkpoint")
+
+    search_space = 1
+    for node in data.nodes:
+        search_space *= len(options_by_node[node])
+    if search_space > 2_000_000:
+        raise RuntimeError(
+            "Exhaustive Phase 4 search space is too large "
+            f"({search_space} combinations). Use backend='greedy' or backend='auto'."
+        )
+
+    best_obj = None
+    best_gpu_mem = 0.0
+    best_cpu_mem = 0.0
+    best_strategies: Dict[str, ActivationStrategy] = {n: ActivationStrategy(n, retain=True) for n in data.nodes}
+
+    baseline_gpu_mem = float(baseline_solution.gpu_mem_used_mb)
+    baseline_cpu_mem = float(baseline_solution.cpu_mem_used_mb)
+    baseline_obj = float(baseline_solution.objective_value)
+
+    node_order = list(data.nodes)
+    for combo in product(*[options_by_node[n] for n in node_order]):
+        gpu_mem = baseline_gpu_mem
+        cpu_mem = baseline_cpu_mem
+        obj = baseline_obj
+
+        strategies: Dict[str, ActivationStrategy] = {}
+        feasible = True
+
+        for idx, node in enumerate(node_order):
+            strategy_name = combo[idx]
+            on_gpu = forward_assignment.get(node, "CPU") == "GPU"
+            act_mem = float(problem4.activation_meta.node_mem_activation_mb.get(node, 0.0))
+
+            if strategy_name == "retain":
+                strategies[node] = ActivationStrategy(node, retain=True)
+                continue
+
+            if strategy_name == "recompute":
+                strategies[node] = ActivationStrategy(node, recompute=True)
+                delta_time = float((problem4.recompute_cost_gpu if on_gpu else problem4.recompute_cost_cpu).get(node, 0.0))
+                obj += (cfg.w_time * delta_time) + (cfg.w_io * delta_time)
+                if on_gpu:
+                    gpu_mem = max(0.0, gpu_mem - act_mem)
+
+            elif strategy_name == "checkpoint":
+                strategies[node] = ActivationStrategy(node, checkpoint=True)
+                delta_time = float((problem4.checkpoint_cost_gpu if on_gpu else problem4.checkpoint_cost_cpu).get(node, 0.0))
+                delta_energy = float(problem4.activation_meta.node_energy_io_j.get(node, 0.0))
+                obj += (cfg.w_time * delta_time) + (cfg.w_energy * delta_energy) + (cfg.w_io * delta_time)
+                if on_gpu:
+                    gpu_mem = max(0.0, gpu_mem - act_mem)
+                    cpu_mem += act_mem
+
+            if gpu_mem > cfg.gpu_mem_budget_mb or cpu_mem > cfg.cpu_mem_budget_mb:
+                feasible = False
+                break
+
+        if not feasible:
+            continue
+
+        if best_obj is None or obj < best_obj:
+            best_obj = float(obj)
+            best_gpu_mem = float(gpu_mem)
+            best_cpu_mem = float(cpu_mem)
+            best_strategies = strategies
+
+    if best_obj is None:
+        return ILPSolution4(
+            status="infeasible",
+            backend="exhaustive_phase4",
+            objective_value=float("inf"),
+            assignment=dict(forward_assignment),
+            gpu_mem_used_mb=float(baseline_gpu_mem),
+            cpu_mem_used_mb=float(baseline_cpu_mem),
+            cut_edges=list(baseline_solution.cut_edges),
+            forward_assignment=dict(forward_assignment),
+            backward_assignment=dict(backward_assignment),
+            backward_cut_edges=list(baseline_solution.backward_cut_edges or []),
+            cross_phase_edges=list(baseline_solution.cross_phase_edges or []),
+            activation_strategies={n: ActivationStrategy(n, retain=True) for n in data.nodes},
+            mode="phase4",
+        )
+
+    return ILPSolution4(
+        status="optimal",
+        backend="exhaustive_phase4",
+        objective_value=float(best_obj),
+        assignment=dict(forward_assignment),
+        gpu_mem_used_mb=float(best_gpu_mem),
+        cpu_mem_used_mb=float(best_cpu_mem),
+        cut_edges=list(baseline_solution.cut_edges),
+        forward_assignment=dict(forward_assignment),
+        backward_assignment=dict(backward_assignment),
+        backward_cut_edges=list(baseline_solution.backward_cut_edges or []),
+        cross_phase_edges=list(baseline_solution.cross_phase_edges or []),
+        activation_strategies=best_strategies,
+        mode="phase4",
+    )
+
+
 def solve_partition_ilp_phase4(
     data: ILPInputData,
     cfg: ILPConfig4,
-    backend: str = "greedy"
+    backend: str = "auto"
 ) -> ILPSolution4:
     """
     Solve Phase 4 problem with activation persistence strategies.
@@ -523,13 +693,24 @@ def solve_partition_ilp_phase4(
     Args:
       data: ILP input data (extended with activation metadata)
       cfg: ILPConfig4 with Phase 4 parameters
-      backend: "greedy" (available now) or "pulp" (future)
+    backend: "auto", "greedy" or "exhaustive"
     
     Returns:
       ILPSolution4 with activation strategies per node
     """
+    if backend == "auto":
+        options_per_node = 1 + int(bool(cfg.enable_recompute)) + int(bool(cfg.enable_checkpoint))
+        search_space = options_per_node ** len(data.nodes)
+        # Keep auto backend conservative for campaign stability.
+        if len(data.nodes) <= 14 and search_space <= 250_000:
+            return _solve_phase4_exhaustive(data, cfg)
+        return _solve_phase4_greedy(data, cfg)
+
     if backend == "greedy":
         return _solve_phase4_greedy(data, cfg)
-    
+
+    if backend == "exhaustive":
+        return _solve_phase4_exhaustive(data, cfg)
+
     raise ValueError(f"Unsupported Phase 4 backend: {backend}")
 

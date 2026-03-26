@@ -74,6 +74,27 @@ class TestPhase4Comparison(unittest.TestCase):
                 ("relu_1", "conv2d_2"): 12.0,
                 ("conv2d_2", "output"): 5.0,
             },
+            node_mem_activation_mb={
+                "conv2d_1": 179.2,
+                "bn_1": 44.8,
+                "relu_1": 44.8,
+                "conv2d_2": 358.4,
+                "output": 22.4,
+            },
+            node_time_io_ms={
+                "conv2d_1": 3.0,
+                "bn_1": 0.75,
+                "relu_1": 0.3,
+                "conv2d_2": 3.75,
+                "output": 0.45,
+            },
+            node_energy_io_j={
+                "conv2d_1": 0.05,
+                "bn_1": 0.05,
+                "relu_1": 0.05,
+                "conv2d_2": 0.05,
+                "output": 0.05,
+            },
         )
 
     def test_phase3_vs_phase4_objective(self):
@@ -141,7 +162,7 @@ class TestPhase4Comparison(unittest.TestCase):
             self.assertTrue(strategy.is_valid)
             self.assertEqual(strategy.node, node)
             active_count = int(strategy.retain) + int(strategy.recompute) + int(strategy.checkpoint)
-            self.assertLessEqual(active_count, 1)
+            self.assertEqual(active_count, 1)  # exactly one strategy must be active
         
         # At least some nodes should be assigned (obviously)
         self.assertGreater(len(strategies), 0)

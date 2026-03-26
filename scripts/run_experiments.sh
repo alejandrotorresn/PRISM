@@ -23,16 +23,21 @@ if [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
     conda activate thesis_env 2>/dev/null || true
 fi
 
+source "$(dirname "$0")/sanitize_cuda_env.sh"
+sanitize_cuda_runtime_env
+
 # Global Configuration
 PYTHON_CMD="${PYTHON_CMD:-python}"
 PROFILER_SCRIPT="${PROFILER_SCRIPT:-src/profiler.py}"
+DATASET_SCRIPT="${DATASET_SCRIPT:-scripts/download_datasets.py}"
 HOST_TAG="${HOST_TAG:-$(hostname)}"
 BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results}"
+DATASETS_DIR="${DATASETS_DIR:-datasets}"
 LOG_DIR="${LOG_DIR:-logs}"
 LOG_FILE="${LOG_DIR}/experiments_$(date +%Y%m%d_%H%M%S).txt"
 
-# Create directories
-mkdir -p "$BASE_OUTPUT_DIR" "$LOG_DIR"
+# Create log directory early; output directory is normalized later before execution.
+mkdir -p "$LOG_DIR"
 
 # --- GRID SEARCH SPACE DEFINITION ---
 # How to use this script:
@@ -42,7 +47,7 @@ mkdir -p "$BASE_OUTPUT_DIR" "$LOG_DIR"
 # 4) Inspect the generated timestamped log in logs/ and results tree in data/results/.
 
 # 1. Models: Vision (ResNet, ViT), NLP (BERT, GPT2), Baseline (MLP)
-MODELS=("resnet50" "resnet152" "vit_b16" "bert_base" "gpt2_small" "simple_mlp")
+MODELS=("resnet50" "resnet152" "vit_b16" "bert_base" "gpt2_small" "distilgpt2" "simple_mlp")
 # MODELS=("vit_b16")  # Fast test: single model
 MODELS_CSV="${MODELS_CSV:-}"
 
@@ -80,6 +85,7 @@ AGGREGATOR_SCRIPT="${AGGREGATOR_SCRIPT:-validation/aggregate_metrics_stats.py}"
 ENABLE_RAPL="${ENABLE_RAPL:-true}"          # true = pass --rapl when CPU profiling is enabled
 FAIL_FAST="${FAIL_FAST:-false}"             # true = abort the campaign on first profiler/aggregation failure
 DRY_RUN="${DRY_RUN:-false}"                 # true = print commands and validate preflight without executing runs
+DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}"
 
 if [ "$SMOKE_MODE" = true ]; then
     # Smoke mode intentionally shrinks the grid for a fast end-to-end health check.
@@ -109,6 +115,11 @@ trim_spaces() {
     value="${value#${value%%[![:space:]]*}}"
     value="${value%${value##*[![:space:]]}}"
     printf '%s' "$value"
+}
+
+join_by_comma() {
+    local IFS=,
+    printf '%s' "$*"
 }
 
 apply_csv_override() {
@@ -159,7 +170,11 @@ require_command_or_executable() {
     local label="$2"
 
     if [[ "$cmd" == *" "* ]]; then
-        log_msg "[ERROR] $label must be a single executable path or command name. Got: $cmd"
+        # Allow executable paths containing spaces, but reject command+args patterns.
+        if [ -x "$cmd" ]; then
+            return 0
+        fi
+        log_msg "[ERROR] $label appears to include spaces but is not an executable path: $cmd"
         exit 1
     fi
 
@@ -193,6 +208,63 @@ run_python_help_check() {
     fi
 }
 
+normalize_output_dir_for_host_sh() {
+    local output_dir="$1"
+    local host_name="$2"
+
+    if [ -z "$output_dir" ]; then
+        printf '%s' "$output_dir"
+        return
+    fi
+
+    local normalized="${output_dir//\\//}"
+    local leading_slash=""
+    if [[ "$normalized" == /* ]]; then
+        leading_slash="/"
+    fi
+
+    local IFS='/'
+    local raw_parts=()
+    local parts=()
+    read -r -a raw_parts <<< "$normalized"
+
+    local p
+    for p in "${raw_parts[@]}"; do
+        if [ -n "$p" ]; then
+            parts+=("$p")
+        fi
+    done
+
+    if [ ${#parts[@]} -eq 0 ]; then
+        printf '%s' "$output_dir"
+        return
+    fi
+
+    local data_idx=-1
+    local i
+    for i in "${!parts[@]}"; do
+        if [ "${parts[$i]}" = "data" ]; then
+            data_idx=$i
+            break
+        fi
+    done
+
+    if [ "$data_idx" -lt 0 ]; then
+        printf '%s' "$output_dir"
+        return
+    fi
+
+    if [ $((data_idx + 1)) -lt ${#parts[@]} ] && [ "${parts[$((data_idx + 1))]}" = "$host_name" ]; then
+        printf '%s' "$output_dir"
+        return
+    fi
+
+    local new_parts=("${parts[@]:0:$((data_idx + 1))}" "$host_name" "${parts[@]:$((data_idx + 1))}")
+    local joined
+    joined=$(IFS=/; echo "${new_parts[*]}")
+    printf '%s%s' "$leading_slash" "$joined"
+}
+
 handle_failure() {
     local exit_code="$1"
     local context="$2"
@@ -206,6 +278,7 @@ handle_failure() {
 preflight_checks() {
     require_command_or_executable "$PYTHON_CMD" "PYTHON_CMD"
     run_python_help_check "$PROFILER_SCRIPT" "Profiler script"
+    run_python_help_check "$DATASET_SCRIPT" "Dataset download script"
 
     if is_true "$AUTO_AGGREGATE_STATS"; then
         run_python_help_check "$AGGREGATOR_SCRIPT" "Aggregator script"
@@ -239,6 +312,7 @@ print_summary() {
     log_msg "========================================================"
     log_msg "Script: $PROFILER_SCRIPT"
     log_msg "Output Directory: $BASE_OUTPUT_DIR"
+    log_msg "Datasets Directory: $DATASETS_DIR"
     log_msg "Log File: $LOG_FILE"
     log_msg "Models: ${MODELS[*]}"
     log_msg "Batch Sizes: ${BATCH_SIZES[*]}"
@@ -272,6 +346,9 @@ print_summary() {
 # E) Execute, log success/failure, and continue the campaign.
 
 apply_grid_overrides
+BASE_OUTPUT_DIR="$(normalize_output_dir_for_host_sh "$BASE_OUTPUT_DIR" "$HOST_TAG")"
+mkdir -p "$BASE_OUTPUT_DIR"
+
 log_msg "Starting Advanced Profiler Experiment Campaign"
 preflight_checks
 print_summary
@@ -284,6 +361,13 @@ fi
 if [ "$USE_SKIP_CPU" = true ] && [ "$HAS_GPU" = false ]; then
     log_msg "⚠ WARNING: USE_SKIP_CPU=true requires GPU execution target. Disabling USE_SKIP_CPU for this run."
     USE_SKIP_CPU=false
+fi
+
+if is_true "$DOWNLOAD_DATASETS"; then
+    DATASET_MODELS_CSV="$(join_by_comma "${MODELS[@]}")"
+    log_msg "Preparing datasets for models: $DATASET_MODELS_CSV"
+    "$PYTHON_CMD" "$DATASET_SCRIPT" --models "$DATASET_MODELS_CSV" --datasets_root "$DATASETS_DIR" >> "$LOG_FILE" 2>&1
+    log_msg "Dataset preparation finished"
 fi
 
 TOTAL_EXPERIMENTS=$((${#MODELS[@]} * ${#OPTIMIZERS[@]} * ${#PRECISIONS[@]} * ${#BATCH_SIZES[@]} * REPEATS))
@@ -329,6 +413,8 @@ for model in "${MODELS[@]}"; do
                         --warmup "$WARMUP"
                         --measure "$MEASURE"
                         --output_dir "$RUN_OUT_DIR"
+                        --datasets_root "$DATASETS_DIR"
+                        --require_datasets
                         --seed "$RUN_SEED"
                         --run_id "$RUN_ID"
                     )

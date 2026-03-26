@@ -34,7 +34,7 @@ python src/profiler.py --model resnet50
 ```
 
 ### Available arguments
-- `--model`: resnet50, resnet152, vit_b16, bert_base, gpt2_small, simple_mlp
+- `--model`: resnet50, resnet152, vit_b16, bert_base, gpt2_small, distilgpt2, simple_mlp
 - `--precision`: fp32, fp16, bf16
 - `--batch_size`: batch size (default: 8)
 - `--warmup`: warmup iterations (default: 5)
@@ -68,7 +68,7 @@ python src/profiler.py --model simple_mlp --no_gpu --precision fp32 --warmup 1 -
 ## Internal Workflow
 
 - Determinism: global seeds and PyTorch flags; fallback if deterministic algorithms cannot be forced.
-- Factory and casting: model creation and synthetic data; before execution, a CPU ISA precision policy is evaluated. If the requested precision has no accelerated path, training/profiling is not executed and skip-status artifacts are saved.
+- Factory and casting: model creation and dataset-backed inputs loaded from `datasets/` when available, with synthetic fallback only for explicit non-required runs; before execution, a CPU ISA precision policy is evaluated. If the requested precision has no accelerated path, training/profiling is not executed and skip-status artifacts are saved.
 - Per-layer hooks (leaf-only): pre/post hooks measure GPU kernel time (CUDA Events) or CPU wall-clock, dispatch overhead (`dispatch_ms = max(0, wall_ms - kernel_ms)`), peak memory (global proxy), output size (PCIe payload), and theoretical FLOPs by geometry (Conv, Linear, activations, norm; attention heuristic).
 - PCIe calibration: estimates α/β for H2D and D2H; parameters are used as the H2D payload proxy and activations as the D2H payload proxy.
 - Energy: NVML for GPU; optional pyRAPL for CPU. If RAPL is unavailable or fails, CPU energy is `None` in metadata and `0.0` in the per-layer CSV.

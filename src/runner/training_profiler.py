@@ -14,6 +14,7 @@ from core.constants import (
     WARMUP_STEPS,
 )
 from core.energy import EnergyMonitor
+from core.loss_utils import compute_stable_surrogate_loss
 from core.graph_extractor import export_graph_artifacts
 from core.io_artifacts import cleanup_artifacts, write_csv_rows, write_json_dict
 from core.metrics import estimate_flops, get_tensor_size_recursive
@@ -47,15 +48,7 @@ class TrainingProfiler:
                 yield name, module
 
     def _compute_loss(self, out: Any) -> torch.Tensor:
-        if hasattr(out, "loss") and out.loss is not None:
-            return out.loss
-        if hasattr(out, "logits"):
-            return out.logits.sum()
-        if isinstance(out, torch.Tensor):
-            return out.sum()
-        if isinstance(out, (tuple, list)) and isinstance(out[0], torch.Tensor):
-            return out[0].sum()
-        return torch.tensor(0.0, requires_grad=True)
+        return compute_stable_surrogate_loss(out)
 
     def _register_hooks(self, device_type: str):
         for h in self.hooks:
@@ -269,6 +262,7 @@ class TrainingProfiler:
         gpu_layer_stats: Dict[str, Dict[str, Any]],
     ) -> Dict[str, Any]:
         try:
+            self.model.to("cpu")
             merged_layer_stats = self._merge_layer_stats(
                 cpu_layer_stats=cpu_layer_stats,
                 gpu_layer_stats=gpu_layer_stats,
@@ -280,8 +274,14 @@ class TrainingProfiler:
                 input_data=input_data,
                 layer_stats=merged_layer_stats,
                 include_records=True,
+                allow_fallback_graph=getattr(self.args, "allow_fallback_graph", False),
             )
         except Exception as e:
+            if not getattr(self.args, "allow_fallback_graph", False):
+                raise RuntimeError(
+                    "Graph artifact export failed under strict structured-trace policy. "
+                    "Re-run with --allow_fallback_graph only for explicit diagnostics."
+                ) from e
             logger.warning(f"Graph artifact export failed (non-fatal): {e}")
             return {}
 
@@ -290,85 +290,119 @@ class TrainingProfiler:
             return {}
         logger.info("--> Calibrating PCIe Bandwidth & Overlap Ratio (Sigma)...")
 
-        dev = f"cuda:{self.gpu_id}"
-        size_mb = 256
-        numel = int(size_mb * 1024**2 / 4)
-        h_tensor = torch.randn(numel).pin_memory()
-
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        _ = h_tensor.to(dev, non_blocking=True)
-        torch.cuda.synchronize()
-        t_comm = (time.perf_counter() - start) * 1000.0
-
-        s_transfer = torch.cuda.Stream()
-        a = torch.randn(4096, 4096, device=dev)
-
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        _ = torch.mm(a, a)
-        torch.cuda.synchronize()
-        t_comp = (time.perf_counter() - start) * 1000.0
-
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        _ = torch.mm(a, a)
-        with torch.cuda.stream(s_transfer):
-            _ = h_tensor.to(dev, non_blocking=True)
-        torch.cuda.synchronize()
-        t_overlap = (time.perf_counter() - start) * 1000.0
-
-        sigma = 1.0 - (max(0, t_overlap - max(t_comm, t_comp)) / (t_comm + 1e-6))
-        alpha_est = 0.05
-        beta_est = size_mb / (t_comm / 1000.0)
-
-        return {
-            "pci_bw_mb_s": beta_est,
-            "t_comm_ms_base": t_comm,
-            "pci_alpha_ms": alpha_est,
-            "overlap_ratio_sigma": max(0.0, min(1.0, sigma)),
-            "t_comp_ms_base": t_comp,
-            "t_overlap_ms": t_overlap,
+        fallback = {
+            "pci_bw_mb_s": 12.0,
+            "t_comm_ms_base": 0.0,
+            "pci_alpha_ms": 0.05,
+            "overlap_ratio_sigma": 0.0,
+            "t_comp_ms_base": 0.0,
+            "t_overlap_ms": 0.0,
+            "overlap_calibration_source": "fallback",
         }
+
+        try:
+            dev = f"cuda:{self.gpu_id}"
+            size_mb = 256
+            numel = int(size_mb * 1024**2 / 4)
+            h_tensor = torch.randn(numel).pin_memory()
+
+            torch.cuda.synchronize()
+            start = time.perf_counter()
+            _ = h_tensor.to(dev, non_blocking=True)
+            torch.cuda.synchronize()
+            t_comm = (time.perf_counter() - start) * 1000.0
+
+            s_transfer = torch.cuda.Stream()
+            a = torch.randn(4096, 4096, device=dev)
+
+            torch.cuda.synchronize()
+            start = time.perf_counter()
+            _ = torch.mm(a, a)
+            torch.cuda.synchronize()
+            t_comp = (time.perf_counter() - start) * 1000.0
+
+            torch.cuda.synchronize()
+            start = time.perf_counter()
+            _ = torch.mm(a, a)
+            with torch.cuda.stream(s_transfer):
+                _ = h_tensor.to(dev, non_blocking=True)
+            torch.cuda.synchronize()
+            t_overlap = (time.perf_counter() - start) * 1000.0
+
+            sigma = 1.0 - (max(0, t_overlap - max(t_comm, t_comp)) / (t_comm + 1e-6))
+            alpha_est = 0.05
+            beta_est = size_mb / (t_comm / 1000.0)
+
+            return {
+                "pci_bw_mb_s": beta_est,
+                "t_comm_ms_base": t_comm,
+                "pci_alpha_ms": alpha_est,
+                "overlap_ratio_sigma": max(0.0, min(1.0, sigma)),
+                "t_comp_ms_base": t_comp,
+                "t_overlap_ms": t_overlap,
+                "overlap_calibration_source": "measured",
+            }
+        except Exception as e:
+            logger.warning(
+                "PCIe/overlap calibration failed; using neutral fallback transfer parameters. Error: %s",
+                e,
+            )
+            return fallback
 
     def _measure_pci_bandwidth_detailed(self) -> Dict[str, float]:
         if not self.has_gpu:
             return {}
         logger.info("--> Calibrating Detailed PCIe (H2D vs D2H)...")
-        results = {}
-        sizes_mb = [10.0, 100.0]
-        dev = f"cuda:{self.gpu_id}"
+        fallback = {
+            "alpha_h2d": 0.05,
+            "beta_h2d": 12.0,
+            "alpha_d2h": 0.05,
+            "beta_d2h": 12.0,
+            "pci_detailed_calibration_source": "fallback",
+        }
 
-        for direction in ["h2d", "d2h"]:
-            times = []
-            for sz in sizes_mb:
-                numel = int(sz * 1024**2 / 4)
-                if direction == "h2d":
-                    src = torch.randn(numel).pin_memory()
-                    dst_dev = dev
+        try:
+            results = {}
+            sizes_mb = [10.0, 100.0]
+            dev = f"cuda:{self.gpu_id}"
+
+            for direction in ["h2d", "d2h"]:
+                times = []
+                for sz in sizes_mb:
+                    numel = int(sz * 1024**2 / 4)
+                    if direction == "h2d":
+                        src = torch.randn(numel).pin_memory()
+                        dst_dev = dev
+                    else:
+                        src = torch.randn(numel, device=dev)
+                        dst_dev = "cpu"
+
+                    _ = src.to(dst_dev, non_blocking=True)
+                    torch.cuda.synchronize()
+
+                    start = time.perf_counter()
+                    _ = src.to(dst_dev, non_blocking=True)
+                    torch.cuda.synchronize()
+                    times.append((time.perf_counter() - start) * 1000.0)
+
+                if times[1] > times[0]:
+                    beta = (sizes_mb[1] - sizes_mb[0]) / (times[1] - times[0])
+                    alpha = max(0.0, times[0] - (sizes_mb[0] / beta))
                 else:
-                    src = torch.randn(numel, device=dev)
-                    dst_dev = "cpu"
+                    beta = 12.0
+                    alpha = 0.05
 
-                _ = src.to(dst_dev, non_blocking=True)
-                torch.cuda.synchronize()
+                results[f"alpha_{direction}"] = alpha
+                results[f"beta_{direction}"] = beta
 
-                start = time.perf_counter()
-                _ = src.to(dst_dev, non_blocking=True)
-                torch.cuda.synchronize()
-                times.append((time.perf_counter() - start) * 1000.0)
-
-            if times[1] > times[0]:
-                beta = (sizes_mb[1] - sizes_mb[0]) / (times[1] - times[0])
-                alpha = max(0.0, times[0] - (sizes_mb[0] / beta))
-            else:
-                beta = 10.0
-                alpha = 0.05
-
-            results[f"alpha_{direction}"] = alpha
-            results[f"beta_{direction}"] = beta
-
-        return results
+            results["pci_detailed_calibration_source"] = "measured"
+            return results
+        except Exception as e:
+            logger.warning(
+                "Detailed PCIe calibration failed; using neutral fallback bandwidth parameters. Error: %s",
+                e,
+            )
+            return fallback
 
     def _measure_peak_flops(self, device: str) -> float:
         logger.info(f"--> Benchmarking Empirical {device.upper()} TFLOPS...")
@@ -571,6 +605,12 @@ class TrainingProfiler:
             "run_id": getattr(self.args, "run_id", "run_001"),
             "seed": getattr(self.args, "seed", 42),
             "precision_mode": self.args.precision,
+            "input_source": getattr(self.args, "input_source", "synthetic"),
+            "target_source": getattr(self.args, "target_source", None),
+            "datasets_root": getattr(self.args, "datasets_root", None),
+            "dataset_name": getattr(self.args, "dataset_name", None),
+            "dataset_split": getattr(self.args, "dataset_split", None),
+            "dataset_path": getattr(self.args, "dataset_path", None),
             "execution_status": skip_status,
             "execution_skip_reason": reason,
             "run_executed": False,
@@ -729,6 +769,12 @@ class TrainingProfiler:
         overlap_stats = self._measure_pci_and_overlap()
         pci_detailed = self._measure_pci_bandwidth_detailed()
         pci_stats = {**overlap_stats, **pci_detailed}
+        transfer_calibration_source = "measured"
+        if (
+            overlap_stats.get("overlap_calibration_source") != "measured"
+            or pci_detailed.get("pci_detailed_calibration_source") != "measured"
+        ):
+            transfer_calibration_source = "fallback"
 
         all_layers = sorted(set(gpu_layer_stats.keys()) | set(cpu_layer_stats.keys()))
         if not all_layers:
@@ -876,6 +922,12 @@ class TrainingProfiler:
             "model": self.model_name,
             "run_id": getattr(self.args, "run_id", "run_001"),
             "seed": getattr(self.args, "seed", 42),
+            "input_source": getattr(self.args, "input_source", "synthetic"),
+            "target_source": getattr(self.args, "target_source", None),
+            "datasets_root": getattr(self.args, "datasets_root", None),
+            "dataset_name": getattr(self.args, "dataset_name", None),
+            "dataset_split": getattr(self.args, "dataset_split", None),
+            "dataset_path": getattr(self.args, "dataset_path", None),
             "layers_profiled_count": len(all_layers),
             "graph_nodes_count": graph_info.get("nodes_count"),
             "graph_edges_count": graph_info.get("edges_count"),
@@ -913,6 +965,8 @@ class TrainingProfiler:
             "transfer_alpha_d2h": pci_stats.get("alpha_d2h", 0),
             "transfer_beta_d2h": pci_stats.get("beta_d2h", 12.0),
             "pcie_stats_raw": pci_stats,
+            "transfer_calibration_source": transfer_calibration_source,
+            "transfer_calibration_fallback": transfer_calibration_source != "measured",
             "measured_peak_tflops_gpu": measured_gpu_peak_tflops,
             "measured_peak_tflops_cpu": measured_cpu_peak_tflops,
             "efficiency_ratio_avg": 0.0,

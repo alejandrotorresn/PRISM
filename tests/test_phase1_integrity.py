@@ -37,6 +37,8 @@ def test_phase1_sweep_cli_has_greedy_columns(tmp_path: Path) -> None:
         "simple_mlp",
         "--gpu_budgets_mb",
         "4,8,16,32,64",
+        "--allow_low_quality_stats",
+        "--allow_transfer_calibration_fallback",
         "--output_csv",
         str(out_csv),
     ]
@@ -71,6 +73,8 @@ def test_phase1_ablation_cli_has_four_variants(tmp_path: Path) -> None:
         "simple_mlp",
         "--gpu_budgets_mb",
         "4,8,16,32,64",
+        "--allow_low_quality_stats",
+        "--allow_transfer_calibration_fallback",
         "--output_csv",
         str(out_csv),
     ]
@@ -103,6 +107,8 @@ def test_phase1_sensitivity_cli_has_delta_columns(tmp_path: Path) -> None:
         "simple_mlp",
         "--gpu_budgets_mb",
         "4,8,16,32,64",
+        "--allow_low_quality_stats",
+        "--allow_transfer_calibration_fallback",
         "--output_csv",
         str(out_csv),
     ]

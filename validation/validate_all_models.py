@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 class ModelValidator:
     """Validates all models across precision modes and preflight."""
     
-    MODELS = ["resnet50", "resnet152", "vit_b16", "bert_base", "gpt2_small", "simple_mlp"]
+    MODELS = ["resnet50", "resnet152", "vit_b16", "bert_base", "gpt2_small", "distilgpt2", "simple_mlp"]
     PRECISIONS = ["fp32", "fp16", "bf16"]
     BATCH_SIZE = 1  # Use batch_size=1 for faster testing
     INPUT_SIZE = 224
@@ -71,7 +71,7 @@ class ModelValidator:
             self.preflight_models = preflight_models
         self.preflight_timeout_safety_factor = preflight_timeout_safety_factor
     
-    def _load_model(self, model_name: str, dtype: torch.dtype) -> Tuple[nn.Module, Any]:
+    def _load_model(self, model_name: str, dtype: torch.dtype) -> Tuple[Optional[nn.Module], Optional[Any], str]:
         """Load a model with specified precision."""
         logger.info(f"Loading {model_name} with dtype={dtype}...")
         
@@ -100,6 +100,12 @@ class ModelValidator:
             
             elif model_name == "gpt2_small":
                 model = GPT2Model.from_pretrained("gpt2")
+                if dtype != torch.float32:
+                    model = model.to(dtype=dtype)
+                inp = torch.randint(0, 1000, (self.BATCH_SIZE, self.SEQ_LENGTH), dtype=torch.long)
+
+            elif model_name == "distilgpt2":
+                model = GPT2Model.from_pretrained("distilgpt2")
                 if dtype != torch.float32:
                     model = model.to(dtype=dtype)
                 inp = torch.randint(0, 1000, (self.BATCH_SIZE, self.SEQ_LENGTH), dtype=torch.long)

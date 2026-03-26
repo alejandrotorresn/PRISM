@@ -28,3 +28,6 @@ jobs:
         run: |
           test -f data/test-ci/simple_mlp_metrics.csv
           test -f data/test-ci/simple_mlp_meta.json
+      - name: Run test suite
+        run: |
+          pytest -q

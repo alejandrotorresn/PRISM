@@ -66,7 +66,7 @@ Purpose:
 Use this on GPU servers when you want `fp32`, `fp16`, and `bf16` without being blocked by CPU precision limitations.
 
 ```bash
-MODELS_CSV=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small \
+MODELS_CSV=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small,distilgpt2 \
 BATCH_SIZES_CSV=8,16,32,64 \
 PRECISIONS_CSV=fp32,fp16,bf16 \
 OPTIMIZERS_CSV=SGD,AdamW \
@@ -86,7 +86,7 @@ bash scripts/run_experiments.sh
 Use this on well-instrumented nodes when you want full CPU and GPU profiling with the most portable precision.
 
 ```bash
-MODELS_CSV=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small \
+MODELS_CSV=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small,distilgpt2 \
 BATCH_SIZES_CSV=8,16,32,64 \
 PRECISIONS_CSV=fp32 \
 OPTIMIZERS_CSV=SGD,AdamW,RMSprop \

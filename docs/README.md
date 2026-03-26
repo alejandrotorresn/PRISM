@@ -2,7 +2,7 @@
 
 **For general project overview and setup, see [../README.md](../README.md) in the repository root.**
 
-This guide is the single operational entrypoint for using and validating the profiler.
+This file is the entrypoint to the consolidated documentation set. It keeps only the operational quick start and the index of canonical documents.
 
 ## 1) Installation
 
@@ -145,21 +145,28 @@ Recommended: follow the full no-memory workflow in:
 | `exit code: 127` in `run_experiments.sh` | Invalid Python executable path | Set `PYTHON_CMD` (for example `.venv/bin/python`) |
 | `USE_SKIP_CPU=true` with no GPU | No valid execution target for GPU-only mode | Script auto-disables skip mode; run with GPU or keep CPU enabled |
 
-## Documentation Index
+## Canonical Documentation Index
 
 | Document | Purpose |
 |----------|---------|
 | [../README.md](../README.md) | Project overview |
-| [GLOBAL_PROJECT_DOCUMENTATION.md](GLOBAL_PROJECT_DOCUMENTATION.md) | Full end-to-end technical reference (profiling, graph, ILP, scripts, storage, equations) |
+| [GLOBAL_PROJECT_DOCUMENTATION.md](GLOBAL_PROJECT_DOCUMENTATION.md) | Full end-to-end technical reference, including validation and thesis-mode orchestration |
 | [GLOBAL_PROJECT_DOCUMENTATION_ES.md](GLOBAL_PROJECT_DOCUMENTATION_ES.md) | Version academica en espanol de la referencia tecnica integral |
 | [CAPITULO_TESIS_PROFILING_ES.md](CAPITULO_TESIS_PROFILING_ES.md) | Capitulo monografico doctoral en espanol: metodologia de profiling |
 | [CAPITULO_TESIS_ILP_ES.md](CAPITULO_TESIS_ILP_ES.md) | Capitulo monografico doctoral en espanol: formulacion y analisis ILP |
-| [documentation.md](documentation.md) | Full technical methodology and schema |
+| [PLAN_IMPLEMENTACION_FASES_ES.md](PLAN_IMPLEMENTACION_FASES_ES.md) | Hoja de ruta doctoral y estado de cierre por fases |
+| [PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Protocolo operativo y metodologico para construir el dataset multi-hardware y cerrar la validacion doctoral |
 | [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md) | Recommended launch configurations by server type |
 | [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) | Step-by-step multi-node ILP workflow |
-| [TESTING_VALIDATION_MAP.md](TESTING_VALIDATION_MAP.md) | Validation strategy and runbook |
 | [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Architecture and folder map |
+
+## Consolidation Policy
+
+- `README.md` y `docs/README.md` cubren entrada rapida y navegacion.
+- `GLOBAL_PROJECT_DOCUMENTATION[_ES].md` son la referencia tecnica canónica.
+- Los capitulos de tesis en espanol preservan el nivel monografico y no duplican runbooks operativos.
+- Los documentos historicos sobreviven solo cuando aportan contexto no sustituible. La trazabilidad historica proyecto-tesis ya fue absorbida por `PLAN_IMPLEMENTACION_FASES_ES.md`.
 
 ---
 
-*Last Updated*: March 12, 2026
+*Last Updated*: March 26, 2026

@@ -21,6 +21,10 @@ def _find_sensitivity_files(input_root: Path) -> List[Path]:
     return sorted(input_root.rglob("*_sensitivity.csv"))
 
 
+def _find_hybrid_protocol_files(input_root: Path) -> List[Path]:
+    return sorted(input_root.rglob("hybrid_execution_protocol.csv"))
+
+
 def _safe_pct_improvement(baseline: float, candidate: float) -> float:
     if baseline == 0:
         return 0.0
@@ -33,6 +37,23 @@ def _best_feasible_rows(df: pd.DataFrame) -> pd.DataFrame:
         return feasible
     idx = feasible.groupby("model", sort=False)["ilp_objective"].idxmin()
     return feasible.loc[idx].sort_values(by=["model"], kind="stable")
+
+
+def _best_hybrid_rows(df: pd.DataFrame) -> pd.DataFrame:
+    runtime_df = df[(df["run_label"] == "ilp_plan") & (df["status"] == "ok")].copy()
+    if runtime_df.empty:
+        return runtime_df
+
+    selected_frames = []
+    for _, model_df in runtime_df.groupby("model", sort=False):
+        if "plan_selection_mode" in model_df.columns:
+            preferred_df = model_df[model_df["plan_selection_mode"] == "pareto_best"].copy()
+            if not preferred_df.empty:
+                model_df = preferred_df
+        best_idx = model_df["avg_step_ms"].astype(float).idxmin()
+        selected_frames.append(runtime_df.loc[[best_idx]])
+
+    return pd.concat(selected_frames, ignore_index=True).sort_values(by=["model"], kind="stable")
 
 
 def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, out_dir: Path) -> None:
@@ -98,7 +119,12 @@ def _plot_best_improvements(best_df: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
-def _write_markdown_summary(full_df: pd.DataFrame, best_df: pd.DataFrame, out_path: Path) -> None:
+def _write_markdown_summary(
+    full_df: pd.DataFrame,
+    best_df: pd.DataFrame,
+    out_path: Path,
+    hybrid_best_df: pd.DataFrame | None = None,
+) -> None:
     lines: List[str] = []
     lines.append("# ILP Results Summary\n")
     lines.append("## Inputs")
@@ -138,7 +164,36 @@ def _write_markdown_summary(full_df: pd.DataFrame, best_df: pd.DataFrame, out_pa
         except Exception:
             # Fallback path when optional dependency `tabulate` is unavailable.
             lines.append("```text")
-            lines.append(table.to_string(index=False))
+            with pd.option_context("display.max_columns", None, "display.width", 2000):
+                lines.append(table.to_string(index=False))
+            lines.append("```")
+        lines.append("")
+
+    if hybrid_best_df is not None and not hybrid_best_df.empty:
+        lines.append("## Best Observed Hybrid Runtime Per Model")
+        hybrid_cols = [
+            "model",
+            "config_optimizer",
+            "config_precision",
+            "config_batch_size",
+            "plan_selection_mode",
+            "plan_gpu_budget_mb",
+            "avg_step_ms",
+            "final_loss",
+            "quality_metric_name",
+            "final_quality_metric",
+            "dataset_name",
+            "input_source",
+            "target_source",
+        ]
+        available = [col for col in hybrid_cols if col in hybrid_best_df.columns]
+        hybrid_table = hybrid_best_df[available].copy()
+        try:
+            lines.append(hybrid_table.to_markdown(index=False))
+        except Exception:
+            lines.append("```text")
+            with pd.option_context("display.max_columns", None, "display.width", 2000):
+                lines.append(hybrid_table.to_string(index=False))
             lines.append("```")
         lines.append("")
 
@@ -254,13 +309,28 @@ def main() -> int:
     best_csv = out_dir / "ilp_best_per_model.csv"
     best_df.to_csv(best_csv, index=False)
 
+    hybrid_files = _find_hybrid_protocol_files(input_root)
+    hybrid_best_df = pd.DataFrame()
+    if hybrid_files:
+        hybrid_frames = []
+        for p in hybrid_files:
+            hdf = pd.read_csv(p)
+            hdf["source_csv"] = str(p)
+            hybrid_frames.append(hdf)
+        hybrid_df = pd.concat(hybrid_frames, ignore_index=True)
+        hybrid_csv = out_dir / "hybrid_execution_consolidated.csv"
+        hybrid_df.to_csv(hybrid_csv, index=False)
+        hybrid_best_df = _best_hybrid_rows(hybrid_df)
+        hybrid_best_csv = out_dir / "hybrid_execution_best_per_model.csv"
+        hybrid_best_df.to_csv(hybrid_best_csv, index=False)
+
     for model in sorted(full_df["model"].astype(str).unique().tolist()):
         _plot_model_objective_curves(full_df[full_df["model"] == model], model, out_dir)
 
     _plot_best_improvements(best_df, out_dir)
 
     md_summary = out_dir / "ILP_RESULTS_SUMMARY.md"
-    _write_markdown_summary(full_df, best_df, md_summary)
+    _write_markdown_summary(full_df, best_df, md_summary, hybrid_best_df=hybrid_best_df)
 
     ablation_files = _find_ablation_files(input_root)
     if ablation_files:
@@ -299,6 +369,10 @@ def main() -> int:
     print(f"Consolidated CSV: {consolidated_csv}")
     print(f"Best-per-model CSV: {best_csv}")
     print(f"Markdown summary: {md_summary}")
+    if hybrid_files:
+        print(f"Hybrid protocol files: {len(hybrid_files)}")
+        print(f"Hybrid consolidated CSV: {out_dir / 'hybrid_execution_consolidated.csv'}")
+        print(f"Hybrid best-per-model CSV: {out_dir / 'hybrid_execution_best_per_model.csv'}")
     if ablation_files:
         print(f"Ablation files: {len(ablation_files)}")
         print(f"Ablation consolidated CSV: {out_dir / 'ilp_ablation_consolidated.csv'}")

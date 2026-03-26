@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -63,9 +64,10 @@ def validate_plan_coverage(
     model: nn.Module,
     plan: DevicePlan,
     strict: bool = False,
+    model_layer_names: Iterable[str] | None = None,
 ) -> List[str]:
     warnings: List[str] = []
-    leaf_names = set(collect_leaf_module_names(model))
+    leaf_names = set(model_layer_names) if model_layer_names is not None else set(collect_leaf_module_names(model))
     plan_layers = set(plan.assignment_forward.keys()) | set(plan.assignment_backward.keys())
 
     missing_in_model = sorted(plan_layers - leaf_names)

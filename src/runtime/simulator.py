@@ -73,6 +73,11 @@ def _validate_topology(
         adj[u].append(v)
         indegree[v] += 1
 
+    # Preserve original indegrees before Kahn's BFS mutates them.  Sink nodes
+    # (incoming edges but no outgoing edges) are NOT isolated; their indegrees
+    # get decremented to 0 during traversal and would otherwise be misclassified.
+    original_indegree = dict(indegree)
+
     # Kahn-style topological validation.
     queue = [n for n in assignment_layers if indegree[n] == 0]
     visited = 0
@@ -89,7 +94,10 @@ def _validate_topology(
             "Graph topology is not a DAG over assigned layers (cycle detected or inconsistent indegree)"
         )
 
-    isolated = [n for n in assignment_layers if not adj[n] and indegree[n] == 0]
+    # A truly isolated node has no outgoing AND no incoming edges in the assignment
+    # subgraph.  Use original (pre-BFS) indegrees so that legitimate sink nodes
+    # are not falsely reported as isolated.
+    isolated = [n for n in assignment_layers if not adj[n] and original_indegree[n] == 0]
     if isolated and len(assignment_layers) > 1:
         warnings.append(
             f"{len(isolated)} assigned layers are isolated in graph topology"
@@ -147,27 +155,30 @@ def _layer_profiles(metrics_stats_csv: str | Path, mode: str, k_sigma: float) ->
             if col not in df.columns:
                 raise KeyError(f"Missing required nominal column '{col}' in {path}")
 
-        df["gpu_time_ms"] = (
-            pd.to_numeric(df["gpu_fwd_time_ms_mean"], errors="coerce").fillna(0.0)
-            + pd.to_numeric(df["gpu_bwd_time_ms_mean"], errors="coerce").fillna(0.0)
-        )
-        df["cpu_time_ms"] = (
-            pd.to_numeric(df["cpu_fwd_time_ms_mean"], errors="coerce").fillna(0.0)
-            + pd.to_numeric(df["cpu_bwd_time_ms_mean"], errors="coerce").fillna(0.0)
-        )
-        df["gpu_energy_j"] = (
-            pd.to_numeric(df["gpu_fwd_energy_j_mean"], errors="coerce").fillna(0.0)
-            + pd.to_numeric(df["gpu_bwd_energy_j_mean"], errors="coerce").fillna(0.0)
-        )
-        df["cpu_energy_j"] = (
-            pd.to_numeric(df["cpu_fwd_energy_j_mean"], errors="coerce").fillna(0.0)
-            + pd.to_numeric(df["cpu_bwd_energy_j_mean"], errors="coerce").fillna(0.0)
-        )
+        df["gpu_fwd_time_ms"] = pd.to_numeric(df["gpu_fwd_time_ms_mean"], errors="coerce").fillna(0.0)
+        df["gpu_bwd_time_ms"] = pd.to_numeric(df["gpu_bwd_time_ms_mean"], errors="coerce").fillna(0.0)
+        df["cpu_fwd_time_ms"] = pd.to_numeric(df["cpu_fwd_time_ms_mean"], errors="coerce").fillna(0.0)
+        df["cpu_bwd_time_ms"] = pd.to_numeric(df["cpu_bwd_time_ms_mean"], errors="coerce").fillna(0.0)
+
+        df["gpu_fwd_energy_j"] = pd.to_numeric(df["gpu_fwd_energy_j_mean"], errors="coerce").fillna(0.0)
+        df["gpu_bwd_energy_j"] = pd.to_numeric(df["gpu_bwd_energy_j_mean"], errors="coerce").fillna(0.0)
+        df["cpu_fwd_energy_j"] = pd.to_numeric(df["cpu_fwd_energy_j_mean"], errors="coerce").fillna(0.0)
+        df["cpu_bwd_energy_j"] = pd.to_numeric(df["cpu_bwd_energy_j_mean"], errors="coerce").fillna(0.0)
     else:
-        df["gpu_time_ms"] = _robust_value(df, "gpu_fwd_time_ms", k_sigma) + _robust_value(df, "gpu_bwd_time_ms", k_sigma)
-        df["cpu_time_ms"] = _robust_value(df, "cpu_fwd_time_ms", k_sigma) + _robust_value(df, "cpu_bwd_time_ms", k_sigma)
-        df["gpu_energy_j"] = _robust_value(df, "gpu_fwd_energy_j", k_sigma) + _robust_value(df, "gpu_bwd_energy_j", k_sigma)
-        df["cpu_energy_j"] = _robust_value(df, "cpu_fwd_energy_j", k_sigma) + _robust_value(df, "cpu_bwd_energy_j", k_sigma)
+        df["gpu_fwd_time_ms"] = _robust_value(df, "gpu_fwd_time_ms", k_sigma)
+        df["gpu_bwd_time_ms"] = _robust_value(df, "gpu_bwd_time_ms", k_sigma)
+        df["cpu_fwd_time_ms"] = _robust_value(df, "cpu_fwd_time_ms", k_sigma)
+        df["cpu_bwd_time_ms"] = _robust_value(df, "cpu_bwd_time_ms", k_sigma)
+
+        df["gpu_fwd_energy_j"] = _robust_value(df, "gpu_fwd_energy_j", k_sigma)
+        df["gpu_bwd_energy_j"] = _robust_value(df, "gpu_bwd_energy_j", k_sigma)
+        df["cpu_fwd_energy_j"] = _robust_value(df, "cpu_fwd_energy_j", k_sigma)
+        df["cpu_bwd_energy_j"] = _robust_value(df, "cpu_bwd_energy_j", k_sigma)
+
+    df["gpu_time_ms"] = df["gpu_fwd_time_ms"] + df["gpu_bwd_time_ms"]
+    df["cpu_time_ms"] = df["cpu_fwd_time_ms"] + df["cpu_bwd_time_ms"]
+    df["gpu_energy_j"] = df["gpu_fwd_energy_j"] + df["gpu_bwd_energy_j"]
+    df["cpu_energy_j"] = df["cpu_fwd_energy_j"] + df["cpu_bwd_energy_j"]
 
     if "gpu_mem_peak_mb_mean" in df.columns:
         gpu_mem = pd.to_numeric(df["gpu_mem_peak_mb_mean"], errors="coerce").fillna(0.0)
@@ -182,7 +193,23 @@ def _layer_profiles(metrics_stats_csv: str | Path, mode: str, k_sigma: float) ->
     df["gpu_mem_mb"] = gpu_mem
     df["cpu_mem_mb"] = cpu_mem
 
-    keep = ["layer", "gpu_time_ms", "cpu_time_ms", "gpu_energy_j", "cpu_energy_j", "gpu_mem_mb", "cpu_mem_mb"]
+    keep = [
+        "layer",
+        "gpu_fwd_time_ms",
+        "gpu_bwd_time_ms",
+        "cpu_fwd_time_ms",
+        "cpu_bwd_time_ms",
+        "gpu_fwd_energy_j",
+        "gpu_bwd_energy_j",
+        "cpu_fwd_energy_j",
+        "cpu_bwd_energy_j",
+        "gpu_time_ms",
+        "cpu_time_ms",
+        "gpu_energy_j",
+        "cpu_energy_j",
+        "gpu_mem_mb",
+        "cpu_mem_mb",
+    ]
     return df[keep]
 
 
@@ -268,12 +295,12 @@ def simulate_plan(
             continue
         row = prof_map[layer]
         if device == "GPU":
-            total_time_ms += float(row["gpu_time_ms"]) * 0.5
-            total_energy_j += float(row["gpu_energy_j"]) * 0.5
+            total_time_ms += float(row["gpu_fwd_time_ms"])
+            total_energy_j += float(row["gpu_fwd_energy_j"])
             gpu_mem_forward_mb += float(row["gpu_mem_mb"])
         elif device == "CPU":
-            total_time_ms += float(row["cpu_time_ms"]) * 0.5
-            total_energy_j += float(row["cpu_energy_j"]) * 0.5
+            total_time_ms += float(row["cpu_fwd_time_ms"])
+            total_energy_j += float(row["cpu_fwd_energy_j"])
             cpu_mem_forward_mb += float(row["cpu_mem_mb"])
         else:
             violations.append(f"Invalid forward device '{device}' for layer '{layer}'")
@@ -283,12 +310,12 @@ def simulate_plan(
             continue
         row = prof_map[layer]
         if device == "GPU":
-            total_time_ms += float(row["gpu_time_ms"]) * 0.5
-            total_energy_j += float(row["gpu_energy_j"]) * 0.5
+            total_time_ms += float(row["gpu_bwd_time_ms"])
+            total_energy_j += float(row["gpu_bwd_energy_j"])
             gpu_mem_backward_mb += float(row["gpu_mem_mb"])
         elif device == "CPU":
-            total_time_ms += float(row["cpu_time_ms"]) * 0.5
-            total_energy_j += float(row["cpu_energy_j"]) * 0.5
+            total_time_ms += float(row["cpu_bwd_time_ms"])
+            total_energy_j += float(row["cpu_bwd_energy_j"])
             cpu_mem_backward_mb += float(row["cpu_mem_mb"])
         else:
             violations.append(f"Invalid backward device '{device}' for layer '{layer}'")
@@ -300,18 +327,25 @@ def simulate_plan(
         total_transfer_ms += float(transfer_costs.get(edge, 0.0))
     for layer, _ in plan.cross_phase_edges:
         if layer in prof_map:
-            total_transfer_ms += float(prof_map[layer]["gpu_time_ms"]) * 0.15
+            total_transfer_ms += float(prof_map[layer]["gpu_fwd_time_ms"] + prof_map[layer]["gpu_bwd_time_ms"]) * 0.15
 
-    gpu_mem_used_mb = max(gpu_mem_forward_mb, gpu_mem_backward_mb)
-    cpu_mem_used_mb = max(cpu_mem_forward_mb, cpu_mem_backward_mb)
+    # During backward pass, forward activations are retained for gradient computation,
+    # so peak memory is the sum of both phases rather than the maximum of either alone.
+    gpu_mem_used_mb = gpu_mem_forward_mb + gpu_mem_backward_mb
+    cpu_mem_used_mb = cpu_mem_forward_mb + cpu_mem_backward_mb
 
-    if gpu_mem_forward_mb > cfg.gpu_mem_budget_mb or gpu_mem_backward_mb > cfg.gpu_mem_budget_mb:
+    # Check combined peak against budget (consistent with how gpu_mem_used_mb is computed).
+    if gpu_mem_used_mb > cfg.gpu_mem_budget_mb:
         violations.append(
-            f"GPU memory violation: forward={gpu_mem_forward_mb:.6f}, backward={gpu_mem_backward_mb:.6f}, budget={cfg.gpu_mem_budget_mb:.6f}"
+            f"GPU memory violation: peak={gpu_mem_used_mb:.6f} "
+            f"(forward={gpu_mem_forward_mb:.6f} + backward={gpu_mem_backward_mb:.6f}), "
+            f"budget={cfg.gpu_mem_budget_mb:.6f}"
         )
-    if cpu_mem_forward_mb > cfg.cpu_mem_budget_mb or cpu_mem_backward_mb > cfg.cpu_mem_budget_mb:
+    if cpu_mem_used_mb > cfg.cpu_mem_budget_mb:
         violations.append(
-            f"CPU memory violation: forward={cpu_mem_forward_mb:.6f}, backward={cpu_mem_backward_mb:.6f}, budget={cfg.cpu_mem_budget_mb:.6f}"
+            f"CPU memory violation: peak={cpu_mem_used_mb:.6f} "
+            f"(forward={cpu_mem_forward_mb:.6f} + backward={cpu_mem_backward_mb:.6f}), "
+            f"budget={cfg.cpu_mem_budget_mb:.6f}"
         )
 
     objective = (
@@ -399,8 +433,8 @@ def simulate_plan_phase4(
         row = prof_map[layer]
         device = plan.assignment_forward[layer]
         forward_time = (
-            float(row["gpu_time_ms"]) if device == "GPU" else float(row["cpu_time_ms"])
-        ) * 0.5
+            float(row["gpu_fwd_time_ms"]) if device == "GPU" else float(row["cpu_fwd_time_ms"])
+        )
 
         if strategy == "recompute":
             recompute_cost = forward_time * recompute_cost_fraction

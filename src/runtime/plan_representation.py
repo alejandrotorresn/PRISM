@@ -138,10 +138,25 @@ def load_execution_plan(assignment_csv: str | Path, cut_edges_csv: str | Path) -
     )
 
 
-def load_graph_edges(graph_edges_csv: str | Path) -> List[Tuple[str, str]]:
+def load_graph_edges(
+    graph_edges_csv: str | Path,
+    transfer_edges_csv: str | Path | None = None,
+    measured_layers: set[str] | None = None,
+) -> List[Tuple[str, str]]:
     path = Path(graph_edges_csv)
     if not path.exists():
         raise FileNotFoundError(f"graph_edges_csv not found: {path}")
+
+    if measured_layers and transfer_edges_csv is not None:
+        from ilp.data_loader import load_measured_graph_artifacts
+
+        edges, _ = load_measured_graph_artifacts(
+            graph_edges_csv=path,
+            transfer_edges_csv=transfer_edges_csv,
+            measured_nodes=measured_layers,
+        )
+        if edges:
+            return edges
 
     df = pd.read_csv(path)
     required = {"producer_name", "consumer_name"}
@@ -151,17 +166,88 @@ def load_graph_edges(graph_edges_csv: str | Path) -> List[Tuple[str, str]]:
             f"{sorted(required - set(df.columns))}"
         )
 
-    edges = [
-        (str(r["producer_name"]), str(r["consumer_name"]))
-        for _, r in df.iterrows()
-    ]
-    return sorted(set(edges))
+    has_node_ids = {"src_id", "dst_id"}.issubset(df.columns)
+    if not has_node_ids:
+        edges = [
+            (str(r["producer_name"]), str(r["consumer_name"]))
+            for _, r in df.iterrows()
+        ]
+        return sorted(set(edges))
+
+    def _parse_node_index(node_id: object) -> int | None:
+        text = str(node_id)
+        if not text.startswith("n"):
+            return None
+        suffix = text[1:]
+        if not suffix.isdigit():
+            return None
+        return int(suffix)
+
+    records: List[Tuple[str, str, int | None, int | None]] = []
+    first_seen_idx: Dict[str, int] = {}
+
+    for _, row in df.iterrows():
+        producer = str(row["producer_name"])
+        consumer = str(row["consumer_name"])
+        src_idx = _parse_node_index(row["src_id"])
+        dst_idx = _parse_node_index(row["dst_id"])
+
+        records.append((producer, consumer, src_idx, dst_idx))
+
+        if src_idx is not None:
+            first_seen_idx[producer] = min(first_seen_idx.get(producer, src_idx), src_idx)
+        if dst_idx is not None:
+            first_seen_idx[consumer] = min(first_seen_idx.get(consumer, dst_idx), dst_idx)
+
+    if not first_seen_idx:
+        edges = [(producer, consumer) for producer, consumer, _, _ in records]
+        return sorted(set(edges))
+
+    # Collapse to layer-name edges while preserving chronological orientation derived
+    # from node IDs. This avoids artificial cycles when a reused module name appears
+    # multiple times in a traced graph (e.g., shared ReLU modules in ResNet blocks).
+    oriented_edges: set[Tuple[str, str]] = set()
+    for producer, consumer, src_idx, dst_idx in records:
+        producer_first = first_seen_idx.get(producer)
+        consumer_first = first_seen_idx.get(consumer)
+
+        if producer_first is None or consumer_first is None:
+            oriented_edges.add((producer, consumer))
+            continue
+
+        if producer_first < consumer_first:
+            oriented_edges.add((producer, consumer))
+            continue
+
+        if producer_first == consumer_first:
+            if src_idx is not None and dst_idx is not None and src_idx <= dst_idx:
+                oriented_edges.add((producer, consumer))
+            continue
+
+        # producer_first > consumer_first: drop backward-in-time collapsed edge.
+
+    return sorted(oriented_edges)
 
 
-def load_transfer_costs(transfer_edges_csv: str | Path) -> Dict[Tuple[str, str], float]:
+def load_transfer_costs(
+    transfer_edges_csv: str | Path,
+    graph_edges_csv: str | Path | None = None,
+    measured_layers: set[str] | None = None,
+) -> Dict[Tuple[str, str], float]:
     path = Path(transfer_edges_csv)
     if not path.exists():
         raise FileNotFoundError(f"transfer_edges_csv not found: {path}")
+
+    if measured_layers and graph_edges_csv is not None:
+        from ilp.data_loader import load_measured_graph_artifacts
+
+        _, transfer_costs = load_measured_graph_artifacts(
+            graph_edges_csv=graph_edges_csv,
+            transfer_edges_csv=path,
+            measured_nodes=measured_layers,
+        )
+        if transfer_costs:
+            return transfer_costs
 
     df = pd.read_csv(path)
     required = {"producer_name", "consumer_name", "transfer_sym_ms"}

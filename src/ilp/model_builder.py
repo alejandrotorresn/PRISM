@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple
 
 from .data_loader import ILPInputData
-from .advanced_terms import ActivationMetadata, estimate_activation_metadata
+from .advanced_terms import ActivationMetadata
 
 
 @dataclass
@@ -131,18 +131,26 @@ class ILPProblemData4(ILPProblemData):
 def build_problem_data_phase4(data: ILPInputData, cfg: ILPConfig4) -> ILPProblemData4:
     """Build extended problem data for Phase 4 activation persistence optimization."""
     validate_ilp_config(cfg)
-    
+
     # Get base problem data
     base_data = build_problem_data(data, cfg)
-    
-    # Estimate activation metadata if not provided
-    activation_meta = estimate_activation_metadata(
-        data.nodes,
-        data.node_cost_gpu_ms,
-        data.node_cost_cpu_ms,
-        data.node_mem_gpu_mb,
+
+    if data.activation_metadata_source != "provided" or data.io_metadata_source != "provided":
+        raise ValueError(
+            "Phase 4 requires explicit activation and I/O metadata derived from measured artifacts. "
+            "Heuristic defaults are disabled for thesis-grade execution."
+        )
+
+    activation_meta = ActivationMetadata(
+        node_mem_activation_mb=dict(data.node_mem_activation_mb),
+        node_time_recompute_ms={
+            n: cfg.w_recompute_penalty * data.node_cost_gpu_ms.get(n, 0.0) * 0.5
+            for n in data.nodes
+        },
+        node_time_checkpoint_ms=dict(data.node_time_io_ms),
+        node_energy_io_j=dict(data.node_energy_io_j),
     )
-    
+
     # Compute recompute cost (additional forward pass time)
     recompute_cost_gpu = {
         n: cfg.w_recompute_penalty * data.node_cost_gpu_ms.get(n, 0.0) * 0.5
@@ -162,7 +170,7 @@ def build_problem_data_phase4(data: ILPInputData, cfg: ILPConfig4) -> ILPProblem
         n: cfg.w_io * activation_meta.node_time_checkpoint_ms.get(n, 0.0)
         for n in data.nodes
     }
-    
+
     return ILPProblemData4(
         objective_node_gpu=base_data.objective_node_gpu,
         objective_node_cpu=base_data.objective_node_cpu,

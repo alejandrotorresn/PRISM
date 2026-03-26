@@ -52,6 +52,21 @@ class TestPhase4Synthetic(unittest.TestCase):
                 ("layer_0", "layer_1"): 5.0,
                 ("layer_1", "layer_2"): 7.0,
             },
+            node_mem_activation_mb={
+                "layer_0": 70.0,
+                "layer_1": 105.0,
+                "layer_2": 140.0,
+            },
+            node_time_io_ms={
+                "layer_0": 1.5,
+                "layer_1": 2.25,
+                "layer_2": 3.0,
+            },
+            node_energy_io_j={
+                "layer_0": 0.05,
+                "layer_1": 0.05,
+                "layer_2": 0.05,
+            },
         )
 
     def test_phase4_synthetic_solver(self):
@@ -117,6 +132,38 @@ class TestPhase4Synthetic(unittest.TestCase):
         for node in self.data.nodes:
             self.assertIn(node, solution.activation_strategies)
 
+    def test_phase4_auto_selects_exhaustive_for_small_instances(self):
+        cfg = ILPConfig4(
+            w_time=1.0,
+            w_energy=0.0,
+            w_transfer=1.0,
+            gpu_mem_budget_mb=350.0,
+            cpu_mem_budget_mb=1e18,
+            enable_recompute=True,
+        )
+
+        solution = solve_partition_ilp_phase4(self.data, cfg, backend="auto")
+        self.assertEqual(solution.mode, "phase4")
+        self.assertEqual(solution.backend, "exhaustive_phase4")
+        self.assertEqual(len(solution.activation_strategies), len(self.data.nodes))
+
+    def test_phase4_exhaustive_backend_runs(self):
+        cfg = ILPConfig4(
+            w_time=1.0,
+            w_energy=0.0,
+            w_transfer=1.0,
+            gpu_mem_budget_mb=350.0,
+            cpu_mem_budget_mb=1e18,
+            enable_recompute=True,
+            enable_checkpoint=True,
+            w_io=0.1,
+        )
+
+        solution = solve_partition_ilp_phase4(self.data, cfg, backend="exhaustive")
+        self.assertEqual(solution.mode, "phase4")
+        self.assertEqual(solution.backend, "exhaustive_phase4")
+        self.assertIn(solution.status, ["optimal", "infeasible"])
+
     def test_base_solver_emits_dual_assignments(self):
         """The base ILP solver should now expose forward and backward assignments separately."""
         cfg = ILPConfig(
@@ -131,8 +178,10 @@ class TestPhase4Synthetic(unittest.TestCase):
 
         self.assertIsNotNone(solution.forward_assignment)
         self.assertIsNotNone(solution.backward_assignment)
-        self.assertEqual(set(solution.forward_assignment.keys()), set(self.data.nodes))
-        self.assertEqual(set(solution.backward_assignment.keys()), set(self.data.nodes))
+        forward_assignment = solution.forward_assignment or {}
+        backward_assignment = solution.backward_assignment or {}
+        self.assertEqual(set(forward_assignment.keys()), set(self.data.nodes))
+        self.assertEqual(set(backward_assignment.keys()), set(self.data.nodes))
         self.assertEqual(solution.assignment, solution.forward_assignment)
 
 

@@ -4,7 +4,7 @@
 
 Este documento constituye la referencia tecnica integral del proyecto.
 
-Desde el cierre de Fase 0 del plan de implementacion (2026-03-19) y su consolidacion operativa en Fase 4 (2026-03-20), el alcance metodologico del proyecto queda fijado sin bifurcaciones: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP, transferencia asincrona de tensores CPU<->GPU mediante CUDA streams y prefetching explicito en el runtime de ejecucion hibrida.
+Desde el cierre de Fase 0 del plan de implementacion (2026-03-19) y su consolidacion operativa en Fase 4 (2026-03-20), el alcance metodologico del proyecto queda fijado sin bifurcaciones: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP, transferencia asincrona de tensores CPU<->GPU mediante CUDA streams y prefetching explicito en el ejecutor hibrido.
 
 Explica, con trazabilidad directa al codigo:
 
@@ -77,7 +77,7 @@ Pasos principales de orquestacion:
 2. Normalizar directorio de salida bajo namespace de host (`normalize_output_dir_for_host` en `src/core/system.py`).
 3. Configurar el entorno de ejecucion CPU y el determinismo (`configure_cpu_runtime`, `set_determinism`).
 4. Evaluar politica de precision (`_configure_precision` en `src/profiler.py` + `src/core/precision_policy.py`).
-5. Construir modelo y entrada (`build_model_and_input` en `src/models/factory.py`).
+5. Resolver y cargar el batch desde `datasets/` cuando el dataset requerido existe, preservando metadatos de procedencia (`src/data/dataset_registry.py` y `build_model_input_target` en `src/models/factory.py`).
 6. Ejecutar profiling (`TrainingProfiler.run_profiling` en `src/runner/training_profiler.py`).
 
 ### 3.2 Pipeline de artefactos
@@ -112,10 +112,24 @@ Salidas de reporte:
 
 - `ilp_pareto_consolidated.csv`
 - `ilp_best_per_model.csv`
+- `hybrid_execution_consolidated.csv` (cuando existe ejecucion hibrida observada)
+- `hybrid_execution_best_per_model.csv` (cuando existe ejecucion hibrida observada)
 - `ILP_RESULTS_SUMMARY.md`
 - `*_objective_vs_budget.png`
 - `best_ilp_vs_all_cpu_improvement.png`
 - Archivos LaTeX en `reports/.../latex/*.tex`
+
+Metadatos adicionales introducidos por la capa de datasets persistentes:
+
+- `dataset_name`
+- `dataset_split`
+- `dataset_path`
+- `input_source`
+- `target_source`
+
+Estos campos aparecen en `*_meta.json` del profiling y en los protocolos del ejecutor hibrido, con el fin de alinear evidencia empirica, simulacion y reporte bajo una procedencia comun del dato.
+
+En la ruta NLP, el proyecto ya no utiliza los encoders base sin semantica de tarea como aproximacion final de validacion. `bert_base` se instancia con cabeza explicita de clasificacion secuencial sobre AG News, lo que habilita logits de 4 clases y medicion de `accuracy` real. `gpt2_small` se instancia con cabeza de lenguaje causal, lo que habilita perdida autoregresiva real y medicion de `token_accuracy` sobre etiquetas desplazadas y enmascaradas. Este cambio es relevante porque desplaza la validacion desde una funcion objetivo generica de estabilidad hacia funciones objetivo y metricas semanticamente compatibles con la tarea instrumentalizada.
 
 ---
 
@@ -359,15 +373,15 @@ Nombrado de nodos:
 
 ### 6.2 Metodo fallback
 
-Si FX falla, `_build_fallback_graph` crea una cadena lineal sobre modulos hoja.
+Si FX falla, el pipeline intenta primero una ruta estructural alternativa basada en `torch.export` para modelos decoder-only. Solo bajo habilitacion diagnostica explicita `_build_fallback_graph` crea una cadena lineal sobre modulos hoja.
 
-Esto garantiza la existencia de artefactos de grafo incluso en modelos no trazables, aunque con una fidelidad estructural menor.
+Esta ruta degradada se conserva para depuracion y analisis exploratorio, pero no constituye una fuente estructural admisible para la cadena principal de evidencia doctoral.
 
-Por que este fallback es necesario:
+Por que este fallback se restringe a diagnostico:
 
 - Algunos modelos contienen flujo de control dinamico u operaciones incompatibles con trazado.
-- Sin fallback, esas corridas no producirian artefactos de grafo, bloqueando modelado de transferencias y construccion del ILP.
-- La cadena lineal de fallback es deliberadamente conservadora: preserva orden y disponibilidad de artefactos, aunque no capture toda la estructura de ramificacion.
+- La cadena lineal preserva disponibilidad de artefactos, pero no captura toda la estructura de ramificacion.
+- Si se consumiera como entrada normal del ILP, subestimaria costos de corte asociados a conexiones no secuenciales.
 
 ### 6.3 Esquemas de nodo y arista
 
@@ -379,7 +393,7 @@ Columnas de nodo de grafo (escritas por `write_csv_rows`):
 - `topo_index`
 - `params_mb`
 - `activ_out_mb`
-- `trace_source`
+- `graph_trace_source`
 
 Interpretacion de columnas de nodo:
 
@@ -389,7 +403,7 @@ Interpretacion de columnas de nodo:
 - `topo_index`: indice de orden topologico para preservar consistencia de dependencias.
 - `params_mb`: huella de memoria de parametros atribuible al nodo.
 - `activ_out_mb`: estimacion del tamano de activacion de salida; variable clave para costo de transferencia cuando hay cortes.
-- `trace_source`: procedencia (`fx` o `fallback`) que indica nivel de fidelidad estructural.
+- `graph_trace_source`: procedencia (`torch_fx`, `torch_export_decoder_only` o `fallback_leaf_modules`) que indica nivel de fidelidad estructural.
 
 Columnas de arista de grafo:
 
@@ -399,7 +413,7 @@ Columnas de arista de grafo:
 - `tensor_shape`
 - `producer_name`
 - `consumer_name`
-- `trace_source`
+- `graph_trace_source`
 
 Interpretacion de columnas de arista:
 
@@ -407,7 +421,13 @@ Interpretacion de columnas de arista:
 - `tensor_mb`: tamano estimado del payload tensorial que cruza la dependencia.
 - `tensor_shape`: metadato de forma para verificacion y reproducibilidad.
 - `producer_name`, `consumer_name`: nombres legibles de extremos para diagnostico y reportes.
-- `trace_source`: marca de procedencia alineada con la del trazado de nodos.
+- `graph_trace_source`: marca de procedencia alineada con la del trazado de nodos.
+
+Para modelos causales decoder-only tipo GPT-2 cuyo trazado `torch.fx` no es estable, el proyecto incorpora un backend separado basado en `torch.export`. Este backend no sustituye la ruta general: solo se activa cuando el trazado simbólico falla y el modelo cumple el perfil de compatibilidad de causal LM exportable. La salida estructural se reagrupa por modulo hoja usando `nn_module_stack`, de manera que los artefactos `*_graph_nodes.csv` y `*_graph_edges.csv` sigan siendo consistentes con `metrics.csv`, `metrics_stats.csv` y con la formulacion ILP sobre capas medidas.
+
+La evidencia empirica de esta ruta ya cubre dos modelos de la misma familia. En `gpt2_small`, el backend `torch_export_decoder_only` produjo 113 nodos y 113 aristas agrupadas, y la ruta completa profiling -> agregacion -> ILP -> simulacion -> ejecucion hibrida quedo validada en lote reducido real. En `distilgpt2`, la misma ruta produjo 59 nodos y 59 aristas agrupadas, resolvio ILP con mapeo estricto y completo ejecucion hibrida real sobre Tiny Shakespeare. La diferencia observada fue de escala estructural, no de compatibilidad, lo que refuerza que el backend separado generaliza a modelos decoder-only causales exportables mas alla del caso original. Durante esta extension aparecio una asercion interna exportada (`aten._assert_tensor_metadata.default`) que no representa computo de capa ni transferencia material; el runtime DAG la trata como verificacion de metadata y no como operacion que deba fijar dispositivo.
+
+Tras oficializar `distilgpt2` en parser, factorias y scripts, se ejecuto un smoke adicional por CLI completa el 2026-03-25. El profiler oficial (`src/profiler.py`) corrio con datos reales de Tiny Shakespeare y genero artefactos consistentes en `data/zephyr/test-distilgpt2-smoke/`, confirmando `input_source=dataset` y `graph_trace_source=torch_export_decoder_only` con 59 nodos/aristas. Sobre una solucion ILP ya validada, `validation/run_hybrid_execution.py --model distilgpt2` completo un smoke oficial con `status=ok` en `hybrid_execution_official_cli_smoke/`, lo que cierra no solo la validez experimental del backend sino tambien la validez operativa de su exposicion publica en CLI.
 
 ### 6.4 Como se representan y ven nodos
 
@@ -1110,7 +1130,49 @@ bash scripts/export_ilp_tables_latex.sh
 
 Implementacion: `validation/export_ilp_tables_latex.py`
 
-### 12.8 Lanzador HPC legacy
+### 12.8 Modo tesis integral
+
+Script: `scripts/run_thesis_mode.sh`
+
+Este script consolida en una sola orquestacion la preparacion de datasets, la campana de profiling, la resolucion ILP por configuracion, el barrido Pareto, la ejecucion hibrida opcional y la generacion de activos finales de reporte.
+
+Perfiles soportados:
+
+- `quick_smoke`
+- `doctoral_minimal`
+- `doctoral_full`
+- `custom`
+
+Ejemplos:
+
+```bash
+PYTHON_CMD=.venv/bin/python PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
+```
+
+```bash
+PYTHON_CMD=.venv/bin/python PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
+```
+
+Controles relevantes:
+
+- `DATASETS_DIR`
+- `DOWNLOAD_DATASETS`
+- `BASE_OUTPUT_DIR`
+- `REPORTS_DIR`
+- `RUN_PROFILING`, `RUN_ILP`, `RUN_HYBRID`, `RUN_REPORTS`
+- `DRY_RUN`
+
+Salidas consolidadas esperadas:
+
+- `DATASETS_DIR/dataset_manifest.json`
+- artefactos por configuracion bajo `BASE_OUTPUT_DIR`
+- consolidado final bajo `REPORTS_DIR`
+- tablas LaTeX bajo `REPORTS_DIR/latex`
+- checklist metodologico en `REPORTS_DIR/THESIS_MODE_PROTOCOL_CHECKLIST.md`
+
+Nota metodologica: el modo tesis opera con datasets reales por defecto, exige procedencia estructural admisible del grafo y presupone calibracion de transferencia medida. Las anulaciones diagnosticas deben tratarse como fuera del protocolo doctoral principal.
+
+### 12.9 Lanzador HPC legacy
 
 Script: `scripts/launch_grid5k.sh`
 
@@ -1144,6 +1206,25 @@ Pruebas en `tests/` incluyen:
 - `validation/validate_zombie_fix.py`: verifica integracion de `--skip_cpu` y `--num_threads`
 - `validation/validate_all_models.py`: validacion amplia de modelo y preflight
 - `validation/comprehensive_check.sh`: verificaciones de arquitectura basadas en grep
+
+### 13.3 Validacion del pipeline ILP y ejecucion hibrida
+
+- `validation/validate_ilp_pipeline.py`: valida factibilidad topologica, costos de corte, presupuestos y resumen de simulacion.
+- `validation/run_hybrid_execution.py`: ejecuta un plan ILP sobre el ejecutor hibrido real y exporta trazas y metricas observadas.
+- `validation/run_ilp_ablation_suite.py`: consolida variantes de ablacion metodologica.
+- `validation/run_ilp_sensitivity.py`: ejecuta barridos controlados de sensibilidad parametricos.
+
+### 13.4 Orden recomendado de validacion
+
+Secuencia recomendada de menor a mayor costo:
+
+1. `bash validation/run_unit_tests.sh`
+2. `.venv/bin/python validation/validate_code.py`
+3. `.venv/bin/python validation/validate_zombie_fix.py`
+4. `bash validation/comprehensive_check.sh`
+5. `.venv/bin/python validation/validate_all_models.py --preflight-scope fast`
+6. `.venv/bin/python validation/validate_ilp_pipeline.py --config_dir <config_dir> --model <model>`
+7. `.venv/bin/python validation/run_hybrid_execution.py --config_dir <config_dir> --model <model> --require_datasets`
 
 ---
 
@@ -1280,9 +1361,9 @@ python validation/export_ilp_tables_latex.py --best_csv <best.csv> --consolidate
 - `docs/README.md`
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
-- `docs/ILP_ROBUST_PARTITIONING_PLAN.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/documentation.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
 
 ---
 
@@ -1442,8 +1523,8 @@ Tamano de parametro en MB. Aproxima estado de modelo persistente asociado con no
 `activ_out_mb`:
 Tamano de activacion de salida en MB. Es clave para estimar costo de transferencia cuando cortes CPU/GPU ocurren.
 
-`trace_source`:
-Procedencia de trazado (`fx` o `fallback`). Este campo comunica fidelidad estructural: `fx` es usualmente mas cercano a dependencias de ejecucion verdaderas, mientras `fallback` garantiza disponibilidad de artefacto con detalle topologico reducido.
+`graph_trace_source`:
+Procedencia de trazado (`torch_fx`, `torch_export_decoder_only` o `fallback_leaf_modules`). Este campo comunica fidelidad estructural: las rutas estructurales admisibles preservan dependencias de ejecucion relevantes, mientras `fallback_leaf_modules` garantiza solo disponibilidad diagnostica de artefacto con detalle topologico reducido.
 
 ### 21.2 Campos de arista de grafo (`*_graph_edges.csv`)
 
@@ -1461,8 +1542,8 @@ Forma de tensor (cuando disponible), util para auditoria tecnica y verificacione
 `producer_name` y `consumer_name`:
 Nombres legibles de punto final, mejorando interpretacion de aristas cortadas en reportes.
 
-`trace_source`:
-Misma semantica que nodos: indica si arista vino de trazado FX completo o reconstruccion fallback.
+`graph_trace_source`:
+Misma semantica que nodos: indica si la arista provino de una ruta estructural admisible o de reconstruccion fallback solo diagnostica.
 
 ### 21.3 Campos de arista de transferencia (`*_transfer_edges.csv`)
 
@@ -1597,9 +1678,8 @@ Referencias internas:
 - `docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md`
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
-- `docs/ILP_ROBUST_PARTITIONING_PLAN.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/documentation.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
 
 ---
 

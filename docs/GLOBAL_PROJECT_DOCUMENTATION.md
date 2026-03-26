@@ -387,7 +387,7 @@ Node column interpretation:
 - `topo_index`: Topological order index used to preserve dependency-consistent execution ordering.
 - `params_mb`: Parameter memory footprint attributable to the node.
 - `activ_out_mb`: Output activation size estimate; key driver of transfer cost when cuts occur.
-- `trace_source`: Provenance marker (`fx` or `fallback`) indicating structural fidelity level.
+- `trace_source`: Provenance marker (`torch_fx`, `torch_export_decoder_only`, or `fallback_leaf_modules`) indicating structural fidelity level.
 
 Graph edge columns:
 
@@ -406,6 +406,12 @@ Edge column interpretation:
 - `tensor_shape`: Shape metadata used for sanity checks and reproducibility.
 - `producer_name`, `consumer_name`: Human-readable endpoint names for diagnostics and report readability.
 - `trace_source`: Provenance marker aligning with node trace source.
+
+For GPT-2-like decoder-only causal models whose `torch.fx` tracing path is not stable, the project now includes a separate `torch.export` backend. This backend does not replace the general path: it activates only when symbolic tracing fails and the model matches the compatibility profile of an exportable causal LM. The resulting operator graph is regrouped back to leaf-module names through `nn_module_stack`, so that `*_graph_nodes.csv` and `*_graph_edges.csv` remain consistent with `metrics.csv`, `metrics_stats.csv`, and the ILP formulation over measured layers.
+
+The empirical evidence for this path now covers two models from the same family. For `gpt2_small`, the `torch_export_decoder_only` backend produced 113 grouped nodes and 113 grouped edges, and the full path profiling -> aggregation -> ILP -> simulation -> hybrid runtime was validated on a reduced real batch. For `distilgpt2`, the same path produced 59 grouped nodes and 59 grouped edges, solved ILP under strict mapping, and completed real hybrid execution on Tiny Shakespeare. The observed difference was structural scale rather than compatibility, which strengthens the claim that the separate backend generalizes to exportable decoder-only causal models beyond the original case. During this extension, an internal exported assertion (`aten._assert_tensor_metadata.default`) surfaced; the DAG runtime treats it as metadata validation rather than as an operation that should pin device placement, because it does not represent layer computation or material transfer.
+
+After `distilgpt2` was officialized in parsers, factories, and automation scripts, an additional full-CLI smoke was executed on 2026-03-25. The official profiler (`src/profiler.py`) ran with real Tiny Shakespeare data and produced consistent artifacts in `data/zephyr/test-distilgpt2-smoke/`, confirming `input_source=dataset` and `graph_trace_source=torch_export_decoder_only` with 59 nodes/edges. Using a previously validated ILP solution, `validation/run_hybrid_execution.py --model distilgpt2` then completed an official CLI smoke with `status=ok` in `hybrid_execution_official_cli_smoke/`, which closes not only the experimental validity of the backend but also the operational validity of its public CLI exposure.
 
 ### 6.4 How nodes are represented and viewed
 
@@ -1108,7 +1114,49 @@ bash scripts/export_ilp_tables_latex.sh
 
 Implementation: `validation/export_ilp_tables_latex.py`
 
-### 12.8 Legacy HPC launcher
+### 12.8 Integrated thesis mode
+
+Script: `scripts/run_thesis_mode.sh`
+
+This script consolidates dataset preparation, profiling campaign execution, per-configuration ILP solving, Pareto sweeps, optional hybrid runtime execution, and final reporting into one orchestration path.
+
+Supported profiles:
+
+- `quick_smoke`
+- `doctoral_minimal`
+- `doctoral_full`
+- `custom`
+
+Examples:
+
+```bash
+PYTHON_CMD=.venv/bin/python PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
+```
+
+```bash
+PYTHON_CMD=.venv/bin/python PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
+```
+
+Relevant controls:
+
+- `DATASETS_DIR`
+- `DOWNLOAD_DATASETS`
+- `BASE_OUTPUT_DIR`
+- `REPORTS_DIR`
+- `RUN_PROFILING`, `RUN_ILP`, `RUN_HYBRID`, `RUN_REPORTS`
+- `DRY_RUN`
+
+Expected consolidated outputs:
+
+- `DATASETS_DIR/dataset_manifest.json`
+- per-configuration artifacts under `BASE_OUTPUT_DIR`
+- final consolidated reports under `REPORTS_DIR`
+- LaTeX tables under `REPORTS_DIR/latex`
+- methodological checklist in `REPORTS_DIR/THESIS_MODE_PROTOCOL_CHECKLIST.md`
+
+Methodological note: thesis mode defaults to real datasets, admissible structural graph provenance, and measured transfer calibration. Diagnostic overrides remain available, but they are outside the main doctoral evidence protocol.
+
+### 12.9 Legacy HPC launcher
 
 Script: `scripts/launch_grid5k.sh`
 
@@ -1142,6 +1190,25 @@ Tests in `tests/` include:
 - `validation/validate_zombie_fix.py`: checks `--skip_cpu` and `--num_threads` integration
 - `validation/validate_all_models.py`: broad model and preflight validation
 - `validation/comprehensive_check.sh`: grep-based architecture checks
+
+### 13.3 ILP pipeline and hybrid runtime validation
+
+- `validation/validate_ilp_pipeline.py`: validates topological feasibility, cut costs, budgets, and simulation summaries.
+- `validation/run_hybrid_execution.py`: executes an ILP plan on the real hybrid runtime and exports traces plus observed metrics.
+- `validation/run_ilp_ablation_suite.py`: consolidates methodological ablation variants.
+- `validation/run_ilp_sensitivity.py`: executes controlled parameter-sensitivity sweeps.
+
+### 13.4 Recommended validation order
+
+Recommended sequence from lowest to highest cost:
+
+1. `bash validation/run_unit_tests.sh`
+2. `.venv/bin/python validation/validate_code.py`
+3. `.venv/bin/python validation/validate_zombie_fix.py`
+4. `bash validation/comprehensive_check.sh`
+5. `.venv/bin/python validation/validate_all_models.py --preflight-scope fast`
+6. `.venv/bin/python validation/validate_ilp_pipeline.py --config_dir <config_dir> --model <model>`
+7. `.venv/bin/python validation/run_hybrid_execution.py --config_dir <config_dir> --model <model> --require_datasets`
 
 ---
 
@@ -1278,9 +1345,9 @@ python validation/export_ilp_tables_latex.py --best_csv <best.csv> --consolidate
 - `docs/README.md`
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
-- `docs/ILP_ROBUST_PARTITIONING_PLAN.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/documentation.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
 
 ---
 
@@ -1595,9 +1662,8 @@ Internal references:
 - `docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md`
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
-- `docs/ILP_ROBUST_PARTITIONING_PLAN.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/documentation.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
 
 ---
 

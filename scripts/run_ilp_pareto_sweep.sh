@@ -5,6 +5,9 @@ set -euo pipefail
 # PYTHON_CMD=./.venv/bin/python MODEL=resnet50 CONFIG_DIR=data/test-m4/resnet50/SGD/fp32/batch_8 \
 # GPU_BUDGETS_MB=400,600,800,1000 CPU_MEM_BUDGET_MB=3000 bash scripts/run_ilp_pareto_sweep.sh
 
+source "$(dirname "$0")/sanitize_cuda_env.sh"
+sanitize_cuda_runtime_env
+
 PYTHON_CMD="${PYTHON_CMD:-python}"
 MODEL="${MODEL:-resnet50}"
 CONFIG_DIR="${CONFIG_DIR:-data/test-m4/resnet50/SGD/fp32/batch_8}"
@@ -22,6 +25,9 @@ OUT_CSV="${OUT_CSV:-${CONFIG_DIR}/${MODEL}_pareto_sweep.csv}"
 OUT_JSON="${OUT_JSON:-${CONFIG_DIR}/${MODEL}_pareto_summary.json}"
 STRICT_GRAPH_MAPPING="${STRICT_GRAPH_MAPPING:-true}"
 STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
+ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
+ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
+ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
 
 STRICT_FLAGS=()
 if [ "$STRICT_GRAPH_MAPPING" = true ]; then
@@ -29,6 +35,15 @@ if [ "$STRICT_GRAPH_MAPPING" = true ]; then
 fi
 if [ "$STRICT_TRANSFER_MAPPING" = true ]; then
   STRICT_FLAGS+=(--strict_transfer_mapping)
+fi
+if [ "$ALLOW_LOW_QUALITY_STATS" = true ]; then
+  STRICT_FLAGS+=(--allow_low_quality_stats)
+fi
+if [ "$ALLOW_TRANSFER_CALIBRATION_FALLBACK" = true ]; then
+  STRICT_FLAGS+=(--allow_transfer_calibration_fallback)
+fi
+if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
+  STRICT_FLAGS+=(--allow_fallback_graph_trace)
 fi
 
 CONFIG_FLAGS=(--config_dir "$CONFIG_DIR")

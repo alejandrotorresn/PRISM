@@ -43,11 +43,13 @@ check_in_file "ViT-B/16 Loading" "src/models/factory.py" 'elif args.model == "vi
 check_in_file "ViT-B/16 Weights" "src/models/factory.py" 'ViT_B_16_Weights.DEFAULT'
 
 check_in_file "BERT Loading" "src/models/factory.py" 'elif args.model == "bert_base":'
-check_in_file "BERT Weights" "src/models/factory.py" 'BertModel.from_pretrained\("bert-base-uncased"\)'
+check_in_file "BERT Weights" "src/models/factory.py" 'BertForSequenceClassification.from_pretrained\("bert-base-uncased", num_labels=4\)'
 check_in_file "BERT Input (int64)" "src/models/factory.py" 'torch.randint\(0, 1000, \(args.batch_size, args.seq_length\), dtype=torch.long\)'
 
 check_in_file "GPT2 Loading" "src/models/factory.py" 'elif args.model == "gpt2_small":'
-check_in_file "GPT2 Weights" "src/models/factory.py" 'GPT2Model.from_pretrained\("gpt2"\)'
+check_in_file "GPT2 Weights" "src/models/factory.py" 'GPT2LMHeadModel.from_pretrained\("gpt2"\)'
+check_in_file "DistilGPT2 Loading" "src/models/factory.py" 'elif args.model == "distilgpt2":'
+check_in_file "DistilGPT2 Weights" "src/models/factory.py" 'GPT2LMHeadModel.from_pretrained\("distilgpt2"\)'
 
 check_in_file "SimpleMLP Loading" "src/models/factory.py" 'elif args.model == "simple_mlp":'
 check_in_file "SimpleMLP Input" "src/models/factory.py" '\(args.batch_size, 784\)'
@@ -70,7 +72,7 @@ check_in_file "Precision Branch - FP32" "src/profiler.py" 'torch_dtype = torch.f
 check_in_file "Precision Branch - FP16" "src/profiler.py" 'torch_dtype = torch.float16'
 check_in_file "Precision Branch - BF16" "src/profiler.py" 'torch_dtype = torch.bfloat16'
 
-check_in_file "NLP Model Exclusion from Cast" "src/models/factory.py" 'args.model not in \["bert_base", "gpt2_small"\]'
+check_in_file "NLP Model Exclusion from Cast" "src/models/factory.py" 'args.model not in \["bert_base", "gpt2_small", "distilgpt2"\]'
 check_in_file "Input Casting Logic" "src/models/factory.py" 'inp = inp.to\(dtype=torch_dtype\)'
 
 echo ""

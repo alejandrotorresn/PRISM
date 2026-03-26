@@ -2,23 +2,19 @@
 
 ## 1. Proposito del plan
 
-Este documento traduce el diagnostico de [MAPA_PROYECTO_VS_TESIS_ES.md] en una hoja de ruta ejecutable. Su funcion no es enumerar tareas aisladas, sino organizar el desarrollo del proyecto de modo que cada incremento de software produzca tambien evidencia util para la monografia doctoral.
+Este documento funciona como pieza de gobierno metodologico del proyecto doctoral. Su papel no se limita a ordenar hitos de implementacion, sino a fijar la correspondencia entre brechas cientificas, decisiones de ingenieria, evidencia empirica y produccion monografica. En consecuencia, la hoja de ruta aqui expuesta debe leerse al mismo tiempo como plan de ejecucion, como registro de cierre por fases y como mecanismo de trazabilidad entre la propuesta original de tesis y el estado actualmente verificable del repositorio.
 
-El criterio rector es simple: cada fase debe cerrar una brecha metodologica concreta, dejar artefactos verificables y alimentar de forma directa uno o varios capitulos de la tesis.
+La idea rectora es que ninguna capacidad relevante del sistema cuenta por el solo hecho de existir en codigo. Para adquirir valor doctoral debe quedar formulada con alcance explicito, acompañada de criterios de aceptacion observables, validada mediante artefactos reproducibles y situada dentro de una narrativa cientifica coherente con los capitulos monograficos. Por ello, cada fase se define no como una lista de tareas sueltas, sino como el cierre de una brecha metodologica concreta cuya resolucion alimenta de forma directa una parte defendible de la tesis.
 
 ## 2. Principios de ejecucion
 
-El plan se apoya en cinco principios.
+La ejecucion del plan se apoya en un conjunto de principios que ordenan las decisiones tecnicas y delimitan que tipo de avance puede considerarse cientificamente valido. El primero establece que no debe ampliarse la formulacion matematica antes de fijar con precision el alcance de la contribucion comprometida. En este proyecto, esa fijacion adopta una forma fuerte: separacion de asignaciones para forward y backward, persistencia de activaciones como decision explicita del ILP y compatibilidad operacional con transferencia asincrona y prefetching. Cualquier desarrollo posterior debe permanecer subordinado a ese contrato.
 
-Primero, no conviene extender el modelo matematico antes de fijar el alcance exacto de la contribucion. En este proyecto ya se fija de forma explicita la promesa original de asignacion independiente para forward y backward, lo que afecta de manera directa al runtime, al simulador, al ILP y al relato cientifico.
+El segundo principio exige cerrar antes el bucle metodologico que el refinamiento ornamental del modelo. Una tesis de sistemas no gana solidez por acumular terminos en la funcion objetivo si todavia no puede contrastar sus decisiones con simulacion reproducible o con ejecucion observada. Por esa razon, el plan privilegia la continuidad entre profiling, ILP, simulacion y runtime por encima de extensiones elegantes pero prematuras.
 
-Segundo, debe priorizarse el cierre del bucle metodologico antes que el refinamiento ornamental del modelo. En terminos practicos, es preferible disponer antes de un ejecutor hibrido minimo y una validacion fisica reproducible que de una formulacion muy sofisticada sin capacidad de contraste experimental.
+El tercer principio afirma que toda nueva capacidad debe quedar sujeta a criterios de aceptacion observables. Una implementacion que no produce artefactos auditables, pruebas reproducibles o trazas interpretables puede ser util como exploracion interna, pero no como evidencia doctoral. El cuarto principio deriva de ello: documentacion, codigo y monografia deben evolucionar de manera acoplada, porque el mayor riesgo del proyecto no es solo tecnico, sino epistemico, a saber, sostener en la escritura afirmaciones mas fuertes que las demostradas por el sistema.
 
-Tercero, cada nueva capacidad debe venir acompanada de criterios de aceptacion observables. En una tesis doctoral, una funcionalidad no cuenta por estar implementada, sino por poder ser auditada, reproducida y defendida.
-
-Cuarto, la documentacion y la monografia deben evolucionar junto al codigo. El mayor riesgo actual del proyecto no es tecnico, sino epistemico: prometer en la tesis mas de lo que el software demuestra.
-
-Quinto, la secuencia de fases debe preservar valor incluso si el proyecto se detuviera antes del ultimo hito. Cada fase debe producir un resultado defendible por si mismo.
+Finalmente, la secuencia de fases se diseña para preservar valor defendible incluso ante una detencion anticipada del proyecto. Cada fase debe dejar un cierre autonomo, con utilidad propia para la tesis, de modo que el progreso acumulado conserve legitimidad cientifica aun cuando el programa completo no hubiera alcanzado todavia su ultimo hito.
 
 ## 3. Vista general de fases
 
@@ -31,12 +27,11 @@ Quinto, la secuencia de fases debe preservar valor incluso si el proyecto se det
 | Fase 4 | Extender el modelo con memoria de activaciones | Tesis alineada con rematerializacion y persistencia |
 | Fase 5 | Validacion doctoral completa | Resultados finales, analisis y capitulos cerrados |
 
-### 3.1 Veredicto por fases (actualizado a 2026-03-20)
+### 3.1 Veredicto por fases (actualizado a 2026-03-26)
 
-- **Fase 1**: funcional, pero con riesgo metodologico en comparabilidad ILP vs greedy (corregido en `validation/sweep_ilp_pareto.py` al evaluar baselines en el mismo espacio objetivo dual).
-- **Fase 2**: funcional y validada.
-- **Fase 3**: funcional y validada.
-- **Fase 4**: totalmente funcional (dual + activaciones + async transfer + prefetching explicito en runtime), con cierre operacional validado por pruebas y ejecucion fisica.
+Al estado de corte actual, la Fase 1 debe considerarse funcional y metodologicamente recuperada tras la correccion de comparabilidad entre ILP y baseline `greedy` en `validation/sweep_ilp_pareto.py`, donde ambos pasan a evaluarse en el mismo espacio objetivo dual. Las Fases 2 y 3 se encuentran cerradas con validacion suficiente, mientras que la Fase 4 puede darse por plenamente operativa al integrar ya decision dual forward/backward, persistencia de activaciones, transferencia asincrona y prefetching explicito en runtime, todo ello con respaldo de pruebas y de ejecucion fisica controlada.
+
+Sobre ese estado de cierre se añadió, a fecha 2026-03-26, un endurecimiento transversal del contrato metodologico entre profiling e ILP. Dicho endurecimiento excluye como vias normales de evidencia tanto las entradas sinteticas silenciosas como la topologia lineal de fallback, impone calibracion de transferencia medida y vuelve obligatoria la verificacion explicita de calidad muestral y de procedencia estructural antes de construir la instancia ILP. La consecuencia no es menor: la cadena completa que va desde la medicion empirica hasta la optimizacion deja de ser solo operativamente util y pasa a satisfacer un criterio mas estricto de admisibilidad doctoral de artefactos metodologicamente aceptables.
 
 ## 4. Fase 0: congelacion de alcance y contrato cientifico
 
@@ -48,13 +43,13 @@ Resolver las ambiguedades de diseno que hoy impiden avanzar sin riesgo de rehace
 
 1. Formalizar la semantica final del ILP con asignacion independiente por fase (forward y backward).
 2. Formalizar persistencia de activaciones, rematerializacion y checkpointing como variables explicitas del modelo.
-3. Formalizar transferencia asincrona CPU-GPU en runtime e incorporar prefetching explicito como politica operativa auditable en ejecucion hibrida.
+3. Formalizar transferencia asincrona CPU-GPU en el ejecutor hibrido e incorporar prefetching explicito como politica operativa auditable en ejecucion hibrida.
 4. Actualizar la documentacion metodologica para que no existan afirmaciones incompatibles con estas decisiones.
 
 ### 4.3 Archivos afectados
 
 - `docs/schema.md`
-- `docs/MAPA_PROYECTO_VS_TESIS_ES.md`
+- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
 - `docs/CAPITULO_TESIS_PROFILING_ES.md`
 - `docs/CAPITULO_TESIS_ILP_ES.md`
 - `docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md`
@@ -75,7 +70,7 @@ La Fase 0 queda formalmente cerrada con las siguientes decisiones vinculantes pa
 
 1. La asignacion de dispositivo se define de forma independiente para forward y backward.
 2. La persistencia de activaciones se modela como decision binaria explicita del ILP.
-3. El runtime implementa transferencia asincrona CPU-GPU mediante `torch.cuda.Stream` y prefetching explicito de activaciones con look-ahead entre capas en ejecucion hibrida.
+3. El ejecutor hibrido implementa transferencia asincrona CPU-GPU mediante `torch.cuda.Stream` y prefetching explicito de activaciones con look-ahead entre capas en ejecucion hibrida.
 
 Estas decisiones dejan sin validez cualquier redaccion alternativa basada en bifurcacion de alcance. Desde esta fecha, las Fases 1-5 se ejecutan sobre la ruta unica completa y toda evidencia experimental debe reportarse bajo ese contrato metodologico.
 
@@ -83,7 +78,7 @@ Estas decisiones dejan sin validez cualquier redaccion alternativa basada en bif
 
 ### 5.1 Objetivo
 
-Cerrar primero la parte de evaluacion que ya puede construirse sobre el ILP actual sin esperar al runtime hibrido completo. Esta fase debe convertir el planificador existente en un sistema comparativamente serio.
+Cerrar primero la parte de evaluacion que ya puede construirse sobre el ILP actual sin esperar al ejecutor hibrido completo. Esta fase debe convertir el planificador existente en un sistema comparativamente serio.
 
 ### 5.2 Trabajo tecnico
 
@@ -130,7 +125,7 @@ Las banderas de calidad muestral detectan alta dispersion (CV > 0.30) en todas l
 
 ### 5.7 Capitulo de tesis habilitado
 
-Esta fase cierra buena parte del material analitico de los capitulos de formulacion y resultados comparativos, incluso antes de tener el runtime hibrido final.
+Esta fase cierra buena parte del material analitico de los capitulos de formulacion y resultados comparativos, incluso antes de tener el ejecutor hibrido final.
 
 ## 6. Fase 2: simulador de ejecucion hibrida
 
@@ -187,6 +182,8 @@ Implementar la primera version funcional del entrenamiento hibrido real. Esta es
 
 El primer objetivo no debe ser soportar todos los modelos complejos del repositorio, sino demostrar un runtime correcto y medible sobre un subconjunto controlado, idealmente `simple_mlp` y `resnet50`. La ejecucion inicial debe respetar desde el diseno la semantica de asignacion independiente para forward y backward definida en Fase 0.
 
+En la evolucion posterior del runtime se admite un backend aislado adicional para modelos causales decoder-only exportables, como la familia GPT-2. Este backend debe permanecer desacoplado de la ruta general basada en `torch.fx`, activarse solo por deteccion de capacidad y conservar la consistencia entre capas perfiladas, artefactos de grafo e instancia ILP. La regla de gobierno es conservadora: si el backend especializado no puede demostrar esa consistencia, el sistema debe registrar la incompatibilidad y no degradar silenciosamente a una topologia incorrecta.
+
 ### 7.3 Trabajo tecnico
 
 1. Construir un cargador del plan ILP que convierta la asignacion en una politica de colocacion.
@@ -205,7 +202,7 @@ El primer objetivo no debe ser soportar todos los modelos complejos del reposito
 ### 7.5 Entregables
 
 - Ejecucion real de un plan ILP sobre hardware CPU-GPU.
-- Artefactos observados de runtime hibrido.
+- Artefactos observados del ejecutor hibrido.
 - Scripts de prueba end-to-end para modelos piloto.
 
 ### 7.6 Criterios de aceptacion
@@ -293,10 +290,15 @@ Convertir el sistema completo en evidencia doctoral final. Esta fase no introduc
 ### 9.2 Trabajo tecnico y experimental
 
 1. Ejecutar la matriz experimental final por modelos, precisiones, batches y optimizadores justificados.
+1.1. Preparar al inicio de cada campana los datasets persistentes en `datasets/`, de modo que profiling y runtime consuman el mismo origen de datos y quede trazabilidad explicita del corpus efectivamente usado.
 2. Comparar `all_cpu`, `all_gpu`, `greedy`, `ilp_base` y, si existe, `ilp_extendido`.
-3. Comparar prediccion del simulador frente a observacion fisica del runtime hibrido.
+3. Comparar prediccion del simulador frente a observacion fisica del ejecutor hibrido.
 4. Medir accuracy, loss final o metrica de calidad pertinente en los escenarios hibridos.
 5. Consolidar figuras, tablas LaTeX y resumenes para los capitulos de resultados y conclusiones.
+
+En el estado actual del proyecto, esta fase ya no parte de entradas sinteticas como supuesto operativo por defecto. La infraestructura incorpora una etapa previa de preparacion de datasets y un contrato de procedencia reproducible. El directorio `datasets/` actua como repositorio persistente comun para toda la campana, con mapeo metodologico fijado por familia de modelo: `simple_mlp` consume MNIST; `resnet50`, `resnet152` y `vit_b16` consumen Imagenette 160 remapeado a indices de clase de ImageNet-1K; `bert_base` consume AG News mediante cabeza explicita de clasificacion secuencial; y `gpt2_small` consume un corpus causal publico y estable (Tiny Shakespeare) mediante cabeza explicita de lenguaje causal. En consecuencia, la validez interna de la Fase 5 mejora en dos sentidos simultaneos: se elimina la divergencia entre origen de datos de profiling y origen de datos de runtime, y se registra en artefactos el nombre del dataset, split, ruta y fuente de targets.
+
+Esta transicion no clausura por si sola la validacion doctoral final por tarea, porque todavia subsiste la necesidad de cerrar protocolos estadisticos y comparativos mas amplios por arquitectura. Sin embargo, si cierra una brecha metodologica sustantiva: el sistema deja de depender de batches sinteticos para la ejecucion ordinaria de la campana y pasa a operar sobre corpus versionables y auditables, con `accuracy` real para `bert_base` y `token_accuracy`/loss causal real para `gpt2_small`.
 
 ### 9.3 Entregables
 
@@ -305,34 +307,77 @@ Convertir el sistema completo en evidencia doctoral final. Esta fase no introduc
 - Resumen de amenazas a la validez y limites del sistema.
 - Capitulo de resultados cerrado.
 
+Como evidencia intermedia ya disponible tras esta consolidacion, el modo tesis en smoke con datasets reales produce un protocolo hibrido observacional que explicita `dataset_name`, `dataset_split`, `dataset_path`, `input_source` y `target_source`, ademas de `final_loss`, `quality_metric_name` y `final_quality_metric`. Dichos campos quedan consolidados tanto en los artefactos por configuracion como en el resumen agregado y en la exportacion LaTeX del mejor ejecutor hibrido por modelo.
+
 ### 9.4 Criterios de aceptacion
 
 - Cada afirmacion fuerte de la tesis tiene una figura, tabla o artefacto que la respalda.
 - Existe comparacion entre prediccion y ejecucion observada.
 - Existe evidencia sobre memoria, tiempo, energia y exactitud final.
 
+Adicionalmente, para que la aceptacion de Fase 5 sea metodologicamente consistente con la nueva infraestructura, cada artefacto clave debe preservar la procedencia del dato experimental: dataset usado, split, politica de targets y raiz de almacenamiento. Sin esa capa de procedencia, la comparacion entre profiling, simulacion y runtime volveria a quedar apoyada en supuestos no auditables.
+
 ## 10. Dependencias entre fases
 
-La dependencia real entre fases puede resumirse asi.
+La relacion entre fases no es meramente cronologica, sino logica. La Fase 0 resulta obligatoria antes de introducir nuevas variables o nuevas promesas de alcance en el ILP, porque fija el contrato cientifico que da sentido al resto del programa. La Fase 1 conserva cierta independencia relativa y puede avanzar en paralelo parcial con la Fase 2, pero solo en la medida en que su fortalecimiento experimental no presuponga todavia la existencia del simulador ni del runtime completo.
 
-- Fase 0 es obligatoria antes de introducir nuevas variables en el ILP.
-- Fase 1 puede ejecutarse en paralelo parcial con Fase 2.
-- Fase 2 debe preceder a Fase 3 porque define el contrato del plan ejecutable.
-- Fase 3 debe preceder a Fase 5 porque sin runtime real no hay validacion fisica completa.
-- Fase 4 debe arrancar solo cuando Fase 3 haya probado el circuito minimo de evidencia.
-- Fase 4 debe preceder a Fase 5, porque la validacion doctoral final requiere cubrir las capacidades extendidas comprometidas en la tesis.
+La Fase 2 debe preceder a la Fase 3 porque define la representacion del plan ejecutable y reduce el salto entre optimizacion y despliegue fisico. A su vez, la Fase 3 debe quedar cerrada antes de reclamar una validacion doctoral completa, ya que sin runtime real no existe contraste fisico suficiente entre prediccion y observacion. La Fase 4, por su parte, solo adquiere sentido una vez probado el circuito minimo de evidencia, pues de otro modo la tesis correria el riesgo de acumular complejidad semantica sin capacidad de materializacion. Finalmente, la Fase 5 depende del cierre sustantivo de las anteriores porque su tarea no es descubrir el sistema, sino consolidarlo como evidencia experimental, comparativa y monografica.
 
 ## 11. Orden recomendado si se busca la via mas pragmatica
 
-Si el objetivo es llegar antes a una tesis defendible, el camino mas eficaz es:
-
-1. cerrar Fase 0 inmediatamente;
-2. ejecutar Fase 1 para fortalecer el ILP ya existente;
-3. construir Fase 2 para reducir incertidumbre del runtime;
-4. implementar Fase 3 sobre modelos piloto;
-5. ejecutar Fase 4 para cerrar las capacidades extendidas comprometidas en la tesis;
-6. cerrar Fase 5 con campanas finales y escritura.
+Si el objetivo es alcanzar con la mayor economia de esfuerzo una tesis defendible, la secuencia mas eficaz sigue siendo la progresion lineal aqui consolidada. Primero debe cerrarse Fase 0, porque sin un contrato de alcance estable cualquier avance posterior queda expuesto a rehacerse. Despues conviene ejecutar Fase 1 para reforzar comparabilidad, sensibilidad y calidad de coeficientes del ILP ya existente. Sobre esa base, la construccion de la Fase 2 reduce incertidumbre antes de invertir en la complejidad del runtime. La Fase 3 convierte entonces la optimizacion en una evidencia de sistemas observable sobre modelos piloto. La Fase 4 completa las capacidades extendidas comprometidas por la tesis, y la Fase 5 queda reservada para la campana final, la consolidacion estadistica y la escritura monografica definitiva.
 
 ## 12. Decision estrategica final
 
-La estrategia final queda fijada sin bifurcaciones: completar de forma secuencial las Fases 0 a 5 y sostener la tesis en su formulacion fuerte. En consecuencia, la contribucion cientifica comprometida es un sistema de particion heterogenea con simulacion, ejecucion real validada y extensiones de memoria y scheduling asincrono implementadas.
+La decision estrategica final queda fijada sin bifurcaciones: sostener la tesis en su formulacion fuerte y completar de forma secuencial el cierre de las Fases 0 a 5. Esta definicion descarta lecturas reduccionistas del proyecto como si se tratara solo de un profiler avanzado o de un ILP offline. La contribucion cientifica comprometida y ya parcialmente demostrada es la de un sistema de particion heterogenea que mide, robustifica, optimiza, simula y ejecuta planes CPU-GPU bajo restricciones fisicas, con extensiones explicitas de memoria y scheduling asincrono.
+
+## 13. Anexo de trazabilidad historica proyecto-tesis
+
+Este anexo absorbe el valor historico del antiguo documento de contraste entre proyecto y tesis. Se conserva aqui no como pieza paralela, sino como memoria auditada del punto de partida, de las brechas detectadas y de su cierre posterior.
+
+### 13.1 Alcance del contraste original
+
+El contraste inicial se realizo contra el documento base `docs/A New Parallelization Approach in Deep Learning Using CPU.docx` y contra el estado real del repositorio a 2026-03-19. La pregunta rectora era triple: que partes de la propuesta doctoral ya existian en el software, que partes estaban solo parcialmente cubiertas y que componentes faltaban todavia para sostener cumplimiento integral de la tesis.
+
+### 13.2 Exigencias nucleares de la propuesta doctoral
+
+La propuesta base no describia solo un profiler ni solo un ILP offline. Exigia una cadena metodologica completa compuesta por caracterizacion empirica por capa, formulacion ILP sobre grafo, asignacion CPU-GPU, persistencia de activaciones, rematerializacion o checkpointing, streaming/prefetching, simulacion de planes, validacion fisica de runtime, comparacion con baselines y verificacion de no degradacion de calidad final.
+
+El punto doctrinal mas exigente del alcance inicial era la separacion de decisiones entre forward y backward. Esa condicion fue la que convirtio el problema de cierre en una cuestion no solo de optimizacion offline, sino de coherencia entre formulacion matematica, simulacion, runtime y narrativa monografica.
+
+### 13.3 Mapa estructural del repositorio en el punto de partida
+
+Al cierre de Fase 0, el repositorio ya mostraba cinco fortalezas estructurales verificables.
+
+Primero, el bloque de profiling en `src/profiler.py` y `src/runner/training_profiler.py` ya producia metricas por capa, metadatos globales, artefactos de grafo y artefactos de transferencia. Segundo, la extraccion estructural del grafo y la calibracion PCIe ya estaban presentes en `src/core/graph_extractor.py` y `src/runner/training_profiler.py`. Tercero, la agregacion robusta de replicas en `src/core/stats_aggregator.py` ya permitia alimentar el ILP con medias, dispersion y cuantiles. Cuarto, el flujo de datos ILP en `src/ilp/data_loader.py`, `src/ilp/model_builder.py` y `src/ilp/solve.py` ya resolvia un problema coherente de particion offline. Quinto, el repositorio ya disponia de automatizacion reproducible para particion, Pareto y reporting mediante `validation/` y `scripts/`.
+
+En otras palabras, el proyecto ya sabia medir y decidir. La brecha residia en ejecutar y validar plenamente la decision bajo el regimen hibrido prometido por la tesis.
+
+### 13.4 Cobertura inicial y cobertura parcial
+
+En el diagnostico original, las capacidades ya implementadas incluian caracterizacion empirica por capa de tiempo, energia, memoria y FLOPs; politica de precision; exportacion de artefactos; extraccion de grafo; costos de transferencia; agregacion robusta; ILP de asignacion CPU-GPU; restricciones de memoria; baselines `all_cpu` y `all_gpu`; exportacion de resultados y tablas; flujo smoke end-to-end; y fusion multi-hardware para ILP robusto.
+
+Sin embargo, varias dimensiones seguian siendo parciales. Existia una asignacion offline por capa, pero aun no una materializacion de esa asignacion en runtime. Existia modelado de comunicacion, pero no simulacion ni ejecucion hibrida completa. Existia reporting, pero no todavia una validacion doctoral integral de prediccion frente a observacion fisica y de preservacion de calidad final.
+
+### 13.5 Brechas historicas y estado actual de cierre
+
+La siguiente tabla resume la trazabilidad completa entre brecha original y estado actual.
+
+| Brecha historica | Diagnostico original | Estado actual | Evidencia principal |
+| --- | --- | --- | --- |
+| Ejecucion hibrida real guiada por ILP | Ausente | Cerrada | `src/runtime/hybrid_executor.py`, `validation/run_hybrid_execution.py` |
+| Decisiones separadas forward/backward | Ausentes | Cerrada | `src/ilp/solve.py`, `src/runtime/device_plan.py`, `src/runtime/plan_representation.py` |
+| Persistencia de activaciones, rematerializacion y checkpointing como decision | Ausentes en ILP | Cerrada | `src/ilp/advanced_terms.py`, `src/runtime/hybrid_executor.py` |
+| Streaming y prefetching operativos | Parciales o no integrados | Cerrada operacionalmente | `src/runtime/hybrid_executor.py`, pruebas de runtime y evidencia controlada de Fase 4 |
+| Simulador de planes hibridos | Ausente | Cerrada | `src/runtime/simulator.py`, `validation/validate_ilp_pipeline.py` |
+| Validacion fisica de planes ILP | Ausente | Cerrada | `validation/validate_ilp_pipeline.py`, `validation/run_hybrid_execution.py` |
+| Heuristica greedy | Ausente | Cerrada | `validation/sweep_ilp_pareto.py` |
+| Estudios de ablacion | Ausentes | Cerrada | `validation/run_ilp_ablation_suite.py`, `validation/generate_ilp_report_assets.py` |
+| Sensibilidad paramétrica reproducible | Ausente | Cerrada | `validation/run_ilp_sensitivity.py` |
+| Validacion de calidad final bajo ejecutor hibrido | Ausente | Cubierta operacionalmente, pendiente de cierre doctoral amplio | `validation/run_hybrid_execution.py`, artefactos agregados de calidad |
+
+### 13.6 Diagnostico sintetico vigente
+
+La conclusion ejecutiva que antes estaba separada en un documento historico queda ahora integrada aqui: el proyecto ya no debe describirse como un sistema que solo sabe medir y decidir. Tras el cierre de Fases 2, 3 y 4, el repositorio mide, decide, simula y ejecuta; y tras el endurecimiento metodologico de 2026-03-26, lo hace ademas bajo un criterio mas estricto de admisibilidad de artefactos.
+
+La unica brecha de gran escala que permanece abierta corresponde a Fase 5 en sentido doctoral fuerte: completar la matriz experimental final, consolidar comparaciones amplias por arquitectura y cerrar la narrativa monografica definitiva con soporte estadistico suficiente para defensa.

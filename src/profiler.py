@@ -22,7 +22,7 @@ from core.precision_policy import (
 )
 from core.system import configure_cpu_runtime, set_determinism
 from core.system import get_hostname, normalize_output_dir_for_host
-from models.factory import SimpleMLP, build_model_and_input
+from models.factory import SimpleMLP, build_model_input_target
 from runner.training_profiler import TrainingProfiler
 
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Advanced Profiler for Deep Learning Training")
-    parser.add_argument("--model", type=str, required=True, choices=["resnet50", "resnet152", "vit_b16", "bert_base", "gpt2_small", "simple_mlp"], help="Model architecture to profile")
+    parser.add_argument("--model", type=str, required=True, choices=["resnet50", "resnet152", "vit_b16", "bert_base", "gpt2_small", "distilgpt2", "simple_mlp"], help="Model architecture to profile")
     parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Precision mode for profiling")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for input data")
     parser.add_argument("--warmup", type=int, default=WARMUP_STEPS, help="Number of warmup steps")
@@ -52,6 +52,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip_cpu", action="store_true", help="Skip CPU profiling entirely")
     parser.add_argument("--num_threads", type=int, default=0, help="Force CPU thread count (0 = auto-detect)")
     parser.add_argument("--keep_partial_artifacts", action="store_true", help="Keep intermediate *_gpu_partial.csv/json artifacts after successful final save")
+    parser.add_argument("--datasets_root", type=str, default="datasets", help="Directory containing downloaded datasets used for real-input batches")
+    parser.add_argument("--require_datasets", action=argparse.BooleanOptionalAction, default=True, help="Require dataset-backed inputs by default; use --no-require_datasets only for diagnostics")
+    parser.add_argument("--allow_fallback_graph", action="store_true", help="Allow fallback_leaf_modules graph extraction only for diagnostics")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--run_id", type=str, default="run_001", help="Replica identifier (used in artifacts metadata)")
     return parser
@@ -120,8 +123,8 @@ def _configure_precision(args) -> torch.dtype:
 
             if not fp16_info["supported"]:
                 logger.warning(
-                    "CPU FP16 requested but functional support is not available. "
-                    "Continuing without FP32 fallback. "
+                    "CPU FP16 requested but functional support is not available; "
+                    "execution will use a potentially slower non-accelerated path. "
                     f"Reason: {fp16_info['reason']}"
                 )
             elif not fp16_info["isa_avx512_fp16"]:
@@ -150,7 +153,12 @@ def main() -> None:
     _initialize_precision_state(args)
 
     torch_dtype = _configure_precision(args)
-    model, inp = build_model_and_input(args, torch_dtype)
+    model, inp, _, data_info = build_model_input_target(args, torch_dtype)
+    args.input_source = data_info.get("input_source")
+    args.target_source = data_info.get("target_source")
+    args.dataset_name = data_info.get("dataset_name")
+    args.dataset_split = data_info.get("dataset_split")
+    args.dataset_path = data_info.get("dataset_path")
 
     if args.precision == "fp16" and args.cpu_fp16_supported is False and args.cpu_precision_executed == "fp16":
         args.cpu_precision_executed = "fp16_requested_no_cpu_support"

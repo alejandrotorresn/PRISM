@@ -138,6 +138,9 @@ def run_sensitivity(
     hw_dispersion_k: float,
     strict_graph_mapping: bool,
     strict_transfer_mapping: bool,
+    strict_sample_quality: bool,
+    strict_transfer_calibration: bool,
+    strict_graph_trace_source: bool,
 ) -> pd.DataFrame:
     """Run OAT sensitivity for k_sigma and w_transfer, return tidy DataFrame."""
 
@@ -152,6 +155,9 @@ def run_sensitivity(
                 k_sigma=k_sigma,
                 strict_graph_mapping=strict_graph,
                 strict_transfer_mapping=strict_transfer,
+                strict_sample_quality=strict_sample_quality,
+                strict_transfer_calibration=strict_transfer_calibration,
+                strict_graph_trace_source=strict_graph_trace_source,
             )
             profiles.append(profile)
 
@@ -305,6 +311,9 @@ def main() -> int:
                         help="Comma-separated w_transfer sweep values")
     parser.add_argument("--strict_graph_mapping", action="store_true")
     parser.add_argument("--strict_transfer_mapping", action="store_true")
+    parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow sensitivity runs on metrics_stats.csv rows flagged as low quality (diagnostic only)")
+    parser.add_argument("--allow_transfer_calibration_fallback", action="store_true", help="Allow sensitivity runs when transfer calibration fell back to neutral defaults (diagnostic only)")
+    parser.add_argument("--allow_fallback_graph_trace", action="store_true", help="Allow sensitivity runs from fallback_leaf_modules graph traces (diagnostic only)")
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0)
@@ -343,6 +352,9 @@ def main() -> int:
         hw_dispersion_k=args.hw_dispersion_k,
         strict_graph_mapping=args.strict_graph_mapping,
         strict_transfer_mapping=args.strict_transfer_mapping,
+        strict_sample_quality=not args.allow_low_quality_stats,
+        strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+        strict_graph_trace_source=not args.allow_fallback_graph_trace,
     )
 
     base_config_dir = config_dirs[0]

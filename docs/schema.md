@@ -4,7 +4,7 @@
 
 Esta estructura describe cómo quedará la monografía doctoral **después de completar el plan de implementación de fases** descrito en [PLAN_IMPLEMENTACION_FASES_ES.md](PLAN_IMPLEMENTACION_FASES_ES.md).
 
-Cada capítulo se construye con evidencia tangible del software y cierra los gaps identificados en [MAPA_PROYECTO_VS_TESIS_ES.md](MAPA_PROYECTO_VS_TESIS_ES.md). La organización responde a tres principios doctorales:
+Cada capítulo se construye con evidencia tangible del software y cierra las brechas identificadas en [PLAN_IMPLEMENTACION_FASES_ES.md](PLAN_IMPLEMENTACION_FASES_ES.md). La organización responde a tres principios doctorales:
 
 1. **Valor independiente de cada capítulo**: Cada capítulo cierra un tramo metodológico específico y aporta evidencia verificable para la defensa doctoral integral.
 
@@ -386,7 +386,7 @@ Cierra la narrativa doctoral con honestidad metodológica.
 
 ## Mapeo de Gaps del MAPA a Capítulos
 
-A modo de auditoría, la siguiente tabla conecta cada gap identificado en [MAPA_PROYECTO_VS_TESIS_ES.md](MAPA_PROYECTO_VS_TESIS_ES.md) con el capítulo y sección donde se cierra:
+A modo de auditoría, la siguiente tabla conecta cada brecha identificada en [PLAN_IMPLEMENTACION_FASES_ES.md](PLAN_IMPLEMENTACION_FASES_ES.md) con el capítulo y sección donde se cierra:
 
 | Gap MAPA | Descripción | Capítulo | Sección | Fase |
 |----------|------------|---------|---------|------|

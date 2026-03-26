@@ -1,6 +1,7 @@
 # Compiled Python files
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Virtual Environments
 env/
@@ -16,6 +17,7 @@ desktop.ini
 
 # Data (Avoid uploading large datasets)
 data/
+datasets/
 *.csv
 *.pth
 *.pt
@@ -24,6 +26,9 @@ data/
 *.log
 logs/
 experiments_logs/
+
+# Generated host/run report artifacts
+reports/ilp_results/zephyr_*/
 
 # IDE settings
 .vscode/

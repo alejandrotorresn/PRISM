@@ -49,12 +49,15 @@ class ActivationStrategy:
 
     def __post_init__(self):
         count = sum([self.retain, self.recompute, self.checkpoint])
-        if count > 1:
-            raise ValueError(f"Node {self.node}: more than one strategy active")
+        if count != 1:
+            raise ValueError(
+                f"Node {self.node}: exactly one of {{retain, recompute, checkpoint}} must be True, "
+                f"got {count} active (retain={self.retain}, recompute={self.recompute}, checkpoint={self.checkpoint})"
+            )
 
     @property
     def is_valid(self) -> bool:
-        return sum([self.retain, self.recompute, self.checkpoint]) <= 1
+        return sum([self.retain, self.recompute, self.checkpoint]) == 1
 
 
 @dataclass
@@ -191,12 +194,14 @@ def compute_effective_costs_phase4(
 
 def validate_strategies_phase4(
     strategies: Dict[str, ActivationStrategy],
-) -> bool:
-    """Validate that all strategies are mutually exclusive."""
+) -> None:
+    """Validate that all strategies are mutually exclusive. Raises ValueError on violation."""
     for node, strat in strategies.items():
         if not strat.is_valid:
-            return False
-    return True
+            raise ValueError(
+                f"Strategy for node '{node}' is invalid "
+                f"(exactly one of retain/recompute/checkpoint must be active): {strat}"
+            )
 
 
 def estimate_memory_savings_phase4(

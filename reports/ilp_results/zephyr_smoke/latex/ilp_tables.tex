@@ -6,7 +6,8 @@
 \toprule
 Model & GPU Budget (MB) & ILP Obj & All-CPU Obj & Greedy Obj & Improve vs CPU (\%) & Improve vs Greedy (\%) & ILP GPU Mem (MB) & ILP CPU Mem (MB) & GPU Layers & CPU Layers & Cut Edges \\
 \midrule
-simple_mlp & 500 & 2.629 & 38.425 & 2.557 & 93.16 & -2.82 & 58.03 & 0.01 & 3 & 2 & 1 \\
+resnet50 & 2000 & 720.403 & 821.457 & 704.035 & 12.30 & -2.32 & 1986.17 & 1344.62 & 2 & 124 & 4 \\
+simple_mlp & 500 & 0.748 & 0.910 & 1.219 & 17.78 & 38.60 & 234.33 & 0.00 & 5 & 0 & 0 \\
 \bottomrule
 \end{tabular}
 
@@ -20,9 +21,30 @@ simple_mlp & 500 & 2.629 & 38.425 & 2.557 & 93.16 & -2.82 & 58.03 & 0.01 & 3 & 2
 \toprule
 Model & GPU Budget (MB) & ILP Status & ILP Obj & Greedy Obj & All-CPU Obj & All-GPU Status & Improve vs CPU (\%) & Improve vs Greedy (\%) & ILP GPU Mem (MB) & ILP CPU Mem (MB) & Cut Edges \\
 \midrule
-simple_mlp & 500 & optimal & 2.629 & 2.557 & 38.425 & feasible & 93.16 & -2.82 & 58.03 & 0.01 & 1 \\
-simple_mlp & 1000 & optimal & 2.629 & 2.557 & 38.425 & feasible & 93.16 & -2.82 & 58.03 & 0.01 & 1 \\
-simple_mlp & 2000 & optimal & 2.629 & 2.557 & 38.425 & feasible & 93.16 & -2.82 & 58.03 & 0.01 & 1 \\
+resnet50 & 500 & optimal & 3488.319 & 3466.151 & 3542.084 & infeasible & 1.52 & -0.64 & 433.72 & 6039.99 & 0 \\
+resnet50 & 500 & optimal & 810.714 & 805.241 & 826.058 & infeasible & 1.86 & -0.68 & 389.53 & 1528.37 & 0 \\
+resnet50 & 500 & optimal & 3655.243 & 3655.243 & 3735.728 & infeasible & 2.15 & -0.00 & 462.95 & 5941.99 & 1 \\
+resnet50 & 500 & optimal & 774.361 & 768.612 & 821.457 & infeasible & 5.73 & -0.75 & 475.19 & 1479.37 & 1 \\
+resnet50 & 1000 & optimal & 3457.561 & 3466.151 & 3542.084 & infeasible & 2.39 & 0.25 & 965.44 & 5941.99 & 0 \\
+resnet50 & 1000 & optimal & 797.195 & 786.240 & 826.058 & infeasible & 3.49 & -1.39 & 735.38 & 1503.87 & 0 \\
+resnet50 & 1000 & optimal & 3573.664 & 3504.818 & 3735.728 & infeasible & 4.34 & -1.96 & 964.93 & 5917.49 & 0 \\
+resnet50 & 1000 & optimal & 753.727 & 744.723 & 821.457 & infeasible & 8.25 & -1.21 & 999.37 & 1424.25 & 4 \\
+resnet50 & 2000 & optimal & 3385.579 & 3325.662 & 3542.084 & infeasible & 4.42 & -1.80 & 1842.16 & 5917.49 & 0 \\
+resnet50 & 2000 & optimal & 773.301 & 763.436 & 826.058 & infeasible & 6.39 & -1.29 & 1963.61 & 1430.37 & 0 \\
+resnet50 & 2000 & optimal & 3487.895 & 3452.910 & 3735.728 & infeasible & 6.63 & -1.01 & 1929.86 & 5696.99 & 4 \\
+resnet50 & 2000 & optimal & 720.403 & 704.035 & 821.457 & infeasible & 12.30 & -2.32 & 1986.17 & 1344.62 & 4 \\
+simple_mlp & 500 & optimal & 1.983 & 2.163 & 2.506 & feasible & 20.88 & 8.35 & 235.81 & 0.00 & 0 \\
+simple_mlp & 500 & optimal & 0.748 & 1.219 & 0.910 & feasible & 17.78 & 38.60 & 234.33 & 0.00 & 0 \\
+simple_mlp & 500 & optimal & 1.872 & 1.872 & 2.394 & feasible & 21.79 & 0.00 & 38.91 & 0.25 & 1 \\
+simple_mlp & 500 & optimal & 1.086 & 3.061 & 1.665 & feasible & 34.74 & 64.51 & 193.44 & 0.00 & 0 \\
+simple_mlp & 1000 & optimal & 1.983 & 2.163 & 2.506 & feasible & 20.88 & 8.35 & 235.81 & 0.00 & 0 \\
+simple_mlp & 1000 & optimal & 0.748 & 1.219 & 0.910 & feasible & 17.78 & 38.60 & 234.33 & 0.00 & 0 \\
+simple_mlp & 1000 & optimal & 1.872 & 1.872 & 2.394 & feasible & 21.79 & 0.00 & 38.91 & 0.25 & 1 \\
+simple_mlp & 1000 & optimal & 1.086 & 3.061 & 1.665 & feasible & 34.74 & 64.51 & 193.44 & 0.00 & 0 \\
+simple_mlp & 2000 & optimal & 1.983 & 2.163 & 2.506 & feasible & 20.88 & 8.35 & 235.81 & 0.00 & 0 \\
+simple_mlp & 2000 & optimal & 0.748 & 1.219 & 0.910 & feasible & 17.78 & 38.60 & 234.33 & 0.00 & 0 \\
+simple_mlp & 2000 & optimal & 1.872 & 1.872 & 2.394 & feasible & 21.79 & 0.00 & 38.91 & 0.25 & 1 \\
+simple_mlp & 2000 & optimal & 1.086 & 3.061 & 1.665 & feasible & 34.74 & 64.51 & 193.44 & 0.00 & 0 \\
 \bottomrule
 \end{tabular}
 

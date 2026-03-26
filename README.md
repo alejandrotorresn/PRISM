@@ -43,11 +43,16 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ### Profile Your First Model (2 minutes)
 
 ```bash
+# First-time setup: download the datasets used by the campaign into ./datasets
+python scripts/download_datasets.py --models all --datasets_root datasets
+
 # GPU-only profiling (independent of CPU precision ISA support)
 python src/profiler.py \
   --model vit_b16 \
   --precision fp32 \
   --batch_size 32 \
+  --datasets_root datasets \
+  --require_datasets \
   --skip_cpu \
   --warmup 3 \
   --measure 10
@@ -66,12 +71,12 @@ bash validation/run_unit_tests.sh
 
 ---
 
-## Supported Models (6 Total)
+## Supported Models (7 Total)
 
 | Category | Models |
 |----------|--------|
 | **Vision** | ResNet50, ResNet152, ViT-B/16 |
-| **NLP** | BERT-base, GPT2-small |
+| **NLP** | BERT-base, GPT2-small, DistilGPT2 |
 | **Baseline** | SimpleMLP |
 
 ---
@@ -131,10 +136,10 @@ bash validation/run_unit_tests.sh
 │   └── test-*                   # Test fixtures
 │
 ├── docs/                         # Documentation
-│   ├── README.md                # Quick start
-│   ├── PROJECT_STRUCTURE.md     # Detailed reference
-│   ├── TESTING_VALIDATION_MAP.md # Validation runbook
-│   └── documentation.md         # Technical methodology
+│   ├── README.md                # Documentation index + quick start
+│   ├── GLOBAL_PROJECT_DOCUMENTATION_ES.md # Canonical technical reference (ES)
+│   ├── GLOBAL_PROJECT_DOCUMENTATION.md    # Canonical technical reference (EN)
+│   └── PROJECT_STRUCTURE.md     # Current architecture map
 │
 ├── validation/                   # Validation scripts
 ├── tests/                        # Unit tests
@@ -183,6 +188,8 @@ bash scripts/run_experiments.sh
 # Results: data/{hostname}/results/{model}/{optimizer}/{precision}/batch_{N}/
 ```
 
+The campaign now starts by downloading or validating the required datasets in [datasets](/home/zephyr/Documents/University/PhD/Code/Final%20Thesis%20Code/datasets) and then builds profiling/runtime batches from that folder instead of synthetic inputs whenever the dataset is available.
+
 ### Run Fast Smoke Validation (Script Mode)
 
 ```bash
@@ -207,6 +214,8 @@ Useful environment variables for `scripts/run_experiments.sh`:
 - `FAIL_FAST=true|false`: Stop on the first run/aggregation failure.
 - `DRY_RUN=true|false`: Validate and print commands without executing the campaign.
 - `BASE_OUTPUT_DIR=...` and `LOG_DIR=...`: Override output and logs directories.
+- `DATASETS_DIR=...`: Override the dataset storage root used by the campaign.
+- `DOWNLOAD_DATASETS=true|false`: Control whether the campaign performs the dataset preparation step automatically.
 - `WARMUP=N` and `MEASURE=N`: Override profiling iterations globally.
 
 Recommended launch profiles for heterogeneous multi-server collection are documented in [docs/SERVER_LAUNCH_PROFILES.md](docs/SERVER_LAUNCH_PROFILES.md).
@@ -234,103 +243,19 @@ watch -n 5 'ls -R data/*/results'
 
 ---
 
-## Command-Line Interface
+## Operational Reference
 
-### Essential Arguments
+The repository root now keeps only the minimal operational surface. Detailed CLI arguments, artifact schemas, troubleshooting matrices, and implementation notes are intentionally consolidated in the canonical documentation set instead of being duplicated here.
 
-```bash
---model {name}              # resnet50, resnet152, vit_b16, bert_base, gpt2_small, simple_mlp
---batch_size N              # Batch size (default: 32)
---precision {mode}          # fp32, fp16, bf16 (default: fp32)
---warmup N                  # Warmup iterations (default: 5)
---measure N                 # Measurement iterations (default: 15)
-```
+Use these entrypoints depending on the task:
 
-### Optional Arguments
+- Quick operational start: [docs/README.md](docs/README.md)
+- Full technical reference and artifact contract: [docs/GLOBAL_PROJECT_DOCUMENTATION.md](docs/GLOBAL_PROJECT_DOCUMENTATION.md)
+- Spanish academic technical reference: [docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md](docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md)
+- Architecture and folder map: [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)
+- Doctoral implementation and closure record: [docs/PLAN_IMPLEMENTACION_FASES_ES.md](docs/PLAN_IMPLEMENTACION_FASES_ES.md)
 
-```bash
---optimizer {name}          # SGD, Adam, AdamW, RMSprop, Adagrad, Adadelta
---output_dir path           # Output directory (default: data)
---rapl                      # Enable CPU RAPL energy (Linux only)
---no_gpu                    # CPU-only profiling
---gpu_id N                  # GPU device ID (default: 0)
---input_size N              # Vision model input size (default: 224)
---seq_length N              # NLP model sequence length (default: 128)
---keep_partial_artifacts    # Keep intermediate *_gpu_partial.csv/json after successful final save
-```
-
-Note on outputs:
-- During long runs, the profiler may create temporary `*_metrics_gpu_partial.csv` and `*_meta_gpu_partial.json` as safety checkpoints.
-- By default, these partial files are removed automatically once final artifacts are saved successfully.
-- Use `--keep_partial_artifacts` to keep them for debugging/auditing.
-
-### Zombie Thread Fix Arguments (NEW)
-
-```bash
---skip_cpu                  # Skip CPU profiling entirely
---num_threads N             # Force N CPU threads (override SLURM)
-```
-
----
-
-## Output Format
-
-### CSV: Per-Layer Metrics
-```
-layer,type,params_mb,flops,gpu_fwd_time_ms,cpu_fwd_time_ms,gpu_fwd_energy_j,...
-conv2d,Conv2d,2.4,3.7e9,125.3,425.7,42.5,...
-linear,Linear,0.8,2.1e8,15.2,45.2,5.1,...
-
-# New status columns:
-# run_executed, skip_unsupported_precision, skip_reason
-```
-
-### JSON: Global Metadata
-```json
-{
-  "model": "resnet50",
-  "precision_requested": "fp32",
-  "cpu_precision_executed": "fp32",
-  "gpu_precision_executed": "fp32",
-  "energy_total_gpu_j": 1250.3,
-  "energy_total_cpu_j": 425.1,
-  "measured_peak_tflops_gpu": 85.2,
-  "pcie_alpha_h2d_us": 2.1,
-  "pcie_beta_h2d_gbps": 45.3
-}
-```
-
-See [docs/documentation.md](docs/documentation.md) for complete schema.
-
----
-
-## Troubleshooting
-
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| Run reported as skipped | Requested FP16/BF16 lacks accelerated CPU ISA support | Check `skip_reason` in CSV/JSON, then use `--precision fp32` or supported hardware |
-| OOM (Out of Memory) | Batch size too large | Reduce `--batch_size` |
-| RAPL: Permission denied | RAPL requires read access to sysfs | Run with sudo or omit `--rapl` |
-| GPU: ImportError `pynvml` module | NVML package/driver mismatch | Install `nvidia-ml-py` and verify NVIDIA driver/CUDA |
-| Slow CPU profiling | SLURM/HPC single-core allocation | Use `--num_threads {physical_cores}` |
-
-For more, see [docs/README.md#troubleshooting](docs/README.md#troubleshooting)
-
----
-
-## Recent Improvements
-
-### Zombie Thread Fix (v1.0)
-Fixed critical issue where CPU FP16 preflight could block GPU profiling:
-- **Problem**: Slow/blocked CPU FP16 paths in unsupported ISA scenarios
-- **Solution**: ISA-aware precision policy (`skip` + report), plus `--skip_cpu` and `--num_threads`
-- Details are integrated in [docs/documentation.md](docs/documentation.md) and [docs/TESTING_VALIDATION_MAP.md](docs/TESTING_VALIDATION_MAP.md)
-
-### Two-Phase Timeout (Previous)
-Adaptive timeout mechanism for CPU profiling:
-- Phase 1: Fixed 60s timeout for forward pass
-- Phase 2: Adaptive timeout for backward pass
-- Phase 3: Final wait for completion
+For routine use, the practical rule is simple: launch from this README, operate from [docs/README.md](docs/README.md), and consult the global documentation whenever you need exact CLI semantics, output schemas, or validation workflows.
 
 ---
 
@@ -350,9 +275,10 @@ Adaptive timeout mechanism for CPU profiling:
 |----------|---------|
 | [docs/README.md](docs/README.md) | Quick start guide |
 | [docs/QUICK_START.sh](docs/QUICK_START.sh) | Interactive quick reference |
-| [docs/documentation.md](docs/documentation.md) | Technical documentation & data schema |
+| [docs/GLOBAL_PROJECT_DOCUMENTATION.md](docs/GLOBAL_PROJECT_DOCUMENTATION.md) | Canonical technical documentation & data schema |
+| [docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md](docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md) | Canonical academic technical documentation in Spanish |
 | [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) | Detailed project reference |
-| [docs/TESTING_VALIDATION_MAP.md](docs/TESTING_VALIDATION_MAP.md) | Validation strategy and runbook |
+| [docs/PLAN_IMPLEMENTACION_FASES_ES.md](docs/PLAN_IMPLEMENTACION_FASES_ES.md) | Doctoral implementation roadmap and closure acts |
 
 ---
 

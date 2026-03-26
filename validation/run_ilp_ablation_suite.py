@@ -57,7 +57,16 @@ def _parse_budget_list(text: str) -> List[float]:
     return vals
 
 
-def _load_profile(cdir: Path, model: str, k_sigma: float, strict_graph_mapping: bool, strict_transfer_mapping: bool):
+def _load_profile(
+    cdir: Path,
+    model: str,
+    k_sigma: float,
+    strict_graph_mapping: bool,
+    strict_transfer_mapping: bool,
+    strict_sample_quality: bool,
+    strict_transfer_calibration: bool,
+    strict_graph_trace_source: bool,
+):
     stats_csv, graph_csv, transfer_csv = _default_paths(cdir, model)
     return load_ilp_inputs(
         metrics_stats_csv=str(stats_csv),
@@ -66,6 +75,9 @@ def _load_profile(cdir: Path, model: str, k_sigma: float, strict_graph_mapping: 
         k_sigma=k_sigma,
         strict_graph_mapping=strict_graph_mapping,
         strict_transfer_mapping=strict_transfer_mapping,
+        strict_sample_quality=strict_sample_quality,
+        strict_transfer_calibration=strict_transfer_calibration,
+        strict_graph_trace_source=strict_graph_trace_source,
     )
 
 
@@ -75,6 +87,9 @@ def _load_data(
     k_sigma: float,
     strict_graph_mapping: bool,
     strict_transfer_mapping: bool,
+    strict_sample_quality: bool,
+    strict_transfer_calibration: bool,
+    strict_graph_trace_source: bool,
     hw_aggregate: str,
     hw_dispersion_k: float,
 ):
@@ -85,6 +100,9 @@ def _load_data(
             k_sigma=k_sigma,
             strict_graph_mapping=strict_graph_mapping,
             strict_transfer_mapping=strict_transfer_mapping,
+            strict_sample_quality=strict_sample_quality,
+            strict_transfer_calibration=strict_transfer_calibration,
+            strict_graph_trace_source=strict_graph_trace_source,
         )
         for cdir in config_dirs
     ]
@@ -152,6 +170,9 @@ def main() -> int:
     parser.add_argument("--k_sigma", type=float, default=1.0)
     parser.add_argument("--strict_graph_mapping", action="store_true")
     parser.add_argument("--strict_transfer_mapping", action="store_true")
+    parser.add_argument("--allow_low_quality_stats", action="store_true")
+    parser.add_argument("--allow_transfer_calibration_fallback", action="store_true")
+    parser.add_argument("--allow_fallback_graph_trace", action="store_true")
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
@@ -182,6 +203,9 @@ def main() -> int:
         k_sigma=args.k_sigma,
         strict_graph_mapping=args.strict_graph_mapping,
         strict_transfer_mapping=args.strict_transfer_mapping,
+        strict_sample_quality=not args.allow_low_quality_stats,
+        strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+        strict_graph_trace_source=not args.allow_fallback_graph_trace,
         hw_aggregate=args.hw_aggregate,
         hw_dispersion_k=args.hw_dispersion_k,
     )
@@ -191,6 +215,9 @@ def main() -> int:
         k_sigma=0.0,
         strict_graph_mapping=args.strict_graph_mapping,
         strict_transfer_mapping=args.strict_transfer_mapping,
+        strict_sample_quality=not args.allow_low_quality_stats,
+        strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+        strict_graph_trace_source=not args.allow_fallback_graph_trace,
         hw_aggregate=args.hw_aggregate,
         hw_dispersion_k=args.hw_dispersion_k,
     )

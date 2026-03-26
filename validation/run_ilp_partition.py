@@ -61,6 +61,9 @@ def main() -> int:
     parser.add_argument("--k_sigma", type=float, default=1.0, help="Robustness factor for mu + k*sigma")
     parser.add_argument("--strict_graph_mapping", action="store_true", help="Fail if graph edges cannot be mapped to metrics layers")
     parser.add_argument("--strict_transfer_mapping", action="store_true", help="Fail if matched graph edges miss transfer costs")
+    parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow ILP solve on metrics_stats.csv rows flagged as low quality (diagnostic only)")
+    parser.add_argument("--allow_transfer_calibration_fallback", action="store_true", help="Allow ILP solve when transfer calibration fell back to neutral defaults (diagnostic only)")
+    parser.add_argument("--allow_fallback_graph_trace", action="store_true", help="Allow ILP solve from fallback_leaf_modules graph traces (diagnostic only)")
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
@@ -71,7 +74,7 @@ def main() -> int:
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_dir", default=None, help="Output folder for ILP solution files")
     parser.add_argument("--phase4_activation", action="store_true", help="Enable Phase 4 activation-strategy optimization")
-    parser.add_argument("--phase4_backend", choices=["greedy"], default="greedy")
+    parser.add_argument("--phase4_backend", choices=["auto", "greedy", "exhaustive"], default="auto")
     parser.add_argument("--phase4_enable_recompute", action="store_true")
     parser.add_argument("--phase4_enable_checkpoint", action="store_true")
     parser.add_argument("--phase4_w_io", type=float, default=0.0)
@@ -111,6 +114,9 @@ def main() -> int:
             k_sigma=args.k_sigma,
             strict_graph_mapping=args.strict_graph_mapping,
             strict_transfer_mapping=args.strict_transfer_mapping,
+            strict_sample_quality=not args.allow_low_quality_stats,
+            strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+            strict_graph_trace_source=not args.allow_fallback_graph_trace,
         )
     else:
         profiles = []
@@ -123,6 +129,9 @@ def main() -> int:
                 k_sigma=args.k_sigma,
                 strict_graph_mapping=args.strict_graph_mapping,
                 strict_transfer_mapping=args.strict_transfer_mapping,
+                strict_sample_quality=not args.allow_low_quality_stats,
+                strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+                strict_graph_trace_source=not args.allow_fallback_graph_trace,
             )
             profiles.append(profile)
 
@@ -185,8 +194,17 @@ def main() -> int:
         )
 
         inferred = infer_ilp_input_paths(config_dir=config_dirs[0], model_name=args.model)
-        graph_edges = load_graph_edges(inferred.graph_edges_csv)
-        transfer_costs = load_transfer_costs(inferred.transfer_edges_csv)
+        measured_layers = set(data.nodes)
+        graph_edges = load_graph_edges(
+            inferred.graph_edges_csv,
+            transfer_edges_csv=inferred.transfer_edges_csv,
+            measured_layers=measured_layers,
+        )
+        transfer_costs = load_transfer_costs(
+            inferred.transfer_edges_csv,
+            graph_edges_csv=inferred.graph_edges_csv,
+            measured_layers=measured_layers,
+        )
 
         sim_cfg = SimulationConfig(
             mode=args.simulate_mode,

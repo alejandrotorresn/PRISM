@@ -53,6 +53,10 @@ def normalize_output_dir_for_host(output_dir: str, host_name: str) -> str:
 
 
 def set_determinism(seed: int = 42):
+    # Note: PYTHONHASHSEED is fixed at interpreter startup and cannot be changed
+    # for the current process at runtime. Setting it here only propagates to
+    # child processes spawned after this call (e.g., via subprocess or multiprocessing).
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -60,7 +64,6 @@ def set_determinism(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
-    os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 def configure_cpu_runtime(force_threads: int = 0) -> None:

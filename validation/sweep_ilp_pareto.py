@@ -231,6 +231,9 @@ def main() -> int:
     parser.add_argument("--k_sigma", type=float, default=1.0)
     parser.add_argument("--strict_graph_mapping", action="store_true", help="Fail if graph edges cannot be mapped to metrics layers")
     parser.add_argument("--strict_transfer_mapping", action="store_true", help="Fail if matched graph edges miss transfer costs")
+    parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow ILP sweep on metrics_stats.csv rows flagged as low quality (diagnostic only)")
+    parser.add_argument("--allow_transfer_calibration_fallback", action="store_true", help="Allow ILP sweep when transfer calibration fell back to neutral defaults (diagnostic only)")
+    parser.add_argument("--allow_fallback_graph_trace", action="store_true", help="Allow ILP sweep from fallback_leaf_modules graph traces (diagnostic only)")
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
@@ -265,6 +268,9 @@ def main() -> int:
             k_sigma=args.k_sigma,
             strict_graph_mapping=args.strict_graph_mapping,
             strict_transfer_mapping=args.strict_transfer_mapping,
+            strict_sample_quality=not args.allow_low_quality_stats,
+            strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+            strict_graph_trace_source=not args.allow_fallback_graph_trace,
         )
         profiles.append(profile)
 

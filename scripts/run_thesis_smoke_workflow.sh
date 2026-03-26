@@ -24,12 +24,18 @@ if [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
   conda activate thesis_env 2>/dev/null || true
 fi
 
+source "$(dirname "$0")/sanitize_cuda_env.sh"
+sanitize_cuda_runtime_env
+
 # -------------------------------------------------------------------------------
 # USER-TUNABLE PARAMETERS (SMOKE SCALE)
 # -------------------------------------------------------------------------------
 PYTHON_CMD="${PYTHON_CMD:-python}"
 PROFILER_SCRIPT="${PROFILER_SCRIPT:-src/profiler.py}"
+DATASET_SCRIPT="${DATASET_SCRIPT:-scripts/download_datasets.py}"
 HOST_TAG="${HOST_TAG:-$(hostname)}"
+DATASETS_DIR="${DATASETS_DIR:-datasets}"
+DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}"
 
 # Reduced campaign axes (deliberately small, preconfigured for real-machine verification)
 MODELS=(${MODELS:-simple_mlp resnet50})
@@ -56,6 +62,9 @@ HW_AGGREGATE="${HW_AGGREGATE:-max}"
 HW_DISPERSION_K="${HW_DISPERSION_K:-0.0}"
 STRICT_GRAPH_MAPPING="${STRICT_GRAPH_MAPPING:-true}"
 STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
+ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-true}"
+ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
+ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
 GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-500,1000,2000}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
 
@@ -97,6 +106,7 @@ check_gpu() {
 section "STEP 0/6 - WORKFLOW PREFLIGHT"
 log_msg "Python command: $PYTHON_CMD"
 log_msg "Profiler script: $PROFILER_SCRIPT"
+log_msg "Datasets dir: $DATASETS_DIR"
 log_msg "Host tag: $HOST_TAG"
 log_msg "Output root: $BASE_OUTPUT_DIR"
 log_msg "Reports root: $REPORTS_DIR"
@@ -121,9 +131,20 @@ if [ "$USE_SKIP_CPU" = true ] && [ "$HAS_GPU" = false ]; then
 fi
 
 # -------------------------------------------------------------------------------
-# STEP 1: PROFILING CAMPAIGN (REDUCED GRID, FP32 ONLY)
+# STEP 1: DATASET PREPARATION
 # -------------------------------------------------------------------------------
-section "STEP 1/6 - PROFILING REDUCED GRID (FP32 ONLY)"
+if [ "$DOWNLOAD_DATASETS" = true ]; then
+  section "STEP 1/7 - DATASET PREPARATION"
+  DATASET_MODELS_CSV="$(IFS=,; echo "${MODELS[*]}")"
+  log_msg "Preparing datasets for models: $DATASET_MODELS_CSV"
+  "$PYTHON_CMD" "$DATASET_SCRIPT" --models "$DATASET_MODELS_CSV" --datasets_root "$DATASETS_DIR" >> "$LOG_FILE" 2>&1
+  log_msg "OK: dataset preparation finished"
+fi
+
+# -------------------------------------------------------------------------------
+# STEP 2: PROFILING CAMPAIGN (REDUCED GRID, FP32 ONLY)
+# -------------------------------------------------------------------------------
+section "STEP 2/7 - PROFILING REDUCED GRID (FP32 ONLY)"
 
 TOTAL=$(( ${#MODELS[@]} * ${#OPTIMIZERS[@]} * ${#BATCH_SIZES[@]} * REPEATS ))
 DONE=0
@@ -152,6 +173,8 @@ for model in "${MODELS[@]}"; do
           --warmup "$WARMUP"
           --measure "$MEASURE"
           --output_dir "$RUN_DIR"
+          --datasets_root "$DATASETS_DIR"
+          --require_datasets
           --seed "$RUN_SEED"
           --run_id "$RUN_ID"
         )
@@ -180,9 +203,9 @@ for model in "${MODELS[@]}"; do
 done
 
 # -------------------------------------------------------------------------------
-# STEP 2: AGGREGATE METRICS STATS PER CONFIGURATION
+# STEP 3: AGGREGATE METRICS STATS PER CONFIGURATION
 # -------------------------------------------------------------------------------
-section "STEP 2/6 - AGGREGATE REPLICATE METRICS"
+section "STEP 3/7 - AGGREGATE REPLICATE METRICS"
 
 for model in "${MODELS[@]}"; do
   for optimizer in "${OPTIMIZERS[@]}"; do
@@ -200,9 +223,9 @@ for model in "${MODELS[@]}"; do
 done
 
 # -------------------------------------------------------------------------------
-# STEP 3: BUILD/SOLVE ILP PARTITION PER CONFIGURATION
+# STEP 4: BUILD/SOLVE ILP PARTITION PER CONFIGURATION
 # -------------------------------------------------------------------------------
-section "STEP 3/6 - ILP PARTITION SOLVES"
+section "STEP 4/7 - ILP PARTITION SOLVES"
 
 for model in "${MODELS[@]}"; do
   for optimizer in "${OPTIMIZERS[@]}"; do
@@ -224,6 +247,9 @@ for model in "${MODELS[@]}"; do
       HW_DISPERSION_K="$HW_DISPERSION_K" \
       STRICT_GRAPH_MAPPING="$STRICT_GRAPH_MAPPING" \
       STRICT_TRANSFER_MAPPING="$STRICT_TRANSFER_MAPPING" \
+      ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
+      ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
+      ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
       bash scripts/run_ilp_partition.sh \
       >> "$LOG_FILE" 2>&1
 
@@ -233,9 +259,9 @@ for model in "${MODELS[@]}"; do
 done
 
 # -------------------------------------------------------------------------------
-# STEP 4: ILP PARETO SWEEP PER CONFIGURATION
+# STEP 5: ILP PARETO SWEEP PER CONFIGURATION
 # -------------------------------------------------------------------------------
-section "STEP 4/6 - ILP PARETO SWEEPS"
+section "STEP 5/7 - ILP PARETO SWEEPS"
 
 for model in "${MODELS[@]}"; do
   for optimizer in "${OPTIMIZERS[@]}"; do
@@ -257,6 +283,9 @@ for model in "${MODELS[@]}"; do
       HW_DISPERSION_K="$HW_DISPERSION_K" \
       STRICT_GRAPH_MAPPING="$STRICT_GRAPH_MAPPING" \
       STRICT_TRANSFER_MAPPING="$STRICT_TRANSFER_MAPPING" \
+      ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
+      ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
+      ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
       bash scripts/run_ilp_pareto_sweep.sh \
       >> "$LOG_FILE" 2>&1
 
@@ -266,9 +295,9 @@ for model in "${MODELS[@]}"; do
 done
 
 # -------------------------------------------------------------------------------
-# STEP 5: GENERATE CONSOLIDATED REPORT ASSETS (CSV + PLOTS + MD)
+# STEP 6: GENERATE CONSOLIDATED REPORT ASSETS (CSV + PLOTS + MD)
 # -------------------------------------------------------------------------------
-section "STEP 5/6 - GENERATE REPORT ASSETS"
+section "STEP 6/7 - GENERATE REPORT ASSETS"
 
 PYTHON_CMD="$PYTHON_CMD" \
 INPUT_ROOT="$BASE_OUTPUT_DIR" \
@@ -279,9 +308,9 @@ bash scripts/generate_ilp_report_assets.sh \
 log_msg "OK: consolidated report assets in $REPORTS_DIR"
 
 # -------------------------------------------------------------------------------
-# STEP 6: EXPORT LATEX TABLES
+# STEP 7: EXPORT LATEX TABLES
 # -------------------------------------------------------------------------------
-section "STEP 6/6 - EXPORT LATEX TABLES"
+section "STEP 7/7 - EXPORT LATEX TABLES"
 
 PYTHON_CMD="$PYTHON_CMD" \
 BEST_CSV="$REPORTS_DIR/ilp_best_per_model.csv" \

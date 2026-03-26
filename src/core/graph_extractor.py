@@ -1,12 +1,18 @@
 import logging
 import os
+from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.fx import symbolic_trace
 
-from core.io_artifacts import write_csv_rows
+try:
+    from .decoder_export_backend import EXPORT_TRACE_SOURCE, ExportTraceContext, try_export_decoder_only_trace
+    from .io_artifacts import write_csv_rows
+except ImportError:
+    from core.decoder_export_backend import EXPORT_TRACE_SOURCE, ExportTraceContext, try_export_decoder_only_trace
+    from core.io_artifacts import write_csv_rows
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +192,97 @@ def _build_fx_graph(model: nn.Module, layer_stats: Dict[str, Dict[str, Any]], in
     return nodes, edges, "torch_fx"
 
 
+def _build_export_grouped_graph(
+    model: nn.Module,
+    layer_stats: Dict[str, Dict[str, Any]],
+    trace_ctx: ExportTraceContext,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], str]:
+    graph_module = trace_ctx.graph_module
+    node_layer_names = trace_ctx.node_layer_names
+
+    adjacency: Dict[str, List[str]] = defaultdict(list)
+    first_seen_idx: Dict[str, int] = {}
+    source_nodes_by_layer: Dict[str, List[str]] = defaultdict(list)
+
+    topo_index = 0
+    for node in graph_module.graph.nodes:
+        if node.op == "output":
+            continue
+        layer_name = node_layer_names.get(node.name)
+        if layer_name and layer_name not in first_seen_idx:
+            first_seen_idx[layer_name] = topo_index
+        if layer_name:
+            source_nodes_by_layer[layer_name].append(node.name)
+        topo_index += 1
+
+    for dst in graph_module.graph.nodes:
+        if dst.op == "output":
+            continue
+        for src in dst.all_input_nodes:
+            adjacency[src.name].append(dst.name)
+
+    ordered_layers = sorted(first_seen_idx, key=first_seen_idx.get)
+    nodes: List[Dict[str, Any]] = []
+    layer_node_ids: Dict[str, str] = {}
+    for idx, layer_name in enumerate(ordered_layers):
+        node_id = f"n{idx}"
+        layer_node_ids[layer_name] = node_id
+        module = model.get_submodule(layer_name)
+        nodes.append({
+            "node_id": node_id,
+            "node_name": layer_name,
+            "op_type": module.__class__.__name__,
+            "topo_index": first_seen_idx[layer_name],
+            "params_mb": _params_mb_for_module(module),
+            "activ_out_mb": _activation_mb_from_layer_stats(layer_stats, layer_name),
+            "trace_source": EXPORT_TRACE_SOURCE,
+        })
+
+    edges: List[Dict[str, Any]] = []
+    seen_edges: set[Tuple[str, str]] = set()
+    for start_layer, start_nodes in source_nodes_by_layer.items():
+        queue = deque((node_name, 0) for node_name in start_nodes)
+        visited = set(start_nodes)
+        nearest_depth: int | None = None
+        reached_layers: set[str] = set()
+
+        while queue:
+            current_name, depth = queue.popleft()
+            if nearest_depth is not None and depth >= nearest_depth:
+                continue
+            for next_name in adjacency.get(current_name, []):
+                if next_name in visited:
+                    continue
+                visited.add(next_name)
+                next_layer = node_layer_names.get(next_name)
+                next_depth = depth + 1
+                if next_layer and next_layer != start_layer:
+                    if nearest_depth is None or next_depth < nearest_depth:
+                        nearest_depth = next_depth
+                        reached_layers = {next_layer}
+                    elif next_depth == nearest_depth:
+                        reached_layers.add(next_layer)
+                    continue
+                queue.append((next_name, next_depth))
+
+        for dst_layer in sorted(reached_layers, key=lambda name: first_seen_idx.get(name, 10**9)):
+            edge_key = (start_layer, dst_layer)
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            edges.append({
+                "src_id": layer_node_ids[start_layer],
+                "dst_id": layer_node_ids[dst_layer],
+                "tensor_mb": _activation_mb_from_layer_stats(layer_stats, start_layer),
+                "tensor_shape": "",
+                "producer_name": start_layer,
+                "consumer_name": dst_layer,
+                "trace_source": EXPORT_TRACE_SOURCE,
+            })
+
+    return nodes, edges, EXPORT_TRACE_SOURCE
+
+
 def export_graph_artifacts(
     model: nn.Module,
     model_name: str,
@@ -193,6 +290,7 @@ def export_graph_artifacts(
     input_data: Any,
     layer_stats: Optional[Dict[str, Dict[str, Any]]] = None,
     include_records: bool = False,
+    allow_fallback_graph: bool = False,
 ) -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     layer_stats = layer_stats or {}
@@ -203,8 +301,18 @@ def export_graph_artifacts(
     try:
         nodes, edges, source = _build_fx_graph(model, layer_stats, input_data)
     except Exception as e:
-        logger.warning(f"torch.fx graph extraction failed, using fallback graph. Reason: {e}")
-        nodes, edges, source = _build_fallback_graph(model, layer_stats)
+        trace_ctx = try_export_decoder_only_trace(model, input_data)
+        if trace_ctx is None:
+            if not allow_fallback_graph:
+                raise RuntimeError(
+                    "Structured graph extraction failed and fallback_leaf_modules is disabled. "
+                    "Use allow_fallback_graph=True only for explicit diagnostic runs."
+                ) from e
+            logger.warning(f"torch.fx graph extraction failed, using fallback graph. Reason: {e}")
+            nodes, edges, source = _build_fallback_graph(model, layer_stats)
+        else:
+            logger.info("torch.fx graph extraction failed; using decoder-only export backend")
+            nodes, edges, source = _build_export_grouped_graph(model, layer_stats, trace_ctx)
 
     write_csv_rows(nodes_path, nodes)
     write_csv_rows(edges_path, edges)
