@@ -1,31 +1,95 @@
 \chapter{Ejecucion Hibrida, Simulacion y Validacion Experimental}
 
 \section{6.1 Introduccion: cierre del bucle planificacion-ejecucion}
-Se formaliza la transicion desde solucion de optimizacion hacia comportamiento operacional verificable.
+Este capitulo cierra la brecha historicamente mas delicada del proyecto: la distancia entre una solucion ILP valida en papel y una politica cuya materializacion pueda observarse en runtime. En una tesis de sistemas, ese salto no puede dejarse implicito. Una politica de particion solo adquiere valor cientifico pleno cuando es posible representarla como plan, validarla por simulacion y contrastarla en ejecucion real con metadatos suficientes para interpretar divergencias. En ese sentido, este capitulo prolonga la logica del Capitulo 5: ya no pregunta solo que plan es mejor, sino bajo que condiciones una recomendacion optimizada conserva significado cuando entra en contacto con la semantica real del framework y del hardware \cite{paszke2019pytorch,huang2019gpipe,narayanan2019pipedream}.
+
+La arquitectura metodologica del proyecto aborda este problema en tres olas. La primera convierte la solucion ILP en una representacion formal de plan. La segunda la somete a simulacion determinista, verificando integridad topologica, cortes y presupuestos. La tercera la ejecuta sobre un runtime hibrido capaz de registrar latencia, memoria, energia, transferencias y procedencia del plan seleccionado.
 
 \section{6.2 Representacion formal del plan de ejecucion (Fase 2)}
-Se define la estructura de plan, sus invariantes y su semantica de consumo por componentes runtime.
+La representacion formal del plan, soportada por los modulos \code{runtime/plan_representation.py} y \code{runtime/device_plan.py}, traduce la salida del solver en una estructura consumible por simulador y ejecutor. Dicha estructura incluye asignacion de nodos a dispositivos, cortes esperados, presupuestos observados y, en el pipeline endurecido, metadatos adicionales sobre modo de seleccion del plan, fuente de procedencia, presupuesto GPU y objetivo asociado.
+
+Este detalle aparentemente administrativo tiene relevancia metodologica. Gracias a esos metadatos, el proyecto puede distinguir si la validacion hibrida se hizo sobre una solucion unrestricted o sobre el mejor punto Pareto presupuestado. La correccion reciente del pipeline para privilegiar \code{pareto_best} refuerza precisamente esta trazabilidad y evita ambiguedades en la narrativa experimental.
 
 \section{6.3 Simulador hibrido: arquitectura y validacion topologica (Fase 2)}
-Se describe el diseno del simulador y los chequeos de coherencia sobre el DAG de ejecucion.
+El simulador del modulo \code{runtime/simulator.py} reinterpreta el plan sobre el grafo de dependencias y produce costos previstos de tiempo, energia, memoria y comunicacion. Su funcion no es reemplazar la ejecucion fisica, sino actuar como filtro previo de coherencia y como instrumento de comparacion posterior. Si un plan viola presupuestos, carece de costos de transferencia en modo estricto o incurre en inconsistencias topologicas, el simulador lo detecta antes de consumir recursos experimentales en runtime.
+
+La Fase 2 del proyecto quedo formalmente cerrada cuando este componente demostro estabilidad bit a bit sobre entradas validas y capacidad de rechazo explicito sobre entradas inconsistentes. Esa clausura otorga al simulador un estatus importante en la tesis: no es una idea futura, sino una pieza ya operativa y citable como evidencia pre-ejecucion.
 
 \section{6.4 Estudio de prediccion: latencia, memoria y costos de transferencia (Fase 2)}
-Se especifican metricas de prediccion y metodologia para evaluacion determinista previa a ejecucion real.
+La utilidad principal del simulador reside en descomponer el costo esperado antes de la ejecucion fisica. Sobre un plan dado, puede reportar latencia total estimada, memoria por dispositivo, energia agregada y cantidad esperada de cortes, junto con desgloses CSV y resumentes JSON. Esta capacidad es fundamental para una tesis doctoral porque permite discutir no solo si una politica es mejor, sino por que se espera que lo sea antes de observarla en hardware.
+
+En el estado actual del proyecto, la evidencia controlada de Fase 4 ya ofrece un ejemplo claro: para un caso dual sobre \code{simple_mlp}, el simulador valida topologia y costos del plan extendido y estima un objetivo robusto de 19.884783, un tiempo total de 19.547401 ms y dos cortes efectivos. Aunque se trata de un caso focal, demuestra que la representacion extendida no es solo algebraicamente admisible, sino predictivamente util.
 
 \section{6.5 Implementacion del ejecutor hibrido en PyTorch (Fase 3)}
-Se documentara la implementacion operacional de la politica de asignacion en entrenamiento real.
+El ejecutor hibrido implementado en \code{src/runtime/hybrid_executor.py} materializa la politica de asignacion sobre entrenamiento real en PyTorch. Su interfaz experimental, \code{validation/run_hybrid_execution.py}, aplica un plan sobre un modelo y registra trazas observadas de forward, backward, optimizacion, transferencias, memoria maxima y energia, con soporte adicional para procedencia del plan y para fuentes reales de dataset. Esta instrumentacion convierte la ejecucion runtime en un experimento interpretado y no en una simple demostracion funcional: cada corrida deja una huella suficientemente rica para reconstituir por que una politica se comporto como lo hizo. La decision de apoyarse en PyTorch no es contingente: aprovecha un ecosistema con semantica dinamica bien establecida, pero lo somete a un regimen de trazabilidad mas severo que el habitual en librerias de entrenamiento de proposito general \cite{paszke2019pytorch}.
+
+La Fase 3 quedo formalmente cerrada al validarse en hardware CPU-GPU del entorno de desarrollo una ejecucion guiada por plan ILP para \code{simple_mlp}, incluyendo exportacion de energia observada y eventos de cruce CPU-GPU. Posteriormente, la Fase 4 extendio este soporte a casos duales forward/backward, persistencia de activaciones y prefetching, lo que fortalece el valor del runtime como pieza central de la contribucion doctoral.
 
 \section{6.6 Baselines reales y comparativos experimentales (Fase 3)}
-Se establecera comparacion sistematica frente a politicas de referencia en entorno fisico.
+La comparacion frente a \code{all_cpu}, \code{all_gpu}, \code{greedy} e \code{ilp_plan} resulta metodologicamente obligatoria. Solo asi puede distinguirse si la mejora observada en runtime proviene de la estructura de la politica o de una configuracion trivial. El proyecto ya dispone de esta comparacion en el plano ILP y ha comenzado a consolidarla en ejecucion hibrida mediante artefactos observacionales que incluyen metrica final de calidad cuando el modelo y el dataset lo permiten. La comparativa es ademas coherente con el estado del arte reciente: tanto las propuestas de pipeline como los sistemas de paralelizacion automatizada solo resultan interpretables cuando se situan frente a extremos triviales y frente a heuristicas competitivas bajo un contrato experimental comun \cite{huang2019gpipe,narayanan2019pipedream,zheng2022alpa}.
+
+En esta etapa, la tesis debe ser rigurosa con el alcance de la evidencia. Ya existe validacion operacional suficiente para afirmar que el runtime ejecuta planes ILP y extensiones duales de manera auditada; sin embargo, la comparacion sistematica amplia entre todos los baselines y sobre varias familias de modelo sigue siendo trabajo de cierre de Fase 5.
+
+Una lectura doctoral mas exigente obliga ademas a distinguir entre comparacion de rendimiento y comparacion de significado. Un baseline no sirve solo para saber si una politica es mas rapida; sirve para revelar que tipo de inteligencia decisional aporta realmente el modelo. Si \code{all_cpu} y \code{all_gpu} representan extremos triviales de colocacion, y \code{greedy} representa una heuristica local, entonces la superioridad del plan ILP debe interpretarse como evidencia de que el problema contiene interdependencias globales que no pueden resolverse con decisiones puramente miopes. Esta es, en ultima instancia, la razon teorica por la cual la tesis insiste en mantener los baselines dentro del mismo contrato experimental.
 
 \section{6.7 Prediccion frente a observacion: contraste operacional (Fase 3)}
-Se cuantificara el error de prediccion y su distribucion por regimen de carga.
+El contraste entre prediccion y observacion es uno de los elementos que mas elevan el estandar cientifico del trabajo. Si el simulador y el runtime convergen razonablemente en tendencias y orden relativo de politicas, la tesis gana en credibilidad causal. Si divergen, la discrepancia deja de ser un problema oculto y se convierte en una fuente de conocimiento sobre aspectos no capturados del sistema, como overhead de framework, solapamiento imperfecto o contencion de memoria.
+
+Una forma compacta de expresar este contraste consiste en definir, para una metrica observable $m$, un error relativo de prediccion
+
+$$
+\varepsilon_m = \frac{|\hat{m} - m^{obs}|}{\max(m^{obs},\epsilon)},
+$$
+
+donde $\hat{m}$ es el valor predicho por el simulador, $m^{obs}$ el valor observado en runtime y $\epsilon$ una constante pequena de estabilizacion numerica. Esta definicion no pretende imponer una metrica unica de aceptacion, pero si fijar un lenguaje analitico claro para la comparacion entre politica prevista y politica observada.
+
+El proyecto ya posee la infraestructura para realizar este contraste de manera no ambigua. La seleccion del plan \code{pareto_best}, la exportacion de metadatos de procedencia y la consolidacion de resumentes por configuracion permiten construir una comparacion limpia entre lo previsto y lo observado. Lo pendiente es ampliar esta comparacion desde casos focales a una matriz final mas extensa y estadisticamente suficiente.
+
+La Figura~\ref{fig:prediction-vs-observation} y la Tabla~\ref{tab:prediction-vs-observation} incorporan ya ese contraste para el caso controlado dual de \code{simple_mlp}. El resultado es metodologicamente util por una razon precisa: muestra simultaneamente convergencia estructural y divergencia cuantitativa. El simulador predice correctamente un plan con dos cortes y una ocupacion GPU acotada, pero subestima con claridad la latencia y la energia finales porque no modela de manera exhaustiva el overhead del framework, la gestion dinamica del runtime y otros costos de materializacion. Esa discrepancia no invalida el simulador; delimita su regimen de validez y evita atribuirle un poder predictivo que aun no se ha demostrado.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\textwidth]{../reports/thesis_figures/prediction_vs_observation_simple_mlp_dual.png}
+\caption{Contraste empirico entre simulacion y ejecucion hibrida observada para el caso dual controlado de \code{simple_mlp}. La figura se genera directamente a partir de los resumentes JSON de simulacion y runtime.}
+\label{fig:prediction-vs-observation}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Comparacion prediccion-observacion en el caso dual controlado de \code{simple_mlp}.}
+\label{tab:prediction-vs-observation}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Metrica & Predicho & Observado & Error relativo \\
+\midrule
+Latencia total (ms) & 19.547 & 147.638 & 0.868 \\
+Energia total (J) & 0.145 & 1.704 & 0.915 \\
+Memoria GPU pico (MB) & 19.335 & 10.698 & 0.807 \\
+Eventos de transferencia & 2 & 2 & 0.000 \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{table}
 
 \section{6.8 Exactitud final del modelo y estabilidad de convergencia (Fase 3-5)}
-Se evaluara impacto de la ejecucion hibrida sobre calidad final del entrenamiento.
+Una tesis doctoral sobre entrenamiento heterogeneo no puede cerrarse solo con costos de ejecucion. Debe verificar tambien que la politica hibrida no degrade de manera inaceptable la calidad final del entrenamiento. En el estado actual del pipeline, esta dimension ya cuenta con soporte operacional: el modo tesis registra \code{dataset_name}, \code{dataset_split}, \code{final_loss}, \code{quality_metric_name} y \code{final_quality_metric}, lo que hace posible integrar calidad final en la misma cadena de artefactos que tiempo, energia y memoria.
+
+La situacion actual es favorable pero aun incompleta. Ya no existe la brecha metodologica de operar ordinariamente con batches sinteticos; profiling y runtime pueden apoyarse en datasets reales versionables. Sin embargo, la evidencia consolidada sobre exactitud final sigue siendo parcial por arquitectura y debe ampliarse en la campana doctoral final para convertir esta capacidad operativa en afirmacion generalizable.
+
+Este punto es crucial porque reordena la jerarquia de criterios del manuscrito. La mejora en latencia o memoria solo es cientificamente defendible si no altera de forma inadmisible la semantica del entrenamiento. En otras palabras, la tesis no busca solo una politica de asignacion eficiente, sino una politica de asignacion admisible. La exactitud final, la estabilidad de convergencia y la coherencia del proceso de optimizacion deben leerse, por tanto, como restricciones de aceptacion epistemica tan importantes como las restricciones de memoria o los costos de transferencia.
 
 \section{6.9 Extensiones con persistencia de activaciones y scheduling asincrono (Fase 4)}
-Se integraran extensiones avanzadas de memoria y planificacion para cerrar la propuesta completa.
+Las extensiones avanzadas ya son parte del sistema operativo del proyecto. La Fase 4 integro persistencia de activaciones, recomputacion, checkpointing, separacion forward/backward y soporte de transferencia asincrona con prefetching explicito. La evidencia controlada sobre \code{simple_mlp} muestra incluso una recolocacion real de backward para \code{net.0} y eventos efectivos de prefetch sobre \code{net.1}, lo que acredita materializacion runtime y no solo disponibilidad de API. En su significado tecnico, estas extensiones acercan el proyecto a la conversacion contemporanea sobre offloading y entrenamiento consciente de memoria, aunque manteniendo una diferencia central: aqui la extension no queda encapsulada como truco local del runtime, sino ligada a un plan formal derivado del modelo declarativo \cite{chen2016sublinear,rajbhandari2020zero,ren2021zerooffload}.
+
+Este hecho es importante para la escritura del capitulo. Permite abandonar el tono prospectivo que aun aparece en ciertos esqueletos antiguos y reemplazarlo por una narrativa de capacidad implementada con validacion focal. Lo que sigue pendiente ya no es demostrar que la extension existe, sino explotar esa extension sobre una matriz mas amplia y extraer conclusiones comparativas robustas.
 
 \section{6.10 Analisis integrado de resultados y limites experimentales (Fase 5)}
-Se sintetizaran resultados globales y restricciones metodologicas observadas en campana doctoral.
+En conjunto, la evidencia reunida hasta ahora permite sostener tres afirmaciones con base verificable. Primero, el proyecto ya no es un ILP offline desconectado del runtime: dispone de plan formal, simulador y ejecutor hibrido observacional. Segundo, la version endurecida del pipeline evita una ambiguedad metodologica importante al alinear la validacion hibrida con el mejor plan Pareto presupuestado. Tercero, la extension avanzada con persistencia de activaciones y scheduling asincrono ya tiene evidencia operacional controlada. Leido en continuidad con los capitulos previos, el resultado es una cadena argumental mas cerrada: el profiling produce coeficientes, el ILP decide bajo restricciones, y el runtime somete esa decision a contraste material sin perder procedencia ni interpretabilidad.
+
+Al mismo tiempo, persisten limites que la tesis debe explicitar. La mayor brecha restante no es de implementacion sino de evidencia: falta completar una campana multi-servidor y una consolidacion amplia de calidad final y contraste prediccion-observacion por familia de modelo. Reconocer este punto no debilita la tesis; al contrario, evita inflar el alcance de la evidencia actualmente disponible y orienta con precision el trabajo experimental final.
+
+\section{6.11 Significado metodologico del cierre predictivo}
+El cierre entre simulacion y runtime constituye, probablemente, la contribucion mas delicada del manuscrito desde el punto de vista de filosofia experimental. Muchas propuestas de optimizacion para sistemas heterogeneos se detienen en una solucion offline o en una prediccion agregada de costo. En esos casos, el salto desde la recomendacion matematica hasta la ejecucion real queda desplazado a una zona de supuestos tacitos. La presente tesis insiste en que ese salto debe formar parte de la contribucion y no quedar externalizado.
+
+La razon es simple: una politica de asignacion solo adquiere estatuto cientifico pleno cuando puede ser representada, interpretada, rechazada y observada bajo el mismo contrato de trazabilidad. La simulacion ofrece una forma de razonamiento predictivo; el runtime, una forma de contraste material. Entre ambas se juega la credibilidad final del enfoque. De ahi que este capitulo no deba leerse como un apendice de implementacion, sino como el lugar donde la tesis demuestra que la optimizacion declarativa no es un ejercicio abstracto desligado del comportamiento real del sistema.

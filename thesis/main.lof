@@ -1,0 +1,13 @@
+\babel@toc {spanish}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Figura conceptual del flujo de transformacion de evidencia en la tesis.}}{28}{figure.3.1}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Perfil empirico real por capa para \code {simple_mlp} en smoke con batch 8 y precision \code {fp32}. La figura se genera directamente a partir de \code {simple_mlp_metrics_stats.csv}.}}{37}{figure.4.1}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Frontera de compromiso objetivo-presupuesto GPU para el caso smoke consolidado de \code {simple_mlp}.}}{46}{figure.5.1}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {6.1}{\ignorespaces Contraste empirico entre simulacion y ejecucion hibrida observada para el caso dual controlado de \code {simple_mlp}. La figura se genera directamente a partir de los resumentes JSON de simulacion y runtime.}}{55}{figure.6.1}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {7.1}{\ignorespaces Mejora porcentual del mejor plan ILP frente al baseline \code {all_cpu} en la campana de Fase 1. Esta figura resume la direccion favorable de la evidencia ILP antes del cierre empirico multi-servidor.}}{59}{figure.7.1}%

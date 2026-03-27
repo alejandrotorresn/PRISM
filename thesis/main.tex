@@ -9,18 +9,33 @@
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{tabularx}
+\usepackage[table]{xcolor}
 \geometry{margin=2.8cm}
 \onehalfspacing
+\setlength{\emergencystretch}{2em}
 
-\title{Particion Heterogenea CPU-GPU para Entrenamiento Profundo\\\large Monografia Doctoral (Borrador Evolutivo)}
-\author{Doctorando: Zephyr}
-\date{\today}
+\newcommand{\ThesisTitle}{A New Parallelization Approach in Deep Learning Using CPU/GPU Architectures for Memory Optimization}
+\newcommand{\ThesisAuthor}{Luis Alejandro Torres}
+
+\hypersetup{
+	pdftitle={\ThesisTitle},
+	pdfauthor={\ThesisAuthor}
+}
+
+\newcommand{\notaPendiente}[1]{\par\noindent\textcolor{red}{\textbf{Nota de borrador:} #1}\par}
+\DeclareRobustCommand{\code}[1]{\nolinkurl{#1}}
 
 \begin{document}
 
-\maketitle
+\input{frontmatter/preliminaries}
 \tableofcontents
+\listoftables
+\listoffigures
 \clearpage
+
+\pagenumbering{arabic}
 
 \input{chapters/chapter01_intro}
 \input{chapters/chapter02_estado_arte}
@@ -29,5 +44,8 @@
 \input{chapters/chapter05_ilp}
 \input{chapters/chapter06_simulacion_ejecucion}
 \input{chapters/chapter07_conclusiones}
+
+\bibliographystyle{plain}
+\bibliography{references}
 
 \end{document}
