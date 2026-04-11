@@ -11,6 +11,9 @@ venv/
 
 # Windows metadata files
 desktop.ini
+Desktop.ini
+**/desktop.ini
+**/Desktop.ini
 
 # Notebook checkpoints
 .ipynb_checkpoints/
