@@ -190,7 +190,7 @@ If you use PRISM in academic work, cite it as thesis code supporting the doctora
   title={PRISM: Partitioning and Resource Intelligence for System Memory},
   author={Torres, Luis Alejandro},
   year={2026},
-  howpublished={\url{https://github.com/alejandrotorresn/Final-Thesis-Code}},
+  howpublished={\url{https://github.com/alejandrotorresn/PRISM}},
   note={Hybrid CPU-GPU training optimization framework guided by profiling and ILP}
 }
 ```
