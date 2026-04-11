@@ -4,6 +4,8 @@
 
 This document serves as the comprehensive technical reference for the project.
 
+Its role should be read together with [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md). While that document fixes the current repository map and the responsibility of each repository block, this text develops the technical semantics of the pipeline, the methodological decisions, the artifact contracts, and the direct traceability to the implementation code.
+
 It explains, with direct code traceability:
 
 - how profiling data is captured (time, energy, memory, FLOPs, transfer)
@@ -75,7 +77,7 @@ Primary orchestration steps:
 2. Normalize output directory under host namespace (`normalize_output_dir_for_host` in `src/core/system.py`).
 3. Configure CPU runtime and determinism (`configure_cpu_runtime`, `set_determinism`).
 4. Evaluate precision execution policy (`_configure_precision` in `src/profiler.py` + `src/core/precision_policy.py`).
-5. Build model and input (`build_model_and_input` in `src/models/factory.py`).
+5. Resolve dataset-backed batches from `datasets/` when required and preserve provenance metadata (`src/data/dataset_registry.py` and `build_model_input_target` in `src/models/factory.py`).
 6. Execute profiling (`TrainingProfiler.run_profiling` in `src/runner/training_profiler.py`).
 
 ### 3.2 Artifact pipeline
@@ -1346,8 +1348,7 @@ python validation/export_ilp_tables_latex.py --best_csv <best.csv> --consolidate
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
-- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
+- `docs/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md`
 
 ---
 
@@ -1663,8 +1664,8 @@ Internal references:
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
+- `docs/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md`
 
 ---
 
-Last updated: March 14, 2026.
+Last updated: April 11, 2026.

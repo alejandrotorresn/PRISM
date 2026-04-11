@@ -2,6 +2,10 @@
 
 This runbook documents the hardware-aware workflow end-to-end so it can be reused without memorizing commands.
 
+It complements [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md), which defines how data should be collected on each server class before these merged ILP workflows are executed.
+
+Like the launch-profile guide, this runbook intentionally stays in compact operational English so discovery commands, merge semantics, and solver options can be reused verbatim during real multi-node execution.
+
 ## Goal
 
 Combine profiling artifacts from multiple cluster nodes (different CPU/GPU/bus/memory) and solve one robust ILP model.
@@ -123,4 +127,4 @@ Pareto mode:
 
 ---
 
-Last updated: March 12, 2026.
+Last updated: April 11, 2026.

@@ -1,8 +1,12 @@
-# Quick Start Guide
+# Operational Guide
 
 **For general project overview and setup, see [../README.md](../README.md) in the repository root.**
 
-This file is the entrypoint to the consolidated documentation set. It keeps only the operational quick start and the index of canonical documents.
+This document is the operational entrypoint to the consolidated documentation set. Its role is deliberately narrow: provide a short execution path for installation, validation, and first use, while delegating architectural explanation, methodological rationale, and server-scale operating guidance to the canonical documents listed below.
+
+If the goal is to understand how the repository is organized before launching experiments or extending the codebase, the recommended companion document is [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), which now serves as the structural map of the project in Spanish.
+
+If you want a shell-friendly cheat sheet for terminal sessions, [QUICK_START.sh](QUICK_START.sh) can be executed to print common commands and paths. It is only a reference helper and should not be interpreted as part of the orchestration layer.
 
 ## 1) Installation
 
@@ -152,21 +156,24 @@ Recommended: follow the full no-memory workflow in:
 | [../README.md](../README.md) | Project overview |
 | [GLOBAL_PROJECT_DOCUMENTATION.md](GLOBAL_PROJECT_DOCUMENTATION.md) | Full end-to-end technical reference, including validation and thesis-mode orchestration |
 | [GLOBAL_PROJECT_DOCUMENTATION_ES.md](GLOBAL_PROJECT_DOCUMENTATION_ES.md) | Version academica en espanol de la referencia tecnica integral |
-| [CAPITULO_TESIS_PROFILING_ES.md](CAPITULO_TESIS_PROFILING_ES.md) | Capitulo monografico doctoral en espanol: metodologia de profiling |
-| [CAPITULO_TESIS_ILP_ES.md](CAPITULO_TESIS_ILP_ES.md) | Capitulo monografico doctoral en espanol: formulacion y analisis ILP |
-| [PLAN_IMPLEMENTACION_FASES_ES.md](PLAN_IMPLEMENTACION_FASES_ES.md) | Hoja de ruta doctoral y estado de cierre por fases |
-| [PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Protocolo operativo y metodologico para construir el dataset multi-hardware y cerrar la validacion doctoral |
+| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Cartografia estructural del repositorio y responsabilidad de cada bloque |
+| [PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Protocolo maestro para campanas reales, criterios Go/No-Go y validacion multiservidor |
 | [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md) | Recommended launch configurations by server type |
 | [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) | Step-by-step multi-node ILP workflow |
-| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Architecture and folder map |
+| [CAPITULO_TESIS_PROFILING_ES.md](CAPITULO_TESIS_PROFILING_ES.md) | Capitulo monografico doctoral en espanol: metodologia de profiling |
+| [CAPITULO_TESIS_ILP_ES.md](CAPITULO_TESIS_ILP_ES.md) | Capitulo monografico doctoral en espanol: formulacion y analisis ILP |
+| [schema.md](schema.md) | Mapa de escritura de la monografia doctoral |
+| [QUICK_START.sh](QUICK_START.sh) | Ayuda de shell para consultas rapidas de comandos |
 
 ## Consolidation Policy
 
 - `README.md` y `docs/README.md` cubren entrada rapida y navegacion.
+- `PROJECT_STRUCTURE.md` fija el mapa estructural del repositorio y evita que la vista de carpetas quede dispersa entre documentos.
 - `GLOBAL_PROJECT_DOCUMENTATION[_ES].md` son la referencia tecnica canónica.
+- `PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md` absorbe el juicio operativo final y el checklist por servidor, de modo que la preparacion y la toma de datos reales queden en un unico documento rector.
 - Los capitulos de tesis en espanol preservan el nivel monografico y no duplican runbooks operativos.
-- Los documentos historicos sobreviven solo cuando aportan contexto no sustituible. La trazabilidad historica proyecto-tesis ya fue absorbida por `PLAN_IMPLEMENTACION_FASES_ES.md`.
+- Los documentos historicos de desarrollo fueron retirados del corpus canónico para mantener el foco en el sistema final y en la campana empirica real.
 
 ---
 
-*Last Updated*: March 26, 2026
+*Last Updated*: April 11, 2026

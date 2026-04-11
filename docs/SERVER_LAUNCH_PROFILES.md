@@ -4,6 +4,10 @@ This document defines recommended launch configurations for `scripts/run_experim
 
 The goal is to avoid mixing incompatible runtime assumptions across nodes while keeping output layout compatible with the multi-node ILP workflow.
 
+It should be read alongside [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for repository organization and [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) for the downstream merge-and-solve workflow.
+
+This runbook intentionally remains concise and operational in English so launch commands, environment overrides, and failure modes can be consumed with minimal ambiguity during live server campaigns.
+
 ## Core Rule
 
 Use one launch profile per server class.
@@ -241,4 +245,4 @@ See also:
 
 ---
 
-Last updated: March 14, 2026.
+Last updated: April 11, 2026.

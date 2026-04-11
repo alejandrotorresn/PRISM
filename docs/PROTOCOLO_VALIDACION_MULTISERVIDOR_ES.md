@@ -4,6 +4,8 @@
 
 El siguiente paso del proyecto no consiste principalmente en ampliar el codigo, sino en consolidar una base empirica que permita sostener con rigor doctoral las afirmaciones sobre robustez, transferibilidad y validez operacional del pipeline completo. En consecuencia, la tarea inmediata es ejecutar una campana controlada de profiling en multiples servidores heterogeneos, convertir esos artefactos en un dataset multi-hardware coherente y, a partir de dicho dataset, revalidar el flujo completo que enlaza medicion, agregacion, optimizacion ILP, barrido Pareto, ejecucion hibrida y reporte final.
 
+Este protocolo pasa a ser el documento operativo maestro para la toma de datos real. Absorbe la verificacion previa a servidores y la lista de control por host, de modo que preparacion, despliegue y criterio de aceptacion queden concentrados en una sola pieza.
+
 La razon metodologica es directa. Una tesis de sistemas que optimiza decisiones de colocacion CPU-GPU no puede apoyarse de manera suficiente en coeficientes obtenidos de una unica maquina. Si los costos de tiempo, memoria, energia y transferencia cambian con la arquitectura del host, entonces la credibilidad de la formulacion depende de demostrar que el modelo se mantiene interpretable y util cuando los perfiles provienen de hardware distinto. El objetivo de este protocolo es precisamente producir esa evidencia.
 
 ## 2. Objetivo cientifico de la campana
@@ -18,7 +20,7 @@ La respuesta corta a la pregunta del proyecto es afirmativa: ahora hace falta co
 
 ### 4.1 Unidad experimental
 
-La unidad experimental debe ser una configuracion comun definida por el cuarteto modelo-optimizador-precision-batch. Esa misma configuracion debe ejecutarse en todos los servidores que pertenezcan a una misma clase de comparacion. El repositorio ya impone una convencion de salida apta para este objetivo bajo el arbol `data/<hostname>/results/...`, tal como se documenta en [MULTI_NODE_ILP_RUNBOOK.md](/home/zephyr/Documents/University/PhD/Code/Final%20Thesis%20Code/docs/MULTI_NODE_ILP_RUNBOOK.md) y [SERVER_LAUNCH_PROFILES.md](/home/zephyr/Documents/University/PhD/Code/Final%20Thesis%20Code/docs/SERVER_LAUNCH_PROFILES.md).
+La unidad experimental debe ser una configuracion comun definida por el cuarteto modelo-optimizador-precision-batch. Esa misma configuracion debe ejecutarse en todos los servidores que pertenezcan a una misma clase de comparacion. El repositorio ya impone una convencion de salida apta para este objetivo bajo el arbol `data/<hostname>/results/...`, tal como se documenta en [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md) y [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md).
 
 ### 4.2 Clases de servidor
 
@@ -37,13 +39,13 @@ La malla canonica recomendada es la siguiente:
 5. `SGD` y `AdamW` como optimizadores obligatorios; `RMSprop` puede quedar como ampliacion de la linea base.
 6. Batches `8,16,32` como conjunto comun; `64` solo cuando el host lo soporte sin introducir una tasa excesiva de OOM o descartes.
 
-## 5. Fases de ejecucion por servidor
+## 5. Secuencia de ejecucion por servidor
 
 La ejecucion en cada servidor debe seguir siempre la misma secuencia, para evitar que el dataset final mezcle corridas de distinta calidad metodologica.
 
-### 5.1 Fase A: preflight ambiental
+### 5.1 Etapa A: preflight ambiental
 
-Antes de cualquier toma de muestras, cada servidor debe pasar por una validacion de entorno. El objetivo no es medir rendimiento, sino descartar fallos de interpretacion, CUDA, datasets, precision o instrumentacion. La referencia operativa del repositorio es el `Profile 0` y el `Profile 5` descritos en [SERVER_LAUNCH_PROFILES.md](/home/zephyr/Documents/University/PhD/Code/Final%20Thesis%20Code/docs/SERVER_LAUNCH_PROFILES.md).
+Antes de cualquier toma de muestras, cada servidor debe pasar por una validacion de entorno. El objetivo no es medir rendimiento, sino descartar fallos de interpretacion, CUDA, datasets, precision o instrumentacion. La referencia operativa del repositorio es el `Profile 0` y el `Profile 5` descritos en [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md).
 
 Comando recomendado de preflight real minimo:
 
@@ -64,7 +66,7 @@ PYTHON_CMD=python \
 bash scripts/run_experiments.sh
 ```
 
-### 5.2 Fase B: profiling productivo por clase de servidor
+### 5.2 Etapa B: profiling productivo por clase de servidor
 
 Superado el preflight, cada servidor debe ejecutar un perfil estable de campana. La seleccion no debe improvisarse nodo a nodo; debe seguir las clases ya documentadas por el proyecto.
 
@@ -210,3 +212,28 @@ Si alguno de estos puntos falta, el dataset podra ser util como prevalidacion, p
 La recomendacion mas pragmatica es comenzar con una campana transversal corta, pero estadisticamente limpia, en tres clases de servidor. Primero debe ejecutarse una malla canonica comun con `simple_mlp`, `resnet50` y `vit_b16`, `fp32`, `SGD` y `AdamW`, batches `8,16,32`, y al menos cinco replicas. Una vez consolidada esa base, deben seleccionarse dos o tres configuraciones representativas para resolver ILP multi-hardware, barrido Pareto y ejecucion hibrida alineada con el plan Pareto. Solo despues conviene ampliar a NLP o a precisiones avanzadas.
 
 Ese orden maximiza valor cientifico por unidad de tiempo y evita producir una gran masa de datos que luego no pueda defenderse de manera integrada.
+
+## 12. Estado operativo consolidado del repositorio
+
+Al momento de iniciar la campana real, el repositorio se considera operativo y metodologicamente consistente para producir evidencia utilizable. Esa conclusion no descansa en una declaracion informal, sino en verificaciones efectivamente ejecutadas sobre codigo, modelos y orquestadores.
+
+La base minima ya comprobada incluye validacion estructural integral mediante `validation/comprehensive_check.sh`, validacion de integridad del codigo con `validation/validate_code.py`, carga correcta de los siete modelos soportados con `validation/validate_all_models.py --preflight-scope fast`, y paso satisfactorio de la suite automatizada `validation/run_unit_tests.sh`. Adicionalmente, los orquestadores `scripts/run_experiments.sh` y `scripts/run_thesis_mode.sh` ya fueron verificados en modo seco, con construccion correcta de comandos, deteccion de entorno y secuencia de pasos coherente.
+
+La implicacion practica es clara: el riesgo principal ya no reside en una carencia estructural del software, sino en la heterogeneidad real de los hosts y en la disciplina con la que se preserve el contrato experimental. Por ello, el control operativo debe desplazarse desde la pregunta de si el repositorio funciona hacia la pregunta de si cada servidor concreto respeta las condiciones bajo las cuales el repositorio fue validado.
+
+## 13. Checklist minimo por servidor
+
+Antes de incluir un host en la malla principal, debe verificarse lo siguiente:
+
+- El hostname, la clase de servidor, CPU, GPU, RAM, VRAM, version de CUDA y version de PyTorch quedaron registrados.
+- `PYTHON_CMD` apunta a un ejecutable simple y no a un comando con espacios.
+- El entorno resuelve imports del proyecto sin errores y los datasets requeridos estan disponibles o pueden descargarse.
+- El host aprobo `Profile 0` en modo seco.
+- El host aprobo `Profile 5` como smoke real canonico de su clase.
+- La salida se genero bajo `data/<hostname>/...` sin mezclar resultados con otros hosts.
+- La configuracion productiva elegida coincide con un perfil documentado y no con una combinacion ad hoc.
+- Los artefactos `*_metrics.csv`, `*_meta.json`, `*_graph_edges.csv`, `*_transfer_edges.csv` y `*_metrics_stats.csv` existen en las configuraciones retenidas.
+- No hay fallback silencioso de precision ni topologia estructural degradada usada como evidencia principal.
+- Las configuraciones destinadas a evidencia doctoral principal alcanzan una calidad muestral suficiente y comparable entre hosts.
+
+Una plantilla resumida de registro por host puede mantenerse con los siguientes campos: hostname, clase de servidor, perfil elegido, estado de `Profile 0`, estado de `Profile 5`, disponibilidad de CPU profiling, disponibilidad de RAPL, estado BF16, integridad host-scoped de la salida, disponibilidad de artefactos ILP-ready, veredicto final Go/No-Go y observaciones.

@@ -4,7 +4,9 @@
 
 Este documento constituye la referencia tecnica integral del proyecto.
 
-Desde el cierre de Fase 0 del plan de implementacion (2026-03-19) y su consolidacion operativa en Fase 4 (2026-03-20), el alcance metodologico del proyecto queda fijado sin bifurcaciones: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP, transferencia asincrona de tensores CPU<->GPU mediante CUDA streams y prefetching explicito en el ejecutor hibrido.
+Su funcion debe leerse en complementariedad con [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md). Mientras ese documento fija la cartografia actual del repositorio y la responsabilidad de cada bloque, el presente texto desarrolla la semantica tecnica del pipeline, las decisiones metodologicas, los contratos de artefactos y la trazabilidad directa con el codigo de implementacion.
+
+En su estado consolidado, el alcance metodologico del proyecto queda fijado sin bifurcaciones: asignacion independiente forward/backward, persistencia de activaciones como decision binaria ILP, transferencia asincrona de tensores CPU<->GPU mediante CUDA streams y prefetching explicito en el ejecutor hibrido.
 
 Explica, con trazabilidad directa al codigo:
 
@@ -315,7 +317,7 @@ Si se solicita precision no soportada:
 
 Implementado en `run_cpu_fp16_model_preflight`.
 
-Comportamiento de tres fases:
+Comportamiento de tres etapas:
 
 1. timeout de join de fase forward fijo en 60s
 2. timeout backward adaptativo computado como:
@@ -342,9 +344,9 @@ Por que se adopta este comportamiento por etapas:
 
 Razon de diseno de cada fase:
 
-- Fase 1 (timeout fijo en forward): descarta rapidamente ejecuciones claramente inviables.
-- Fase 2 (timeout backward adaptativo): ajusta el presupuesto temporal al comportamiento forward observado y reduce falsos negativos en modelos grandes.
-- Fase 3 (join final acotado): evita que el proceso quede bloqueado indefinidamente.
+- Etapa 1 (timeout fijo en forward): descarta rapidamente ejecuciones claramente inviables.
+- Etapa 2 (timeout backward adaptativo): ajusta el presupuesto temporal al comportamiento forward observado y reduce falsos negativos en modelos grandes.
+- Etapa 3 (join final acotado): evita que el proceso quede bloqueado indefinidamente.
 
 En sintesis, es un mecanismo de confiabilidad que protege la integridad de la campana sin descartar ejecuciones potencialmente validas.
 
@@ -1362,8 +1364,7 @@ python validation/export_ilp_tables_latex.py --best_csv <best.csv> --consolidate
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
-- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
+- `docs/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md`
 
 ---
 
@@ -1679,7 +1680,7 @@ Referencias internas:
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/MULTI_NODE_ILP_RUNBOOK.md`
 - `docs/SERVER_LAUNCH_PROFILES.md`
-- `docs/PLAN_IMPLEMENTACION_FASES_ES.md`
+- `docs/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md`
 
 ---
 
