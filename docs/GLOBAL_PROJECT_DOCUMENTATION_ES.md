@@ -1,8 +1,8 @@
-# Documentacion Global del Proyecto
+# Documentacion Global de PRISM
 
 ## 1. Alcance y objetivo del documento
 
-Este documento constituye la referencia tecnica integral del proyecto.
+Este documento constituye la referencia tecnica integral de PRISM, sigla de Partitioning and Resource Intelligence for System Memory.
 
 Su funcion debe leerse en complementariedad con [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md). Mientras ese documento fija la cartografia actual del repositorio y la responsabilidad de cada bloque, el presente texto desarrolla la semantica tecnica del pipeline, las decisiones metodologicas, los contratos de artefactos y la trazabilidad directa con el codigo de implementacion.
 

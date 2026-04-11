@@ -1,8 +1,12 @@
 # Operational Guide
 
+**Official project name:** PRISM  
+**Expansion:** Partitioning and Resource Intelligence for System Memory  
+**Technical subtitle:** A Hybrid CPU-GPU Training Optimization Framework Guided by Profiling and ILP
+
 **For general project overview and setup, see [../README.md](../README.md) in the repository root.**
 
-This document is the operational entrypoint to the consolidated documentation set. Its role is deliberately narrow: provide a short execution path for installation, validation, and first use, while delegating architectural explanation, methodological rationale, and server-scale operating guidance to the canonical documents listed below.
+This document is the operational entrypoint to the consolidated documentation set for PRISM. Its role is deliberately narrow: provide a short execution path for installation, validation, and first use, while delegating architectural explanation, methodological rationale, and server-scale operating guidance to the canonical documents listed below.
 
 If the goal is to understand how the repository is organized before launching experiments or extending the codebase, the recommended companion document is [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), which now serves as the structural map of the project in Spanish.
 

@@ -2,13 +2,16 @@
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 [![PyTorch 2.1+](https://img.shields.io/badge/PyTorch-2.1%2B-red)](https://pytorch.org)
 
-# ILP-Guided Hybrid CPU-GPU Training Optimization
+# PRISM
+
+*Partitioning and Resource Intelligence for System Memory*  
+*A Hybrid CPU-GPU Training Optimization Framework Guided by Profiling and ILP*
 
 Research code for a complete pipeline that measures deep learning training costs, builds robust Integer Linear Programming partition models, and validates hybrid CPU-GPU execution strategies aimed at reducing GPU VRAM pressure while making the CPU an active participant in training.
 
 ## Overview
 
-The project is organized as an end-to-end system, not as a standalone profiler. Its core contribution is the connection between empirical evidence and optimization-driven execution:
+PRISM is organized as an end-to-end system, not as a standalone profiler. Its core contribution is the connection between empirical evidence and optimization-driven execution:
 
 - layer-wise profiling on CPU and GPU with time, energy, memory, FLOPs, and transfer-aware artifacts
 - robust statistical aggregation across replicas and across heterogeneous servers
@@ -16,7 +19,7 @@ The project is organized as an end-to-end system, not as a standalone profiler. 
 - simulation and hybrid runtime validation of the generated plans
 - report generation and thesis-ready artifacts
 
-The practical question addressed by the repository is simple: how to decide which parts of a model should remain on GPU and which can be moved to CPU without treating the CPU as a passive fallback, but rather as an active computational actor in training.
+The practical question addressed by PRISM is simple: how to decide which parts of a model should remain on GPU and which can be moved to CPU without treating the CPU as a passive fallback, but rather as an active computational actor in training.
 
 ## End-to-End Workflow
 
@@ -32,7 +35,7 @@ The practical question addressed by the repository is simple: how to decide whic
 
 ```bash
 git clone <repo-url>
-cd Final\ Thesis\ Code
+cd <repo-folder>
 
 # Option A: Conda
 conda env create -f config/environment.yml
@@ -180,15 +183,15 @@ The documentation set was reduced so the core references now have distinct respo
 
 ## Citation
 
-If you use this repository in academic work, cite it as thesis code supporting the doctoral contribution:
+If you use PRISM in academic work, cite it as thesis code supporting the doctoral contribution:
 
 ```bibtex
-@misc{torres2026hybridilp,
-  title={A New Parallelization Approach in Deep Learning Using CPU/GPU Architectures for Memory Optimization},
+@misc{torres2026prism,
+  title={PRISM: Partitioning and Resource Intelligence for System Memory},
   author={Torres, Luis Alejandro},
   year={2026},
   howpublished={\url{https://github.com/alejandrotorresn/Final-Thesis-Code}},
-  note={PhD thesis code repository}
+  note={Hybrid CPU-GPU training optimization framework guided by profiling and ILP}
 }
 ```
 

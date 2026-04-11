@@ -1,8 +1,8 @@
-# Estructura del Proyecto
+# Estructura del Proyecto PRISM
 
 ## 1. Alcance de este documento
 
-Este documento describe la organizacion efectiva del repositorio en su estado actual y explica la responsabilidad metodologica de cada bloque. Su finalidad no es duplicar la documentacion global ni sustituir los runbooks operativos, sino ofrecer una cartografia estable del proyecto para que la lectura del codigo, la ejecucion experimental y la integracion con la tesis compartan una misma referencia estructural.
+Este documento describe la organizacion efectiva del repositorio de PRISM en su estado actual y explica la responsabilidad metodologica de cada bloque. Su finalidad no es duplicar la documentacion global ni sustituir los runbooks operativos, sino ofrecer una cartografia estable del proyecto para que la lectura del codigo, la ejecucion experimental y la integracion con la tesis compartan una misma referencia estructural.
 
 En consecuencia, la estructura se presenta aqui no solo como un arbol de directorios, sino como una descomposicion funcional del pipeline completo: preparacion de datos, profiling empirico, agregacion estadistica, particionamiento ILP, simulacion o ejecucion hibrida, generacion de reportes y consumo final en el manuscrito doctoral.
 

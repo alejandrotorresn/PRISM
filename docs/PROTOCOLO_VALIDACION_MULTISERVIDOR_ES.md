@@ -1,8 +1,8 @@
-# Protocolo de Validacion Multi-Servidor para Cierre Empirico Doctoral
+# Protocolo de Validacion Multi-Servidor de PRISM
 
 ## 1. Proposito y justificacion
 
-El siguiente paso del proyecto no consiste principalmente en ampliar el codigo, sino en consolidar una base empirica que permita sostener con rigor doctoral las afirmaciones sobre robustez, transferibilidad y validez operacional del pipeline completo. En consecuencia, la tarea inmediata es ejecutar una campana controlada de profiling en multiples servidores heterogeneos, convertir esos artefactos en un dataset multi-hardware coherente y, a partir de dicho dataset, revalidar el flujo completo que enlaza medicion, agregacion, optimizacion ILP, barrido Pareto, ejecucion hibrida y reporte final.
+El siguiente paso de PRISM no consiste principalmente en ampliar el codigo, sino en consolidar una base empirica que permita sostener con rigor doctoral las afirmaciones sobre robustez, transferibilidad y validez operacional del pipeline completo. En consecuencia, la tarea inmediata es ejecutar una campana controlada de profiling en multiples servidores heterogeneos, convertir esos artefactos en un dataset multi-hardware coherente y, a partir de dicho dataset, revalidar el flujo completo que enlaza medicion, agregacion, optimizacion ILP, barrido Pareto, ejecucion hibrida y reporte final.
 
 Este protocolo pasa a ser el documento operativo maestro para la toma de datos real. Absorbe la verificacion previa a servidores y la lista de control por host, de modo que preparacion, despliegue y criterio de aceptacion queden concentrados en una sola pieza.
 

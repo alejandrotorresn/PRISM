@@ -1,6 +1,6 @@
-# Multi-Node ILP Runbook
+# PRISM Multi-Node ILP Runbook
 
-This runbook documents the hardware-aware workflow end-to-end so it can be reused without memorizing commands.
+This runbook documents the PRISM hardware-aware workflow end-to-end so it can be reused without memorizing commands.
 
 It complements [SERVER_LAUNCH_PROFILES.md](SERVER_LAUNCH_PROFILES.md), which defines how data should be collected on each server class before these merged ILP workflows are executed.
 

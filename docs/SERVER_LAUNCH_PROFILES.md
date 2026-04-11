@@ -1,6 +1,6 @@
-# Server Launch Profiles
+# PRISM Server Launch Profiles
 
-This document defines recommended launch configurations for `scripts/run_experiments.sh` across heterogeneous servers.
+This document defines recommended launch configurations for PRISM through `scripts/run_experiments.sh` across heterogeneous servers.
 
 The goal is to avoid mixing incompatible runtime assumptions across nodes while keeping output layout compatible with the multi-node ILP workflow.
 

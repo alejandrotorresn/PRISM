@@ -1,8 +1,8 @@
-# Estructura de la Monografía Doctoral
+# Estructura de la Monografía Doctoral de PRISM
 
 ## Propósito del documento
 
-Este documento fija la arquitectura narrativa de la monografía doctoral a partir del estado final del sistema realmente implementado. Su función no es registrar hitos históricos del desarrollo, sino ordenar cómo debe presentarse, con coherencia académica, la evidencia que el repositorio ya produce.
+Este documento fija la arquitectura narrativa de la monografía doctoral a partir del estado final de PRISM como sistema realmente implementado. Su función no es registrar hitos históricos del desarrollo, sino ordenar cómo debe presentarse, con coherencia académica, la evidencia que el repositorio ya produce.
 
 Debe leerse en complementariedad con [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), que describe la organización del software; con [GLOBAL_PROJECT_DOCUMENTATION_ES.md](GLOBAL_PROJECT_DOCUMENTATION_ES.md), que desarrolla la semántica técnica del pipeline; y con [PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md), que establece las condiciones de la campaña empírica real sobre múltiples servidores.
 

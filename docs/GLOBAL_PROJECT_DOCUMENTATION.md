@@ -1,8 +1,8 @@
-# Global Project Documentation
+# PRISM: Global Project Documentation
 
 ## 1. Document scope and objective
 
-This document serves as the comprehensive technical reference for the project.
+This document serves as the comprehensive technical reference for PRISM, short for Partitioning and Resource Intelligence for System Memory.
 
 Its role should be read together with [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md). While that document fixes the current repository map and the responsibility of each repository block, this text develops the technical semantics of the pipeline, the methodological decisions, the artifact contracts, and the direct traceability to the implementation code.
 

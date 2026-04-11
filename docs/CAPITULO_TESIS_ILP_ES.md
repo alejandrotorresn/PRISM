@@ -5,6 +5,8 @@
 
 Este capítulo presenta una formulación de programación lineal entera mixta de variables binarias para asignar capas de un modelo de aprendizaje profundo a CPU o GPU bajo criterios combinados de tiempo, energía y transferencia, con restricciones de memoria y mecanismos de robustificación estadística. La propuesta no se limita a enumerar ecuaciones: establece el puente entre evidencia empírica y decisión óptima, justifica la linealización de términos de corte, discute sesgos potenciales de modelado y define protocolos de sensibilidad y validación para uso doctoral. En continuidad con el Capítulo 4, los coeficientes del modelo provienen de artefactos de profiling trazables y robustificados, de forma que la solución matemática sea operacionalmente ejecutable en infraestructura heterogénea real.
 
+Dentro del sistema completo, este capítulo formaliza el núcleo de decisión de PRISM: Partitioning and Resource Intelligence for System Memory.
+
 ### 5.1 Introducción y alcance del problema
 
 La asignación heterogénea de cómputo durante el entrenamiento profundo es un problema combinatorio con acoplamiento estructural. Cada capa puede ejecutarse en CPU o GPU, pero esa decisión no afecta solo su costo local: altera también el costo de comunicación con las capas adyacentes en el grafo de dependencias. En consecuencia, la política de asignación global no puede reducirse a una heurística miope basada únicamente en el throughput individual de cada operador. Una capa puede ser más rápida en GPU y, sin embargo, resultar subóptima en GPU si su ubicación induce múltiples cortes de arista con alto costo de transferencia.

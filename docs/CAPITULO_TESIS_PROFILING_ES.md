@@ -5,6 +5,8 @@
 
 Este capítulo desarrolla la fundamentación metodológica, matemática y operacional del sistema de profiling empírico utilizado como base para la optimización de partición CPU-GPU. A diferencia de un enfoque descriptivo centrado en listados de métricas, el presente texto establece un marco de inferencia experimental: define unidades de observación, caracteriza fuentes de variabilidad, formaliza ecuaciones de costo y especifica protocolos de trazabilidad desde medición cruda hasta coeficiente robusto listo para optimización. La propuesta integra instrumentación por capa, diagnóstico de precisión en tiempo de ejecución, modelado de transferencia consciente de arista y agregación estadística de réplicas para reducir sensibilidad a ruido transitorio. Como resultado, el capítulo ofrece una metodología reproducible y defendible para construir evidencia cuantitativa utilizable en modelado ILP de despliegue heterogéneo, cuya formulación formal se desarrolla en el Capítulo 5.
 
+En el marco del proyecto, este bloque metodológico constituye el fundamento empírico de PRISM: Partitioning and Resource Intelligence for System Memory.
+
 La lectura de este capítulo se enmarca en el alcance metodológico consolidado del proyecto: los coeficientes aquí construidos alimentan una formulación ILP con separación forward/backward, persistencia de activaciones y ejecución con planificación asíncrona en el tiempo de ejecución.
 
 ### 4.1 Introducción, motivación científica y preguntas de investigación
