@@ -32,6 +32,16 @@ experiments_logs/
 
 # Generated host/run report artifacts
 reports/ilp_results/zephyr_*/
+reports/ilp_nextgen_audit*/
+reports/AUDITORIA_COMPLETA_PROYECTO_TESIS_ES.md
+
+# Local research artifacts (not source code)
+audios/
+papers/
+paper_thesis/
+final_thesis/
+thesis/
+docs/*.pdf
 
 # IDE settings
 .vscode/
