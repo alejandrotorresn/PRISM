@@ -61,6 +61,8 @@ def _load_profile(
     cdir: Path,
     model: str,
     k_sigma: float,
+    k_sigma_time: float | None,
+    k_sigma_energy: float | None,
     strict_graph_mapping: bool,
     strict_transfer_mapping: bool,
     strict_sample_quality: bool,
@@ -73,6 +75,8 @@ def _load_profile(
         graph_edges_csv=str(graph_csv),
         transfer_edges_csv=str(transfer_csv),
         k_sigma=k_sigma,
+        k_sigma_time=k_sigma_time,
+        k_sigma_energy=k_sigma_energy,
         strict_graph_mapping=strict_graph_mapping,
         strict_transfer_mapping=strict_transfer_mapping,
         strict_sample_quality=strict_sample_quality,
@@ -85,6 +89,8 @@ def _load_data(
     config_dirs: List[Path],
     model: str,
     k_sigma: float,
+    k_sigma_time: float | None,
+    k_sigma_energy: float | None,
     strict_graph_mapping: bool,
     strict_transfer_mapping: bool,
     strict_sample_quality: bool,
@@ -98,6 +104,8 @@ def _load_data(
             cdir=cdir,
             model=model,
             k_sigma=k_sigma,
+            k_sigma_time=k_sigma_time,
+            k_sigma_energy=k_sigma_energy,
             strict_graph_mapping=strict_graph_mapping,
             strict_transfer_mapping=strict_transfer_mapping,
             strict_sample_quality=strict_sample_quality,
@@ -168,6 +176,8 @@ def main() -> int:
     parser.add_argument("--gpu_budgets_mb", required=True, help="Comma-separated budgets, e.g. 400,600,800,1000")
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
     parser.add_argument("--k_sigma", type=float, default=1.0)
+    parser.add_argument("--k_sigma_time", type=float, default=None)
+    parser.add_argument("--k_sigma_energy", type=float, default=None)
     parser.add_argument("--strict_graph_mapping", action="store_true")
     parser.add_argument("--strict_transfer_mapping", action="store_true")
     parser.add_argument("--allow_low_quality_stats", action="store_true")
@@ -176,6 +186,7 @@ def main() -> int:
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
+    parser.add_argument("--w_fragmentation", type=float, default=0.0)
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0)
@@ -201,6 +212,8 @@ def main() -> int:
         config_dirs=config_dirs,
         model=args.model,
         k_sigma=args.k_sigma,
+        k_sigma_time=args.k_sigma_time,
+        k_sigma_energy=args.k_sigma_energy,
         strict_graph_mapping=args.strict_graph_mapping,
         strict_transfer_mapping=args.strict_transfer_mapping,
         strict_sample_quality=not args.allow_low_quality_stats,
@@ -213,6 +226,8 @@ def main() -> int:
         config_dirs=config_dirs,
         model=args.model,
         k_sigma=0.0,
+        k_sigma_time=0.0,
+        k_sigma_energy=0.0,
         strict_graph_mapping=args.strict_graph_mapping,
         strict_transfer_mapping=args.strict_transfer_mapping,
         strict_sample_quality=not args.allow_low_quality_stats,
@@ -238,6 +253,7 @@ def main() -> int:
             w_time=args.w_time,
             w_energy=args.w_energy,
             w_transfer=args.w_transfer,
+            w_fragmentation=args.w_fragmentation,
             gpu_mem_budget_mb=b,
             cpu_mem_budget_mb=args.cpu_mem_budget_mb,
         )

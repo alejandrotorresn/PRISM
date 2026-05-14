@@ -37,7 +37,7 @@ $$y_{uv}\in\{0,1\},\qquad (u,v)\in E$$
 
 El significado operacional es directo: \(y_{uv}=0\) implica que ambos extremos de la arista residen en el mismo dispositivo, mientras que \(y_{uv}=1\) indica un corte CPU-GPU con costo de transferencia asociado. La inclusión explícita de \(y_{uv}\) evita depender de penalizaciones implícitas y permite descomponer la función objetivo en componentes nodales y de comunicación con interpretación causal.
 
-### 5.4 Función objetivo multicriterio escalarizada
+### 5.4 Función objetivo multicriterio escalarizada con congestión explícita
 
 La función objetivo combina tiempo, energía y transferencia mediante una escalarización ponderada. Para cada nodo se definen costos compuestos por dispositivo:
 
@@ -55,17 +55,24 @@ Para cada arista se define la penalización de comunicación:
 
 $$C_{cut}(u,v)=w_{tr}C_{tr}(u,v)$$
 
+Además, se introduce un término explícito de congestión de frontera por fase para penalizar soluciones con volumen agregado de corte por encima de una rodilla operacional. Sea
+
+$$F=\sum_{(u,v)\in E}y_{uv}C_{tr}(u,v),\qquad o\ge F-\Theta,\quad o\ge 0$$
+
+donde $\Theta$ es la rodilla de congestión (fija o auto-calibrada) y $o$ es la variable de overflow linealizada.
+
 La minimización global queda entonces:
 
-**Ecuación (I-6). Objetivo ILP de partición heterogénea.**
+**Ecuación (I-6). Objetivo ILP de partición heterogénea con congestión.**
 
 $$
 \min Z=
 \sum_{v\in V}\left[x_vC_{gpu}(v)+(1-x_v)C_{cpu}(v)\right]
 +\sum_{(u,v)\in E}y_{uv}C_{cut}(u,v)
++w_{cong}\,o
 $$
 
-El primer término selecciona el costo nodal según el dispositivo asignado; el segundo penaliza la fragmentación topológica por cortes de dependencia. Los pesos \(w_t\), \(w_e\) y \(w_{tr}\) son hiperparámetros de política y, por tanto, deben documentarse en toda corrida reportada.
+El primer término selecciona el costo nodal según el dispositivo asignado; el segundo penaliza la fragmentación topológica por cortes de dependencia; y el tercero penaliza explícitamente sobrecarga de frontera cuando la comunicación agregada supera la rodilla $\Theta$. Los pesos \(w_t\), \(w_e\), \(w_{tr}\) y \(w_{cong}\) son hiperparámetros de política y deben documentarse en toda corrida reportada.
 
 ### 5.5 Linealización exacta del corte de arista
 
@@ -102,6 +109,14 @@ $$\sum_{v\in V}M_{gpu}(v)x_v\le B_{gpu}$$
 $$\sum_{v\in V}M_{cpu}(v)(1-x_v)\le B_{cpu}$$
 
 Estas restricciones impiden soluciones formalmente óptimas pero no ejecutables. Su interpretación experimental es inmediata: una reducción de \(B_{gpu}\) desplaza masa de asignación hacia CPU, mientras que incrementos de \(B_{gpu}\) habilitan regiones de menor latencia si los costos nodales favorecen GPU. El barrido controlado de \(B_{gpu}\) constituye, de hecho, una vía práctica para construir fronteras de compromiso entre factibilidad y desempeño.
+
+La interpretación de \(M_{gpu}(v)\) no está prefijada: el sistema implementa dos semánticas de memoria seleccionables en tiempo de ejecución mediante el parámetro `memory_model`. La semántica por defecto, denominada `peak_approx`, descompone la memoria de cada capa en una fracción estática —pesos y gradientes acumulados— y una fracción de activación, y reduce esta última por un factor de solapamiento temporal \(\alpha\) que aproxima el grado en que múltiples activaciones coexisten en memoria durante la retropropagación. La semántica alternativa, denominada `nodal_sum`, agrega linealmente toda la memoria nodal sin distinción de tipo, produciendo cotas conservadoras que sobreestiman el pico real de entrenamiento. Formalmente:
+
+**Ecuación (I-23). Memoria efectiva GPU bajo semántica `peak_approx`.**
+
+$$M_{gpu}^{\text{eff}}(v)=M_{gpu}^{\text{static}}(v)+\alpha\,M_{gpu}^{\text{act}}(v)$$
+
+donde \(M_{gpu}^{\text{act}}(v)\) es la porción de activación del nodo \(v\) —obtenida del artefacto de profiling o estimada como el \(70\%\) de la memoria total cuando no se dispone de desglose explícito— y \(\alpha\in[0,1]\) es el parámetro `peak_activation_overlap` (valor por defecto \(0.35\)). El valor \(\alpha=1\) recupera exactamente la semántica `nodal_sum`; valores inferiores relajan la presión de memoria permitiendo al solver explorar regiones de GPU que la semántica conservadora declararía infactibles. La misma función de memoria efectiva se aplica idénticamente en el simulador de validación post-solución (`src/runtime/simulator.py`), garantizando coherencia entre la restricción matemática del ILP y la verificación empírica de la política resultante. Ambos parámetros se exponen mediante las variables de entorno `MEMORY_MODEL` y `PEAK_ACTIVATION_OVERLAP` en todos los scripts de producción.
 
 ### 5.7 Robustificación estadística de coeficientes
 
@@ -169,7 +184,7 @@ Una formulación doctoral no puede limitarse a reportar una solución puntual; d
 
 $$\mathcal{E}_{Z,p}=\frac{\Delta Z/Z}{\Delta p/p}$$
 
-donde \(p\in\{w_t,w_e,w_{tr},k_\sigma,B_{gpu}\}\).
+donde \(p\in\{w_t,w_e,w_{tr},w_{cong},k_\sigma,B_{gpu}\}\).
 
 La estabilidad estructural entre dos soluciones \(x^{(a)}\) y \(x^{(b)}\) se cuantifica mediante distancia de Hamming normalizada:
 
@@ -181,7 +196,7 @@ Un valor bajo de \(D_H\) ante perturbaciones moderadas de parámetros sugiere un
 
 ### 5.12 Validación de soluciones y comparación con baselines
 
-La validación de cada corrida ILP debe cubrir tres dimensiones. La primera es factibilidad matemática, verificando binariedad de variables y cumplimiento de restricciones de memoria y linealización. La segunda es coherencia económica, comprobando que variaciones de parámetros produzcan tendencias esperadas: por ejemplo, aumentos de \(w_{tr}\) deberían reducir cortes, y reducciones de \(B_{gpu}\) deberían disminuir la fracción de nodos en GPU. La tercera es validez comparativa frente a baselines simples que permitan medir ganancia incremental del modelo.
+La validación de cada corrida ILP debe cubrir tres dimensiones. La primera es factibilidad matemática, verificando binariedad de variables y cumplimiento de restricciones de memoria y linealización. La segunda es coherencia económica, comprobando que variaciones de parámetros produzcan tendencias esperadas: por ejemplo, aumentos de \(w_{tr}\) deberían reducir cortes, aumentos de \(w_{cong}\) deberían desalentar fronteras ramificadas de alto volumen agregado, y reducciones de \(B_{gpu}\) deberían disminuir la fracción de nodos en GPU. La tercera es validez comparativa frente a baselines simples que permitan medir ganancia incremental del modelo.
 
 Los baselines mínimos recomendados son `all_cpu`, `all_gpu` cuando sea factible por memoria, y una heurística greedy nodal sin penalización de corte. La comparación con estos baselines permite separar cuánto de la mejora proviene de la estructura del ILP y cuánto provendría de decisiones triviales. Si el ILP no supera claramente a la heurística greedy en escenarios con costos de transferencia altos, ello sugiere revisar pesos o calidad de coeficientes en los artefactos de profiling.
 
@@ -189,17 +204,18 @@ Para interpretación causal de resultados, conviene descomponer el objetivo tota
 
 **Ecuación (I-22). Descomposición aditiva del objetivo.**
 
-$$Z=Z_{node,gpu}+Z_{node,cpu}+Z_{cut}$$
+$$Z=Z_{node,gpu}+Z_{node,cpu}+Z_{cut}+Z_{cong}$$
 
 con
 
 $$
 Z_{node,gpu}=\sum_{v\in V}x_vC_{gpu}(v),\quad
 Z_{node,cpu}=\sum_{v\in V}(1-x_v)C_{cpu}(v),\quad
-Z_{cut}=\sum_{(u,v)\in E}y_{uv}C_{cut}(u,v)
+Z_{cut}=\sum_{(u,v)\in E}y_{uv}C_{cut}(u,v),\quad
+Z_{cong}=w_{cong}\,o
 $$
 
-Esta descomposición permite identificar si la mejora total proviene principalmente de mejor asignación nodal o de reducción de fragmentación comunicativa.
+Esta descomposición permite identificar si la mejora total proviene principalmente de mejor asignación nodal, reducción de fragmentación comunicativa o alivio de congestión de frontera.
 
 ### 5.13 Amenazas a la validez del modelo ILP
 
@@ -285,13 +301,26 @@ La siguiente tabla mapea cada ecuación del capítulo con sus variables clave y 
 | (I-20) | Elasticidad discreta | \(\mathcal{E}_{Z,p}\) | `validation/sweep_ilp_pareto.py` |
 | (I-21) | Distancia de Hamming | \(D_H,x^{(a)},x^{(b)}\) | `validation/sweep_ilp_pareto.py` |
 | (I-22) | Descomposición del objetivo | \(Z_{node,gpu},Z_{node,cpu},Z_{cut}\) | `src/ilp/export_solution.py` |
+| (I-23) | Memoria efectiva GPU (`peak_approx`) | \(M_{gpu}^{\text{eff}},M_{gpu}^{\text{act}},\alpha\) | `src/ilp/model_builder.py`, `src/runtime/simulator.py` |
 
-### 5.16 Conclusiones
+### 5.16 Nota metodológica: por qué ResNet puede resultar CPU-dominante bajo la restricción dual actual
 
-El capítulo establece una formulación ILP robusta, interpretable y operacionalmente ejecutable para partición CPU-GPU de entrenamiento profundo. La contribución principal consiste en traducir costos empíricos trazables en una decisión binaria estructurada sobre grafo, manteniendo simultáneamente tractabilidad matemática y viabilidad física de despliegue. La linealización exacta del corte de arista, las restricciones explícitas de memoria y la robustificación estadística de coeficientes conforman un núcleo metodológico coherente que evita la disociación entre modelo formal y realidad experimental.
+En los barridos recientes de `resnet50` y `resnet152` bajo presupuestos acotados de memoria GPU, la solución dual del ILP tiende a asignar el `forward` mayoritariamente en CPU y reservar una fracción mínima de capas en GPU para `backward`. Esta salida no implica que las convoluciones sean intrínsecamente más eficientes en CPU; implica, más bien, que la formulación vigente penaliza fuertemente el uso agregado de memoria GPU cuando se exige factibilidad simultánea por fase y entre fases.
+
+La restricción dual operacional, tal como está implementada, no sólo limita memoria en `forward` y `backward` por separado, sino también la suma de ambos términos como aproximación conservadora del pico durante la retropropagación. Con dicha semántica, el solver favorece políticas que preservan holgura de memoria en GPU incluso cuando la ventaja temporal local de algunas capas favorecería su ejecución en acelerador. El resultado es una política de partición global que puede ser óptima para el modelo matemático y, al mismo tiempo, poco intuitiva desde la perspectiva del rendimiento esperado de redes convolucionales.
+
+Este fenómeno se amplifica porque la memoria nodal se construye desde métricas robustas por capa y se agrega linealmente en las restricciones del ILP. En arquitecturas profundas como ResNet, la suma lineal por nodos produce cotas muy conservadoras frente al pico real de entrenamiento, que depende de vida útil de activaciones, reutilización de buffers y solapamiento efectivo entre operadores. En consecuencia, la factibilidad `all_gpu` reportada por el ILP puede ser más restrictiva que la factibilidad empírica observada en ejecución monolítica real.
+
+Por esta razón, la interpretación experimental debe mantener dos planos explícitos: factibilidad bajo el modelo ILP actual y factibilidad operacional medida en runtime real. Mezclar ambos planos induce conclusiones erróneas sobre la calidad de partición. Para sostener validez causal, la comparación de baselines debe reportar sistemáticamente `all_cpu`, `all_gpu` (cuando proceda) y `greedy`, y en formulación dual debe separarse conteo de capas y cortes por fase (`forward`/`backward`) además de transiciones cruzadas de fase.
+
+La lectura correcta de una salida CPU-dominante en ResNet es, por tanto, metodológica: no refuta la utilidad del enfoque ILP, pero sí señalaba que el submodelo de memoria requería una aproximación más fiel al pico real para evitar sesgos conservadores excesivos. Este diagnóstico ha sido abordado en la implementación mediante la semántica `peak_approx` descrita en §5.6: al descomponer la memoria nodal en fracción estática y fracción de activación con solapamiento temporal controlado por el parámetro \(\alpha\), el solver puede alcanzar asignaciones con mayor masa de GPU sin violar el presupuesto empíricamente relevante. La extensión delimita con precisión qué parte de la formulación ya era robusta desde el núcleo original —objetivo estructural y término de corte— y qué parte fue extendida para mejorar transferibilidad y plausibilidad física de las políticas resultantes.
+
+### 5.17 Conclusiones
+
+El capítulo establece una formulación ILP robusta, interpretable y operacionalmente ejecutable para partición CPU-GPU de entrenamiento profundo. La contribución principal consiste en traducir costos empíricos trazables en una decisión binaria estructurada sobre grafo, manteniendo simultáneamente tractabilidad matemática y viabilidad física de despliegue. La linealización exacta del corte de arista, las restricciones explícitas de memoria y la robustificación estadística de coeficientes conforman un núcleo metodológico coherente que evita la disociación entre modelo formal y realidad experimental. La incorporación de la semántica `peak_approx` para el cálculo de memoria efectiva constituye una extensión metodológica directa: introduce fidelidad física al modelado del presupuesto GPU sin alterar la linealidad del problema ni comprometer la interpretabilidad de las restricciones.
 
 Desde la perspectiva doctoral, el aporte no reside solo en obtener una política de asignación eficiente para un caso particular, sino en proponer un marco reproducible para inferir políticas estables bajo incertidumbre y heterogeneidad de hardware. La articulación entre el Capítulo 4 y el presente capítulo completa la cadena metodológica: primero se construye evidencia empírica con control de calidad; después se formaliza la decisión combinatoria sobre esa evidencia. El capítulo de resultados que sigue debe evaluar, con base en esta formulación, no solo mejora promedio, sino también estabilidad estructural, sensibilidad paramétrica y transferibilidad entre plataformas.
 
-### 5.17 Referencias de implementación
+### 5.18 Referencias de implementación
 
-La implementación principal de este capítulo se localiza en los módulos `src/ilp/data_loader.py`, `src/ilp/model_builder.py`, `src/ilp/solve.py` y `src/ilp/export_solution.py`. Las utilidades de ejecución experimental y barrido paramétrico se encuentran en `validation/run_ilp_partition.py` y `validation/sweep_ilp_pareto.py`. Estas rutas constituyen la base verificable de las ecuaciones y protocolos presentados.
+La implementación principal de este capítulo se localiza en los módulos `src/ilp/data_loader.py`, `src/ilp/model_builder.py`, `src/ilp/solve.py` y `src/ilp/export_solution.py`. Las utilidades de ejecución experimental y barrido paramétrico se encuentran en `validation/run_ilp_partition.py` y `validation/sweep_ilp_pareto.py`. El parámetro `memory_model` —con opciones `peak_approx` (por defecto, con factor de solapamiento `peak_activation_overlap`) y `nodal_sum` (alternativa conservadora)— se expone en todas las utilidades de validación y en los scripts de producción `scripts/run_ilp_partition.sh`, `scripts/run_ilp_pareto_sweep.sh` y `scripts/run_thesis_mode.sh` mediante las variables de entorno homónimas. Estas rutas constituyen la base verificable de las ecuaciones y protocolos presentados.

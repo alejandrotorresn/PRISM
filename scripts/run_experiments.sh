@@ -86,6 +86,9 @@ ENABLE_RAPL="${ENABLE_RAPL:-true}"          # true = pass --rapl when CPU profil
 FAIL_FAST="${FAIL_FAST:-false}"             # true = abort the campaign on first profiler/aggregation failure
 DRY_RUN="${DRY_RUN:-false}"                 # true = print commands and validate preflight without executing runs
 DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}"
+OOM_RETRY_ENABLED="${OOM_RETRY_ENABLED:-true}"
+OOM_RETRY_MIN_BATCH="${OOM_RETRY_MIN_BATCH:-1}"
+OOM_RETRY_BACKOFF="${OOM_RETRY_BACKOFF:-2}"
 
 if [ "$SMOKE_MODE" = true ]; then
     # Smoke mode intentionally shrinks the grid for a fast end-to-end health check.
@@ -327,6 +330,9 @@ print_summary() {
     log_msg "Seed Base: $SEED_BASE"
     log_msg "Auto Aggregate Stats: $AUTO_AGGREGATE_STATS"
     log_msg "Fail Fast: $FAIL_FAST"
+    log_msg "OOM Retry Enabled: $OOM_RETRY_ENABLED"
+    log_msg "OOM Retry Min Batch: $OOM_RETRY_MIN_BATCH"
+    log_msg "OOM Retry Backoff: $OOM_RETRY_BACKOFF"
     log_msg "Dry Run: $DRY_RUN"
     log_msg "MODELS_CSV Override: ${MODELS_CSV:-<none>}"
     log_msg "BATCH_SIZES_CSV Override: ${BATCH_SIZES_CSV:-<none>}"
@@ -417,7 +423,14 @@ for model in "${MODELS[@]}"; do
                         --require_datasets
                         --seed "$RUN_SEED"
                         --run_id "$RUN_ID"
+                        --oom_retry_min_batch "$OOM_RETRY_MIN_BATCH"
+                        --oom_retry_backoff "$OOM_RETRY_BACKOFF"
                     )
+                    if [ "$OOM_RETRY_ENABLED" = true ]; then
+                        CMD+=(--oom_retry_enabled)
+                    else
+                        CMD+=(--no-oom_retry_enabled)
+                    fi
                     if [ "$USE_SKIP_CPU" = false ] && [ "$ENABLE_RAPL" = true ]; then
                         # RAPL is only meaningful when CPU profiling is enabled.
                         CMD+=(--rapl)  # Enable CPU RAPL energy measurement

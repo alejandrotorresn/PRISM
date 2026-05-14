@@ -55,6 +55,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--datasets_root", type=str, default="datasets", help="Directory containing downloaded datasets used for real-input batches")
     parser.add_argument("--require_datasets", action=argparse.BooleanOptionalAction, default=True, help="Require dataset-backed inputs by default; use --no-require_datasets only for diagnostics")
     parser.add_argument("--allow_fallback_graph", action="store_true", help="Allow fallback_leaf_modules graph extraction only for diagnostics")
+    parser.add_argument("--oom_retry_enabled", action=argparse.BooleanOptionalAction, default=True, help="Enable automatic OOM retry with micro-batch fallback on CUDA")
+    parser.add_argument("--oom_retry_min_batch", type=int, default=1, help="Minimum micro-batch size used by OOM fallback")
+    parser.add_argument("--oom_retry_backoff", type=int, default=2, help="Micro-batch reduction factor per OOM retry (e.g., 2 => halve)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--run_id", type=str, default="run_001", help="Replica identifier (used in artifacts metadata)")
     return parser

@@ -33,20 +33,53 @@ def _prepare_best_table(df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["impr_vs_greedy_pct"] = float("nan")
 
+    if "all_gpu_objective" in out.columns:
+        all_gpu_obj = out["all_gpu_objective"].map(lambda v: _fmt_float(v, 3))
+    else:
+        all_gpu_obj = "-"
+
+    if "all_gpu_status" in out.columns:
+        all_gpu_status = out["all_gpu_status"]
+    else:
+        all_gpu_status = "-"
+
+    if "ilp_layers_gpu_forward" in out.columns:
+        fwd_gpu = out["ilp_layers_gpu_forward"].astype(int)
+        fwd_cpu = out["ilp_layers_cpu_forward"].astype(int)
+        bwd_gpu = out["ilp_layers_gpu_backward"].astype(int)
+        bwd_cpu = out["ilp_layers_cpu_backward"].astype(int)
+        cut_fwd = out["ilp_cut_edges_forward"].astype(int)
+        cut_bwd = out["ilp_cut_edges_backward"].astype(int)
+        cross_phase = out["ilp_cross_phase_edges"].astype(int)
+    else:
+        fwd_gpu = out["ilp_layers_gpu"].astype(int)
+        fwd_cpu = out["ilp_layers_cpu"].astype(int)
+        bwd_gpu = out["ilp_layers_gpu"].astype(int)
+        bwd_cpu = out["ilp_layers_cpu"].astype(int)
+        cut_fwd = out["ilp_cut_edges"].astype(int)
+        cut_bwd = out["ilp_cut_edges"].astype(int)
+        cross_phase = pd.Series([0] * len(out), index=out.index)
+
     keep = pd.DataFrame(
         {
             "Model": out["model"],
             "GPU Budget (MB)": out["gpu_budget_mb"].map(lambda v: _fmt_float(v, 0)),
             "ILP Obj": out["ilp_objective"].map(lambda v: _fmt_float(v, 3)),
             "All-CPU Obj": out["all_cpu_objective"].map(lambda v: _fmt_float(v, 3)),
+            "All-GPU Status": all_gpu_status,
+            "All-GPU Obj": all_gpu_obj,
             "Greedy Obj": out["greedy_objective"].map(lambda v: _fmt_float(v, 3)) if "greedy_objective" in out.columns else "-",
             "Improve vs CPU (\\%)": out["impr_vs_cpu_pct"].map(lambda v: _fmt_float(v, 2)),
             "Improve vs Greedy (\\%)": out["impr_vs_greedy_pct"].map(lambda v: _fmt_float(v, 2)),
             "ILP GPU Mem (MB)": out["ilp_gpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
             "ILP CPU Mem (MB)": out["ilp_cpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
-            "GPU Layers": out["ilp_layers_gpu"].astype(int),
-            "CPU Layers": out["ilp_layers_cpu"].astype(int),
-            "Cut Edges": out["ilp_cut_edges"].astype(int),
+            "Fwd GPU": fwd_gpu,
+            "Fwd CPU": fwd_cpu,
+            "Bwd GPU": bwd_gpu,
+            "Bwd CPU": bwd_cpu,
+            "Cut Fwd": cut_fwd,
+            "Cut Bwd": cut_bwd,
+            "Cross-Phase": cross_phase,
         }
     )
     return keep
@@ -66,6 +99,22 @@ def _prepare_budget_table(df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["impr_vs_greedy_pct"] = float("nan")
 
+    if "all_gpu_objective" in out.columns:
+        all_gpu_obj = out["all_gpu_objective"].map(lambda v: _fmt_float(v, 3))
+    else:
+        all_gpu_obj = "-"
+
+    if "ilp_layers_gpu_forward" in out.columns:
+        fwd_gpu = out["ilp_layers_gpu_forward"].astype(int)
+        bwd_gpu = out["ilp_layers_gpu_backward"].astype(int)
+        cut_bwd = out["ilp_cut_edges_backward"].astype(int)
+        cross_phase = out["ilp_cross_phase_edges"].astype(int)
+    else:
+        fwd_gpu = out["ilp_layers_gpu"].astype(int)
+        bwd_gpu = out["ilp_layers_gpu"].astype(int)
+        cut_bwd = out["ilp_cut_edges"].astype(int)
+        cross_phase = pd.Series([0] * len(out), index=out.index)
+
     keep = pd.DataFrame(
         {
             "Model": out["model"],
@@ -75,11 +124,16 @@ def _prepare_budget_table(df: pd.DataFrame) -> pd.DataFrame:
             "Greedy Obj": out["greedy_objective"].map(lambda v: _fmt_float(v, 3)) if "greedy_objective" in out.columns else "-",
             "All-CPU Obj": out["all_cpu_objective"].map(lambda v: _fmt_float(v, 3)),
             "All-GPU Status": out["all_gpu_status"],
+            "All-GPU Obj": all_gpu_obj,
             "Improve vs CPU (\\%)": out["impr_vs_cpu_pct"].map(lambda v: _fmt_float(v, 2)),
             "Improve vs Greedy (\\%)": out["impr_vs_greedy_pct"].map(lambda v: _fmt_float(v, 2)),
             "ILP GPU Mem (MB)": out["ilp_gpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
             "ILP CPU Mem (MB)": out["ilp_cpu_mem_mb"].map(lambda v: _fmt_float(v, 2)),
-            "Cut Edges": out["ilp_cut_edges"].astype(int),
+            "Fwd GPU": fwd_gpu,
+            "Bwd GPU": bwd_gpu,
+            "Cut Fwd": out["ilp_cut_edges"].astype(int),
+            "Cut Bwd": cut_bwd,
+            "Cross-Phase": cross_phase,
         }
     )
     return keep

@@ -54,7 +54,7 @@ El proyecto implementa un pipeline completo que conecta la medicion empirica con
 2. Exportar artefactos de metricas y metadatos.
 3. Exportar grafo DAG y costos de transferencia en aristas.
 4. Agregar corridas repetidas en estadistica robusta.
-5. Construir y resolver modelo ILP robusto de particion (asignacion CPU/GPU por capa).
+5. Construir y resolver modelo ILP robusto de particion (asignacion CPU/GPU por capa), con semantica de memoria seleccionable via `memory_model` (`nodal_sum` conservador o `peak_approx` con solapamiento de activaciones controlado por `peak_activation_overlap`).
 6. Ejecutar barridos Pareto bajo presupuestos de memoria GPU.
 7. Generar graficas consolidadas y tablas LaTeX para reporte.
 

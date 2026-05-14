@@ -103,7 +103,8 @@ python validation/run_ilp_partition.py \
 ```bash
 python validation/sweep_ilp_pareto.py \
   --config_dir data/<hostname>/results/simple_mlp/SGD/fp32/batch_8 \
-  --model simple_mlp
+  --model simple_mlp \
+  --gpu_budgets_mb 400,600,800,1000
 ```
 
 ### Server preflight before real collection
@@ -197,7 +198,9 @@ If you use PRISM in academic work, cite it as thesis code supporting the doctora
 
 ## License
 
-This repository is part of an academic PhD thesis. For usage rights or collaboration, contact the author.
+This project is licensed under the MIT License. See the LICENSE file for details.
+
+If you are interested in academic collaboration, please contact the author.
 
 ## Contact
 

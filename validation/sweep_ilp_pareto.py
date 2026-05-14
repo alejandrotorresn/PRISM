@@ -221,6 +221,23 @@ def _eval_greedy_policy(data, cfg: Any) -> Dict[str, float | str | int]:
     return _eval_bits_policy(bits, data, cfg)
 
 
+def _phase_assignment_counts(ilp) -> Dict[str, int]:
+    forward_assignment = getattr(ilp, "forward_assignment", None) or ilp.assignment
+    backward_assignment = getattr(ilp, "backward_assignment", None) or ilp.assignment
+    backward_cut_edges = getattr(ilp, "backward_cut_edges", None) or []
+    cross_phase_edges = getattr(ilp, "cross_phase_edges", None) or []
+
+    return {
+        "ilp_layers_gpu_forward": sum(1 for _, d in forward_assignment.items() if d == "GPU"),
+        "ilp_layers_cpu_forward": sum(1 for _, d in forward_assignment.items() if d == "CPU"),
+        "ilp_layers_gpu_backward": sum(1 for _, d in backward_assignment.items() if d == "GPU"),
+        "ilp_layers_cpu_backward": sum(1 for _, d in backward_assignment.items() if d == "CPU"),
+        "ilp_cut_edges_forward": len(ilp.cut_edges),
+        "ilp_cut_edges_backward": len(backward_cut_edges),
+        "ilp_cross_phase_edges": len(cross_phase_edges),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep ILP over GPU memory budgets and compare baselines")
     parser.add_argument("--config_dir", default=None)
@@ -228,7 +245,11 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--gpu_budgets_mb", required=True, help="Comma-separated budgets, e.g. 400,600,800,1000")
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
+    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx"], default="peak_approx")
+    parser.add_argument("--peak_activation_overlap", type=float, default=0.35)
     parser.add_argument("--k_sigma", type=float, default=1.0)
+    parser.add_argument("--k_sigma_time", type=float, default=None)
+    parser.add_argument("--k_sigma_energy", type=float, default=None)
     parser.add_argument("--strict_graph_mapping", action="store_true", help="Fail if graph edges cannot be mapped to metrics layers")
     parser.add_argument("--strict_transfer_mapping", action="store_true", help="Fail if matched graph edges miss transfer costs")
     parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow ILP sweep on metrics_stats.csv rows flagged as low quality (diagnostic only)")
@@ -237,6 +258,7 @@ def main() -> int:
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
+    parser.add_argument("--w_fragmentation", type=float, default=0.0)
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
@@ -266,6 +288,8 @@ def main() -> int:
             graph_edges_csv=str(graph_csv),
             transfer_edges_csv=str(transfer_csv),
             k_sigma=args.k_sigma,
+            k_sigma_time=args.k_sigma_time,
+            k_sigma_energy=args.k_sigma_energy,
             strict_graph_mapping=args.strict_graph_mapping,
             strict_transfer_mapping=args.strict_transfer_mapping,
             strict_sample_quality=not args.allow_low_quality_stats,
@@ -292,14 +316,18 @@ def main() -> int:
             w_time=args.w_time,
             w_energy=args.w_energy,
             w_transfer=args.w_transfer,
+            w_fragmentation=args.w_fragmentation,
             gpu_mem_budget_mb=b,
             cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            memory_model=args.memory_model,
+            peak_activation_overlap=args.peak_activation_overlap,
         )
 
         ilp = solve_partition_ilp(data, cfg, backend=args.backend)
         all_cpu = _eval_fixed_policy("all_cpu", data, cfg)
         all_gpu = _eval_fixed_policy("all_gpu", data, cfg)
         greedy = _eval_greedy_policy(data, cfg)
+        phase_counts = _phase_assignment_counts(ilp)
 
         rows.append({
             "model": args.model,
@@ -313,6 +341,7 @@ def main() -> int:
             "ilp_layers_gpu": sum(1 for _, d in ilp.assignment.items() if d == "GPU"),
             "ilp_layers_cpu": sum(1 for _, d in ilp.assignment.items() if d == "CPU"),
             "ilp_cut_edges": len(ilp.cut_edges),
+            **phase_counts,
             "all_cpu_status": all_cpu["status"],
             "all_cpu_objective": all_cpu["objective_value"],
             "all_cpu_gpu_mem_mb": all_cpu["gpu_mem_used_mb"],

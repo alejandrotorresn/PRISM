@@ -85,6 +85,7 @@ def _solve_one(
     w_time: float,
     w_energy: float,
     w_transfer: float,
+    w_fragmentation: float,
     backend: str,
 ) -> Dict[str, Any]:
     """Reload data with the given k_sigma and solve ILP."""
@@ -97,6 +98,7 @@ def _solve_one(
         w_time=w_time,
         w_energy=w_energy,
         w_transfer=w_transfer,
+        w_fragmentation=w_fragmentation,
         gpu_mem_budget_mb=gpu_budget_mb,
         cpu_mem_budget_mb=cpu_budget_mb,
     )
@@ -128,9 +130,12 @@ def run_sensitivity(
     gpu_budgets_mb: List[float],
     cpu_mem_budget_mb: float,
     baseline_k_sigma: float,
+    baseline_k_sigma_time: float | None,
+    baseline_k_sigma_energy: float | None,
     baseline_w_time: float,
     baseline_w_energy: float,
     baseline_w_transfer: float,
+    baseline_w_fragmentation: float,
     k_sigma_values: List[float],
     w_transfer_values: List[float],
     backend: str,
@@ -153,6 +158,8 @@ def run_sensitivity(
                 graph_edges_csv=str(graph_csv),
                 transfer_edges_csv=str(transfer_csv),
                 k_sigma=k_sigma,
+                k_sigma_time=baseline_k_sigma_time,
+                k_sigma_energy=baseline_k_sigma_energy,
                 strict_graph_mapping=strict_graph,
                 strict_transfer_mapping=strict_transfer,
                 strict_sample_quality=strict_sample_quality,
@@ -177,7 +184,7 @@ def run_sensitivity(
     for b in gpu_budgets_mb:
         res = _solve_one(
             baseline_data, b, cpu_mem_budget_mb,
-            baseline_k_sigma, baseline_w_time, baseline_w_energy, baseline_w_transfer, backend,
+            baseline_k_sigma, baseline_w_time, baseline_w_energy, baseline_w_transfer, baseline_w_fragmentation, backend,
         )
         rows.append({
             "model": model,
@@ -225,7 +232,7 @@ def run_sensitivity(
         for b in gpu_budgets_mb:
             res = _solve_one(
                 data_ks, b, cpu_mem_budget_mb,
-                ks, baseline_w_time, baseline_w_energy, baseline_w_transfer, backend,
+                ks, baseline_w_time, baseline_w_energy, baseline_w_transfer, baseline_w_fragmentation, backend,
             )
             base_val = baseline_obj.get(b, float("nan"))
             delta_abs = res["ilp_objective"] - base_val if base_val == base_val else float("nan")
@@ -266,7 +273,7 @@ def run_sensitivity(
         for b in gpu_budgets_mb:
             res = _solve_one(
                 baseline_data, b, cpu_mem_budget_mb,
-                baseline_k_sigma, baseline_w_time, baseline_w_energy, wt, backend,
+                baseline_k_sigma, baseline_w_time, baseline_w_energy, wt, baseline_w_fragmentation, backend,
             )
             base_val = baseline_obj.get(b, float("nan"))
             delta_abs = res["ilp_objective"] - base_val if base_val == base_val else float("nan")
@@ -302,9 +309,12 @@ def main() -> int:
     parser.add_argument("--gpu_budgets_mb", required=True, help="Comma-separated budgets, e.g. 4,8,16,32,64")
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
     parser.add_argument("--k_sigma", type=float, default=1.0, help="Baseline k_sigma value")
+    parser.add_argument("--k_sigma_time", type=float, default=None, help="Optional baseline sigma for time")
+    parser.add_argument("--k_sigma_energy", type=float, default=None, help="Optional baseline sigma for energy")
     parser.add_argument("--w_time", type=float, default=1.0, help="Baseline w_time")
     parser.add_argument("--w_energy", type=float, default=0.0, help="Baseline w_energy")
     parser.add_argument("--w_transfer", type=float, default=1.0, help="Baseline w_transfer")
+    parser.add_argument("--w_fragmentation", type=float, default=0.0, help="Baseline fragmentation regularizer")
     parser.add_argument("--k_sigma_values", default=",".join(str(v) for v in DEFAULT_K_SIGMA_VALUES),
                         help="Comma-separated k_sigma sweep values")
     parser.add_argument("--w_transfer_values", default=",".join(str(v) for v in DEFAULT_W_TRANSFER_VALUES),
@@ -342,9 +352,12 @@ def main() -> int:
         gpu_budgets_mb=gpu_budgets,
         cpu_mem_budget_mb=args.cpu_mem_budget_mb,
         baseline_k_sigma=args.k_sigma,
+        baseline_k_sigma_time=args.k_sigma_time,
+        baseline_k_sigma_energy=args.k_sigma_energy,
         baseline_w_time=args.w_time,
         baseline_w_energy=args.w_energy,
         baseline_w_transfer=args.w_transfer,
+        baseline_w_fragmentation=args.w_fragmentation,
         k_sigma_values=k_sigma_values,
         w_transfer_values=w_transfer_values,
         backend=args.backend,

@@ -309,6 +309,8 @@ def load_ilp_inputs(
     graph_edges_csv: str,
     transfer_edges_csv: str,
     k_sigma: float = 1.0,
+    k_sigma_time: float | None = None,
+    k_sigma_energy: float | None = None,
     strict_graph_mapping: bool = False,
     strict_transfer_mapping: bool = False,
     strict_metric_validity: bool = True,
@@ -318,6 +320,15 @@ def load_ilp_inputs(
 ) -> ILPInputData:
     if k_sigma < 0:
         raise ValueError(f"k_sigma must be >= 0, got {k_sigma}")
+    if k_sigma_time is not None and k_sigma_time < 0:
+        raise ValueError(f"k_sigma_time must be >= 0, got {k_sigma_time}")
+    if k_sigma_energy is not None and k_sigma_energy < 0:
+        raise ValueError(f"k_sigma_energy must be >= 0, got {k_sigma_energy}")
+
+    # Backward-compatible behaviour: when not explicitly configured, use k_sigma
+    # for both timing and energy uncertainty margins.
+    k_sigma_time_eff = k_sigma if k_sigma_time is None else k_sigma_time
+    k_sigma_energy_eff = k_sigma if k_sigma_energy is None else k_sigma_energy
 
     stats_path = Path(metrics_stats_csv)
     graph_path = Path(graph_edges_csv)
@@ -434,10 +445,10 @@ def load_ilp_inputs(
                 "Disable strict_metric_validity only for explicit diagnostic runs."
             )
 
-    gpu_time = _robust_value(stats, "gpu_fwd_time_ms", k_sigma) + _robust_value(stats, "gpu_bwd_time_ms", k_sigma)
-    cpu_time = _robust_value(stats, "cpu_fwd_time_ms", k_sigma) + _robust_value(stats, "cpu_bwd_time_ms", k_sigma)
-    gpu_energy = _robust_value(stats, "gpu_fwd_energy_j", k_sigma) + _robust_value(stats, "gpu_bwd_energy_j", k_sigma)
-    cpu_energy = _robust_value(stats, "cpu_fwd_energy_j", k_sigma) + _robust_value(stats, "cpu_bwd_energy_j", k_sigma)
+    gpu_time = _robust_value(stats, "gpu_fwd_time_ms", k_sigma_time_eff) + _robust_value(stats, "gpu_bwd_time_ms", k_sigma_time_eff)
+    cpu_time = _robust_value(stats, "cpu_fwd_time_ms", k_sigma_time_eff) + _robust_value(stats, "cpu_bwd_time_ms", k_sigma_time_eff)
+    gpu_energy = _robust_value(stats, "gpu_fwd_energy_j", k_sigma_energy_eff) + _robust_value(stats, "gpu_bwd_energy_j", k_sigma_energy_eff)
+    cpu_energy = _robust_value(stats, "cpu_fwd_energy_j", k_sigma_energy_eff) + _robust_value(stats, "cpu_bwd_energy_j", k_sigma_energy_eff)
 
     stats["gpu_time_robust_ms"] = gpu_time
     stats["cpu_time_robust_ms"] = cpu_time
@@ -451,35 +462,35 @@ def load_ilp_inputs(
     node_energy_gpu_j = {row["layer"]: _safe_num(row["gpu_energy_robust_j"]) for _, row in stats.iterrows()}
     node_energy_cpu_j = {row["layer"]: _safe_num(row["cpu_energy_robust_j"]) for _, row in stats.iterrows()}
     node_cost_gpu_fwd_ms = {
-        row["layer"]: _safe_num(row.get("gpu_fwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_fwd_time_ms_std", 0.0)))
+        row["layer"]: _safe_num(row.get("gpu_fwd_time_ms_mean", 0.0)) + (k_sigma_time_eff * _safe_num(row.get("gpu_fwd_time_ms_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_cost_gpu_bwd_ms = {
-        row["layer"]: _safe_num(row.get("gpu_bwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_bwd_time_ms_std", 0.0)))
+        row["layer"]: _safe_num(row.get("gpu_bwd_time_ms_mean", 0.0)) + (k_sigma_time_eff * _safe_num(row.get("gpu_bwd_time_ms_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_cost_cpu_fwd_ms = {
-        row["layer"]: _safe_num(row.get("cpu_fwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_fwd_time_ms_std", 0.0)))
+        row["layer"]: _safe_num(row.get("cpu_fwd_time_ms_mean", 0.0)) + (k_sigma_time_eff * _safe_num(row.get("cpu_fwd_time_ms_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_cost_cpu_bwd_ms = {
-        row["layer"]: _safe_num(row.get("cpu_bwd_time_ms_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_bwd_time_ms_std", 0.0)))
+        row["layer"]: _safe_num(row.get("cpu_bwd_time_ms_mean", 0.0)) + (k_sigma_time_eff * _safe_num(row.get("cpu_bwd_time_ms_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_energy_gpu_fwd_j = {
-        row["layer"]: _safe_num(row.get("gpu_fwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_fwd_energy_j_std", 0.0)))
+        row["layer"]: _safe_num(row.get("gpu_fwd_energy_j_mean", 0.0)) + (k_sigma_energy_eff * _safe_num(row.get("gpu_fwd_energy_j_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_energy_gpu_bwd_j = {
-        row["layer"]: _safe_num(row.get("gpu_bwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("gpu_bwd_energy_j_std", 0.0)))
+        row["layer"]: _safe_num(row.get("gpu_bwd_energy_j_mean", 0.0)) + (k_sigma_energy_eff * _safe_num(row.get("gpu_bwd_energy_j_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_energy_cpu_fwd_j = {
-        row["layer"]: _safe_num(row.get("cpu_fwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_fwd_energy_j_std", 0.0)))
+        row["layer"]: _safe_num(row.get("cpu_fwd_energy_j_mean", 0.0)) + (k_sigma_energy_eff * _safe_num(row.get("cpu_fwd_energy_j_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_energy_cpu_bwd_j = {
-        row["layer"]: _safe_num(row.get("cpu_bwd_energy_j_mean", 0.0)) + (k_sigma * _safe_num(row.get("cpu_bwd_energy_j_std", 0.0)))
+        row["layer"]: _safe_num(row.get("cpu_bwd_energy_j_mean", 0.0)) + (k_sigma_energy_eff * _safe_num(row.get("cpu_bwd_energy_j_std", 0.0)))
         for _, row in stats.iterrows()
     }
     node_mem_gpu_mb = {row["layer"]: _safe_num(row.get("gpu_mem_peak_mb_mean", 0.0)) for _, row in stats.iterrows()}

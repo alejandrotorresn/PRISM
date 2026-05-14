@@ -3,10 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
-  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+THESIS_ENV_NAME="thesis_env"
+CONDA_PYTHON="${HOME}/anaconda3/envs/${THESIS_ENV_NAME}/bin/python"
+
+if [[ -x "${CONDA_PYTHON}" ]]; then
+  PYTHON_BIN="${CONDA_PYTHON}"
 else
-  PYTHON_BIN="python"
+  echo "ERROR: ${CONDA_PYTHON} not found."
+  echo "This project requires the conda environment '${THESIS_ENV_NAME}'."
+  echo "Create it with: conda env create -f config/environment.yml"
+  exit 1
 fi
 
 echo "================================================================================"
@@ -16,4 +22,11 @@ echo "Using Python: ${PYTHON_BIN}"
 echo ""
 
 cd "${ROOT_DIR}"
+"${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1 || {
+  echo "ERROR: torch is not available in ${THESIS_ENV_NAME}."
+  echo "Install dependencies in ${THESIS_ENV_NAME} before running tests."
+  echo "Example: ${PYTHON_BIN} -m pip install -r config/requirements.txt"
+  exit 1
+}
+
 "${PYTHON_BIN}" -m pytest -q tests

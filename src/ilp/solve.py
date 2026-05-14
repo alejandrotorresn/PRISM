@@ -174,12 +174,27 @@ def _solve_with_pulp(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     )
 
 
+def _derive_congestion_knee_ms(data: ILPInputData, cfg: ILPConfig) -> float:
+    if cfg.congestion_knee_ms > 0.0:
+        return float(cfg.congestion_knee_ms)
+
+    positive_edges = sorted(max(float(data.edge_transfer_ms.get(e, 0.0)), 0.0) for e in data.edges)
+    positive_edges = [v for v in positive_edges if v > 0.0]
+    if not positive_edges:
+        return float("inf")
+
+    # Auto-knee: allow roughly one-third of the lightest cuts before extra congestion penalty.
+    quota = max(1, len(positive_edges) // 3)
+    return float(sum(positive_edges[:quota]))
+
+
 def _eval_assignment_dual(
     fwd_bits: Dict[str, int],
     bwd_bits: Dict[str, int],
     data: ILPInputData,
     cfg: ILPConfig,
     problem,
+    congestion_knee_ms: float | None = None,
 ):
     gpu_mem_fwd = sum(problem.gpu_mem[n] for n in data.nodes if fwd_bits[n] == 1)
     cpu_mem_fwd = sum(problem.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0)
@@ -215,12 +230,21 @@ def _eval_assignment_dual(
             obj += problem.objective_edge_cut_backward[e]
             cut_edges_bwd.append(e)
 
+    if cfg.w_congestion > 0.0 and data.edges:
+        knee = congestion_knee_ms if congestion_knee_ms is not None else _derive_congestion_knee_ms(data, cfg)
+        frontier_fwd_ms = sum(max(float(data.edge_transfer_ms.get(e, 0.0)), 0.0) for e in cut_edges_fwd)
+        frontier_bwd_ms = sum(max(float(data.edge_transfer_ms.get(e, 0.0)), 0.0) for e in cut_edges_bwd)
+        overflow_fwd = max(0.0, frontier_fwd_ms - knee)
+        overflow_bwd = max(0.0, frontier_bwd_ms - knee)
+        obj += cfg.w_congestion * (overflow_fwd + overflow_bwd)
+
     cross_phase_edges = [(n, n) for n in data.nodes if fwd_bits[n] != bwd_bits[n]]
     return obj, gpu_mem_fwd + gpu_mem_bwd, cpu_mem_fwd + cpu_mem_bwd, cut_edges_fwd, cut_edges_bwd, cross_phase_edges
 
 
 def _solve_exhaustive_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     problem = build_problem_data_dual(data, cfg)
+    congestion_knee = _derive_congestion_knee_ms(data, cfg)
 
     n = len(data.nodes)
     if n > 14:
@@ -241,7 +265,14 @@ def _solve_exhaustive_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         fwd_bits = {data.nodes[i]: combo_fwd[i] for i in range(n)}
         for combo_bwd in product([0, 1], repeat=n):
             bwd_bits = {data.nodes[i]: combo_bwd[i] for i in range(n)}
-            out = _eval_assignment_dual(fwd_bits, bwd_bits, data, cfg, problem)
+            out = _eval_assignment_dual(
+                fwd_bits,
+                bwd_bits,
+                data,
+                cfg,
+                problem,
+                congestion_knee_ms=congestion_knee,
+            )
             if out is None:
                 continue
             obj, gpu_mem, cpu_mem, cut_fwd, cut_bwd, cross_edges = out
@@ -291,6 +322,7 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     pulp = importlib.import_module("pulp")
 
     problem_data = build_problem_data_dual(data, cfg)
+    congestion_knee = _derive_congestion_knee_ms(data, cfg)
     prob = pulp.LpProblem("cpu_gpu_partition_dual", pulp.LpMinimize)
 
     xf = {n: pulp.LpVariable(f"xf_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
@@ -298,6 +330,9 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     yf = {e: pulp.LpVariable(f"yf_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
     yb = {e: pulp.LpVariable(f"yb_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
     z = {n: pulp.LpVariable(f"z_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    overflow_fwd = pulp.LpVariable("congestion_overflow_fwd", lowBound=0.0, cat=pulp.LpContinuous)
+    overflow_bwd = pulp.LpVariable("congestion_overflow_bwd", lowBound=0.0, cat=pulp.LpContinuous)
+    edge_congestion_ms = {e: max(float(data.edge_transfer_ms.get(e, 0.0)), 0.0) for e in data.edges}
 
     prob += (
         pulp.lpSum(problem_data.objective_fwd_gpu[n] * xf[n] + problem_data.objective_fwd_cpu[n] * (1 - xf[n]) for n in data.nodes)
@@ -305,7 +340,13 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         + pulp.lpSum(problem_data.objective_edge_cut_forward[e] * yf[e] for e in data.edges)
         + pulp.lpSum(problem_data.objective_edge_cut_backward[e] * yb[e] for e in data.edges)
         + pulp.lpSum(problem_data.objective_cross_phase[n] * z[n] for n in data.nodes)
+        + cfg.w_congestion * (overflow_fwd + overflow_bwd)
     )
+
+    total_frontier_fwd = pulp.lpSum(edge_congestion_ms[e] * yf[e] for e in data.edges)
+    total_frontier_bwd = pulp.lpSum(edge_congestion_ms[e] * yb[e] for e in data.edges)
+    prob += overflow_fwd >= total_frontier_fwd - congestion_knee
+    prob += overflow_bwd >= total_frontier_bwd - congestion_knee
 
     for (u, v) in data.edges:
         prob += yf[(u, v)] >= xf[u] - xf[v]
@@ -404,6 +445,114 @@ def solve_partition_ilp(data: ILPInputData, cfg: ILPConfig, backend: str = "auto
         return _solve_exhaustive_dual(data, cfg)
 
     raise ValueError(f"Unsupported backend: {backend}")
+
+
+def _assignment_to_bits(assignment: Dict[str, str], nodes: List[str]) -> Dict[str, int]:
+    return {n: 1 if str(assignment.get(n, "CPU")).upper() == "GPU" else 0 for n in nodes}
+
+
+def _bits_to_assignment(bits: Dict[str, int], nodes: List[str]) -> Dict[str, str]:
+    return {n: ("GPU" if bits.get(n, 0) == 1 else "CPU") for n in nodes}
+
+
+def refine_solution_hierarchical_local(
+    data: ILPInputData,
+    cfg: ILPConfig,
+    base_solution: ILPSolution,
+    max_assignment_changes: int,
+) -> ILPSolution:
+    """Hierarchical local search with explicit assignment-change budget.
+
+    Stage order is backward then forward. Each accepted move flips one layer in
+    one phase and consumes one unit of the change budget.
+    """
+    if max_assignment_changes <= 0:
+        return base_solution
+
+    if not base_solution.forward_assignment or not base_solution.backward_assignment:
+        return base_solution
+
+    problem = build_problem_data_dual(data, cfg)
+    congestion_knee = _derive_congestion_knee_ms(data, cfg)
+    fwd_bits = _assignment_to_bits(base_solution.forward_assignment, data.nodes)
+    bwd_bits = _assignment_to_bits(base_solution.backward_assignment, data.nodes)
+
+    current_eval = _eval_assignment_dual(
+        fwd_bits,
+        bwd_bits,
+        data,
+        cfg,
+        problem,
+        congestion_knee_ms=congestion_knee,
+    )
+    if current_eval is None:
+        return base_solution
+
+    current_obj, current_gpu, current_cpu, current_cut_fwd, current_cut_bwd, current_cross = current_eval
+    changes_used = 0
+
+    for stage in ("backward", "forward"):
+        while changes_used < max_assignment_changes:
+            best_candidate = None
+            best_node = None
+
+            for node in data.nodes:
+                cand_fwd = dict(fwd_bits)
+                cand_bwd = dict(bwd_bits)
+                if stage == "backward":
+                    cand_bwd[node] = 1 - cand_bwd[node]
+                else:
+                    cand_fwd[node] = 1 - cand_fwd[node]
+
+                cand_eval = _eval_assignment_dual(
+                    cand_fwd,
+                    cand_bwd,
+                    data,
+                    cfg,
+                    problem,
+                    congestion_knee_ms=congestion_knee,
+                )
+                if cand_eval is None:
+                    continue
+                cand_obj = float(cand_eval[0])
+                if cand_obj + 1e-9 < current_obj:
+                    if best_candidate is None or cand_obj < float(best_candidate[0]):
+                        best_candidate = cand_eval
+                        best_node = node
+
+            if best_candidate is None or best_node is None:
+                break
+
+            if stage == "backward":
+                bwd_bits[best_node] = 1 - bwd_bits[best_node]
+            else:
+                fwd_bits[best_node] = 1 - fwd_bits[best_node]
+
+            current_obj = float(best_candidate[0])
+            current_gpu = float(best_candidate[1])
+            current_cpu = float(best_candidate[2])
+            current_cut_fwd = list(best_candidate[3])
+            current_cut_bwd = list(best_candidate[4])
+            current_cross = list(best_candidate[5])
+            changes_used += 1
+
+    forward_assignment = _bits_to_assignment(fwd_bits, data.nodes)
+    backward_assignment = _bits_to_assignment(bwd_bits, data.nodes)
+
+    return ILPSolution(
+        status=base_solution.status,
+        backend=f"{base_solution.backend}_hier_local",
+        objective_value=float(current_obj),
+        assignment=dict(forward_assignment),
+        gpu_mem_used_mb=float(current_gpu),
+        cpu_mem_used_mb=float(current_cpu),
+        cut_edges=list(current_cut_fwd),
+        forward_assignment=forward_assignment,
+        backward_assignment=backward_assignment,
+        backward_cut_edges=list(current_cut_bwd),
+        cross_phase_edges=list(current_cross),
+        activation_strategies=getattr(base_solution, "activation_strategies", None),
+    )
 
 
 # ==================== Phase 4 Extensions ====================

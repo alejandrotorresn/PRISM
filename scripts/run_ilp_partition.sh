@@ -17,6 +17,8 @@ W_ENERGY="${W_ENERGY:-0.0}"
 W_TRANSFER="${W_TRANSFER:-1.0}"
 GPU_MEM_BUDGET_MB="${GPU_MEM_BUDGET_MB:-1e18}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
+MEMORY_MODEL="${MEMORY_MODEL:-peak_approx}"
+PEAK_ACTIVATION_OVERLAP="${PEAK_ACTIVATION_OVERLAP:-0.35}"
 BACKEND="${BACKEND:-auto}"
 HW_AGGREGATE="${HW_AGGREGATE:-max}"
 HW_DISPERSION_K="${HW_DISPERSION_K:-0.0}"
@@ -58,6 +60,8 @@ fi
   --w_transfer "$W_TRANSFER" \
   --gpu_mem_budget_mb "$GPU_MEM_BUDGET_MB" \
   --cpu_mem_budget_mb "$CPU_MEM_BUDGET_MB" \
+  --memory_model "$MEMORY_MODEL" \
+  --peak_activation_overlap "$PEAK_ACTIVATION_OVERLAP" \
   --backend "$BACKEND" \
   --hw_aggregate "$HW_AGGREGATE" \
   --hw_dispersion_k "$HW_DISPERSION_K" \

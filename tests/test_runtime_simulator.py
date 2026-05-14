@@ -155,6 +155,69 @@ def test_simulate_plan_uses_phase_specific_assignment_costs(tmp_path: Path) -> N
     assert abs(result.objective_value - 7.8) < 1e-9
 
 
+def test_simulate_plan_uses_split_time_and_energy_sigmas(tmp_path: Path) -> None:
+    metrics_csv = tmp_path / "metrics_stats.csv"
+    pd.DataFrame(
+        [
+            {
+                "layer": "a",
+                "gpu_fwd_time_ms_mean": 1.0,
+                "gpu_fwd_time_ms_std": 0.2,
+                "gpu_bwd_time_ms_mean": 2.0,
+                "gpu_bwd_time_ms_std": 0.3,
+                "cpu_fwd_time_ms_mean": 10.0,
+                "cpu_fwd_time_ms_std": 1.0,
+                "cpu_bwd_time_ms_mean": 20.0,
+                "cpu_bwd_time_ms_std": 2.0,
+                "gpu_fwd_energy_j_mean": 0.5,
+                "gpu_fwd_energy_j_std": 0.05,
+                "gpu_bwd_energy_j_mean": 0.6,
+                "gpu_bwd_energy_j_std": 0.06,
+                "cpu_fwd_energy_j_mean": 1.0,
+                "cpu_fwd_energy_j_std": 0.1,
+                "cpu_bwd_energy_j_mean": 1.2,
+                "cpu_bwd_energy_j_std": 0.12,
+                "gpu_mem_peak_mb_mean": 10.0,
+                "cpu_mem_mb_mean": 1.0,
+            }
+        ]
+    ).to_csv(metrics_csv, index=False)
+
+    plan = ExecutionPlan(
+        assignment_forward={"a": "GPU"},
+        assignment_backward={"a": "GPU"},
+        cut_edges_forward=[],
+        cut_edges_backward=[],
+        cross_phase_edges=[],
+    )
+
+    cfg = SimulationConfig(
+        mode="robust",
+        k_sigma=1.0,
+        k_sigma_time=0.0,
+        k_sigma_energy=2.0,
+        w_time=1.0,
+        w_energy=1.0,
+        w_transfer=0.0,
+    )
+
+    result = simulate_plan(
+        plan=plan,
+        metrics_stats_csv=metrics_csv,
+        graph_edges=[],
+        transfer_costs={},
+        cfg=cfg,
+    )
+
+    expected_time = 1.0 + 2.0
+    expected_energy = (0.5 + 2.0 * 0.05) + (0.6 + 2.0 * 0.06)
+
+    assert result.status == "ok"
+    assert abs(result.total_time_ms - expected_time) < 1e-9
+    assert abs(result.total_energy_j - expected_energy) < 1e-9
+    assert abs(result.objective_value - (expected_time + expected_energy)) < 1e-9
+
+
 def test_simulate_plan_strict_topology_flags_cycle(tmp_path: Path) -> None:
     metrics_csv = tmp_path / "metrics_stats.csv"
     _write_metrics(metrics_csv)
@@ -344,6 +407,7 @@ def test_simulate_plan_combined_gpu_peak_triggers_violation(tmp_path: Path) -> N
         w_time=1.0,
         w_energy=0.0,
         w_transfer=1.0,
+        memory_model="nodal_sum",
         gpu_mem_budget_mb=15.0,  # > each individual phase (10, 12) but < combined (22)
         cpu_mem_budget_mb=100.0,
     )

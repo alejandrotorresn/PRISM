@@ -85,8 +85,8 @@ check_in_file "Preflight Function Definition" "src/core/precision_policy.py" 'de
 check_in_file "Preflight Signature" "src/core/precision_policy.py" 'model: nn.Module, input_data: Any, timeout_safety_factor: float = 2.5'
 
 check_in_file "BACKWARD_FACTOR Constant" "src/core/constants.py" 'BACKWARD_FACTOR = 2.0'
-check_in_file "BACKWARD_FACTOR Usage (GPU)" "src/runner/training_profiler.py" '"gpu_bwd_time_ms": t_fwd_gpu \* BACKWARD_FACTOR'
-check_in_file "BACKWARD_FACTOR Usage (CPU)" "src/runner/training_profiler.py" '"cpu_bwd_time_ms": t_fwd_cpu \* BACKWARD_FACTOR'
+check_in_file "Backward GPU Time Export" "src/runner/training_profiler.py" '"gpu_bwd_time_ms": t_bwd_gpu'
+check_in_file "Backward CPU Time Export" "src/runner/training_profiler.py" '"cpu_bwd_time_ms": t_bwd_cpu'
 check_in_file "BACKWARD_FACTOR Usage (Preflight)" "src/core/precision_policy.py" 'forward_time_sec \* BACKWARD_FACTOR'
 
 check_in_file "PHASE 1: Forward Measurement (60s)" "src/core/precision_policy.py" 'preflight_thread.join\(timeout=60.0\)'
@@ -150,14 +150,15 @@ if [ $pass_count -eq $check_count ]; then
     echo ""
     echo "🎉 ALL CHECKS PASSED!"
     echo ""
-    echo "✅ All 6 models are correctly integrated"
+    echo "✅ All 7 models are correctly integrated"
     echo "✅ Two-phase timeout mechanism is properly implemented"
-    echo "✅ BACKWARD_FACTOR = 2.0 is used throughout"
+    echo "✅ BACKWARD_FACTOR = 2.0 is used in preflight timeout calibration"
+    echo "✅ Backward layer times are exported from measured backward pass"
     echo "✅ All metadata fields are present and initialized"
     echo "✅ Precision handling (FP32/FP16/BF16) is correct"
     echo "✅ Preflight uses proper timeout formula: max(10s, forward×2.0×2.5)"
     echo "✅ NLP models correctly exclude precision cast from input"
-    echo "✅ Code is production-ready"
+    echo "✅ Structural integration checks passed"
     echo ""
     exit 0
 else

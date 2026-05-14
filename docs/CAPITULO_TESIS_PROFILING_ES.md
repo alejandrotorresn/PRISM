@@ -73,13 +73,13 @@ Ante la ausencia de instrumentación física por kernel en la mayoría de entorn
 
 $$E = P_{avg} \cdot T$$
 
-Para cada capa y dispositivo se reportan términos de fase forward y backward. Cuando la fase backward no puede instrumentarse de forma independiente por capa —situación habitual porque el autodiferenciador de PyTorch no expone eventos por módulo durante la retropropagación— se aplica una heurística de proporcionalidad con factor de carga relativa:
+Para cada capa y dispositivo se reportan términos de fase forward y backward. En la versión metodológica actual, la fase backward se instrumenta de forma explícita por capa mediante hooks de retropropagación (`register_full_backward_pre_hook` y `register_full_backward_hook`) para capturar tiempo efectivo y overhead de despacho en backward. Esta medición directa es la fuente primaria de costo para la formulación ILP.
 
-**Ecuación (P-5). Heurística backward temporal y energética.**
+**Ecuación (P-5). Medición backward con fallback conservador.**
 
-$$T_{\ell}^{bwd}=\gamma T_{\ell}^{fwd}, \qquad E_{\ell}^{bwd}=\gamma E_{\ell}^{fwd}$$
+$$T_{\ell}^{bwd}=\begin{cases}T_{\ell,meas}^{bwd},&\text{si hay eventos backward válidos}\\\gamma T_{\ell}^{fwd},&\text{si no hay observabilidad suficiente}\end{cases},\quad E_{\ell}^{bwd}=\begin{cases}E_{\ell,meas}^{bwd},&\text{si hay eventos backward válidos}\\\gamma E_{\ell}^{fwd},&\text{si no hay observabilidad suficiente}\end{cases}$$
 
-con $\gamma = 2.0$ como valor operacional por defecto. La adopción de este factor constante persigue dos objetivos metodológicos complementarios: preservar la comparabilidad entre corridas al evitar ajustes ad hoc dependientes de arquitectura, y mantener la completitud de todos los canales de costo para las etapas posteriores de robustificación. El valor $\gamma = 2{,}0$ es consistente con la literatura que documenta que la retropropagación de gradientes típicamente consume entre 1,5× y 2,5× el tiempo de la propagación hacia adelante en redes profundas.
+con $\gamma = 2.0$ reservado como mecanismo de continuidad para casos degradados de observabilidad. De esta manera, el pipeline prioriza evidencia medida y mantiene un respaldo explícito que evita huecos en los canales de costo cuando un operador no emite señal backward utilizable.
 
 #### 4.4.2 FLOPs teóricos por operador y eficiencia relativa
 
@@ -149,31 +149,31 @@ El artefacto `*_graph_edges.csv` codifica cada arista con los identificadores de
 
 ### 4.7 Modelo de transferencia consciente de arista
 
-#### 4.7.1 Calibración alpha-beta por dirección
+#### 4.7.1 Calibración por tramos y rodilla de congestión
 
-El modelo de transferencia adoptado es la parametrización alpha-beta estándar en cómputo de alto rendimiento, que descompone el costo de una transferencia en una latencia fija de inicio y un término variable proporcional al volumen de datos. Para cada dirección de transferencia —`h2d` (host a dispositivo) y `d2h` (dispositivo a host)— se estima un par de parámetros mediante calibración empírica realizada en el entorno de ejecución objetivo:
+El modelo de transferencia mantiene la descomposición alpha-beta, pero en versión por tramos para capturar saturación práctica de PCIe bajo mensajes grandes. Para cada dirección de transferencia —`h2d` y `d2h`— se estiman dos regímenes: nominal y congestionado, separados por una rodilla de tamaño calibrada empíricamente.
 
-**Ecuación (P-12). Transferencia direccional.**
+**Ecuación (P-12). Transferencia direccional por tramos.**
 
-$$t_{dir}(S)=\alpha_{dir}+\frac{S}{\beta_{dir}}$$
+$$t_{dir}(S)=\alpha_{dir}+\frac{S}{\beta_{dir}^{eff}(S)},\qquad \beta_{dir}^{eff}(S)=\begin{cases}\beta_{dir}^{nom},&S\le S_{knee,dir}\\\beta_{dir}^{cong},&S>S_{knee,dir}\end{cases}$$
 
-donde $S$ es el tamaño del tensor en MB, $\alpha_{dir}$ es la latencia base de la dirección en milisegundos y $\beta_{dir}$ es el ancho de banda efectivo en MB/ms. La diferenciación por dirección es importante porque en arquitecturas PCIe estándar los anchos de banda host-a-dispositivo y dispositivo-a-host no son simétricos, y su razón varía entre generaciones de hardware. Una calibración que ignora esta asimetría introduce un sesgo sistemático en los costos de corte que puede modificar cualitativamente las decisiones de asignación del modelo ILP.
+donde $S$ es el tamaño del tensor en MB, $\alpha_{dir}$ es la latencia base y $\beta_{dir}^{nom},\beta_{dir}^{cong}$ representan anchos de banda efectivos en régimen nominal y congestionado, respectivamente. La diferenciación por dirección y por tramo reduce el sesgo optimista que aparece cuando se usa un único ancho de banda para todo el rango de tamaños.
 
-#### 4.7.2 Atenuación por overlap y escalar de síntesis
+#### 4.7.2 Atenuación por overlap y presión local de ramificación
 
-En entornos con streams CUDA que permiten el solapamiento entre cómputo y comunicación, el costo efectivo de transferencia es menor que el tiempo bruto predicho por el modelo alpha-beta. Esta atenuación se captura mediante un factor de overlap basado en la proporción $\sigma \in [0,1]$ de solapamiento observado:
+En entornos con streams CUDA que permiten solapamiento cómputo-comunicación, el costo efectivo se atenúa por overlap, pero se incrementa por presión local de frontera cuando un productor alimenta múltiples consumidores. Esta presión se deriva de la estructura DAG y se interpreta como proxy local de contención.
 
 **Ecuación (P-13). Factor de overlap.**
 
 $$f_{ov}=1-0.5\sigma, \qquad \sigma\in[0,1]$$
 
-de modo que el costo efectivo en cada dirección se reduce en proporción al solapamiento:
+de modo que el costo efectivo base en cada dirección se reduce en proporción al solapamiento:
 
-**Ecuación (P-14). Costo efectivo direccional.**
+**Ecuación (P-14). Costo efectivo con presión de ramificación.**
 
-$$t_{h2d}^{eff}=t_{h2d}^{raw}f_{ov}, \qquad t_{d2h}^{eff}=t_{d2h}^{raw}f_{ov}$$
+$$t_{edge}^{eff}=\frac{t_{h2d}^{eff}+t_{d2h}^{eff}}{2}\left(1+\kappa\,p_u\right)$$
 
-El descuento máximo del 50% en el límite $\sigma \to 1$ refleja una postura conservadora: incluso en condiciones de overlap ideal, persisten latencias de coordinación entre streams que no son solapables. Asumir un descuento mayor del 50% introduciría optimismo que podría llevar al modelo ILP a subestimar el costo de cortes comunicativos y favorecer particiones excesivamente fragmentadas. El campo `transfer_sym_ms` sintetiza ambas direcciones en un escalar simétrico que el modelo ILP consume como penalización por corte de arista.
+donde $p_u$ es una medida local de presión de salida del nodo productor $u$ en el DAG y $\kappa$ controla la sensibilidad del recargo. El descuento máximo de overlap (50% cuando $\sigma\to1$) se mantiene deliberadamente conservador; el recargo por ramificación evita que el modelo subestime cortes en fronteras con alto fan-out, escenario frecuente de congestión efectiva en PCIe.
 
 ### 4.8 Contrato de artefactos y agregación estadística robusta
 
@@ -237,7 +237,7 @@ La combinación de tiempo GPU forward bajo y costo de transferencia en aristas i
 
 #### 4.10.2 Ejemplo metodológico integrado
 
-Para ilustrar la función epistemológica del pipeline, considérese una configuración experimental con parámetros fijos $(modelo, batch, precision, optimizador)$ y $r$ réplicas ejecutadas. Para una capa $\ell$, el procedimiento de construcción de coeficientes procede como sigue: se miden $T_{\ell,i}^{fwd}$ y $E_{\ell,i}^{fwd}$ para cada réplica $i = 1, \ldots, r$; se estima $T_{\ell,i}^{bwd} = \gamma T_{\ell,i}^{fwd}$ y $E_{\ell,i}^{bwd} = \gamma E_{\ell,i}^{fwd}$ aplicando la heurística de la Ecuación (P-5); se agregan todas las réplicas para obtener $\mu$, $\sigma$ y cuantiles de cada canal; se aplica la robustificación de la Ecuación (P-17) con el parámetro $k_\sigma$ del experimento para producir $\hat{T}_\ell$ y $\hat{E}_\ell$; y se incorpora el campo `transfer_sym_ms` de las aristas incidentes como costo de corte. El resultado es un vector de coeficientes trazable desde el valor final hasta la medición cruda de cada réplica, pasando por el contexto de hardware y la política de precisión aplicada. Este es el sentido epistemológico del pipeline: convertir fenómeno de sistema en parámetro matemático auditable para optimización.
+Para ilustrar la función epistemológica del pipeline, considérese una configuración experimental con parámetros fijos $(modelo, batch, precision, optimizador)$ y $r$ réplicas ejecutadas. Para una capa $\ell$, el procedimiento de construcción de coeficientes procede como sigue: se miden $T_{\ell,i}^{fwd}$ y $E_{\ell,i}^{fwd}$ para cada réplica $i = 1, \ldots, r$; se miden además $T_{\ell,i}^{bwd}$ y $E_{\ell,i}^{bwd}$ con hooks backward, usando la rama de fallback de (P-5) solo cuando falta observabilidad; se agregan todas las réplicas para obtener $\mu$, $\sigma$ y cuantiles de cada canal; se aplica la robustificación de la Ecuación (P-17) con el parámetro $k_\sigma$ del experimento para producir $\hat{T}_\ell$ y $\hat{E}_\ell$; y se incorpora el campo `transfer_sym_ms` junto con los metadatos de tramo/rodilla en aristas incidentes como costo de corte. El resultado es un vector de coeficientes trazable desde el valor final hasta la medición cruda de cada réplica, pasando por el contexto de hardware y la política de precisión aplicada.
 
 #### 4.10.3 Nexo con el Capítulo 5
 
@@ -251,11 +251,11 @@ Diagrama de bloques que muestra la secuencia completa desde la ejecución instru
 **Figura P-2. Cronograma de captura por capa.**
 Representación temporal de $T^{wall}$, $T^{kernel}$ y $T^{dispatch}$ para un subconjunto de capas representativas, ilustrando la separación de costos y la variabilidad del overhead bajo condiciones reales de ejecución.
 
-**Figura P-3. Curvas alpha-beta por dirección de transferencia.**
-Gráfico que relaciona tamaño de tensor con latencia calibrada en las direcciones `h2d` y `d2h`, mostrando la asimetría esperada y la región de validez del modelo lineal de primer orden.
+**Figura P-3. Curvas por tramo y rodilla de congestión por dirección.**
+Gráfico que relaciona tamaño de tensor con latencia calibrada en `h2d` y `d2h`, mostrando el cambio de pendiente en $S_{knee}$ y la diferencia entre régimen nominal y congestionado.
 
-**Figura P-4. Efecto del overlap en el costo efectivo de transferencia.**
-Curva de sensibilidad de $t^{eff}$ frente a $\sigma$, desde el caso $\sigma = 0$ (sin overlap, costo bruto) hasta $\sigma = 1$ (overlap máximo, descuento del 50%).
+**Figura P-4. Efecto conjunto de overlap y presión de ramificación.**
+Superficie o familia de curvas de $t_{edge}^{eff}$ frente a $\sigma$ y $p_u$, evidenciando la tensión entre atenuación por solapamiento y recargo por frontera ramificada.
 
 **Figura P-5. Distribuciones de réplicas por canal de costo.**
 Gráfico de violín o caja para los canales de tiempo y energía por capa, mostrando media, desviación estándar y cuantiles p50/p90/p95 y evidenciando la dispersión real del entorno experimental.
@@ -273,7 +273,7 @@ Gráfico de violín o caja para los canales de tiempo y energía por capa, mostr
 | $\beta_{dir}$ | Ancho de banda efectivo de transferencia por dirección | MB/ms |
 | $\sigma$ | Proporción de overlap cómputo-comunicación | adimensional |
 | $k_\sigma$ | Factor de robustificación estadística | adimensional |
-| $\gamma$ | Factor heurístico de carga backward/forward | adimensional |
+| $\gamma$ | Factor de fallback backward/forward cuando no hay observabilidad | adimensional |
 | $\eta_{\ell}$ | Eficiencia relativa de capa | adimensional |
 | $\hat{m}$ | Coeficiente robusto de la métrica $m$ | según canal |
 
@@ -298,7 +298,7 @@ Gráfico de violín o caja para los canales de tiempo y energía por capa, mostr
 | De construcción | Precisión ejecutada distinta a solicitada | Sondeo ISA y política de ejecución efectiva |
 | De construcción | Uso de topología lineal de fallback fuera de diagnóstico | Rutas estructurales admisibles con documentación de `graph_trace_source` |
 | Externa | Sobreajuste a un host específico | Normalización por pico local y fusión multi-hardware |
-| Externa | Modelo de transferencia de primer orden | Factor de overlap conservador y reporte de calibración |
+| Externa | Sesgo residual en congestión PCIe global | Modelo por tramos con rodilla, presión local de ramificación y reporte de calibración |
 
 ### 4.12 Discusión y conclusiones
 
@@ -308,7 +308,7 @@ Desde esta perspectiva, el valor del sistema de profiling no se mide únicamente
 
 Las contribuciones principales de este capítulo se articulan en cuatro dimensiones. Primero, desde el punto de vista de la instrumentación, se propone una arquitectura que descompone el tiempo de ejecución por capa en cómputo del kernel y overhead de despacho, separando dos fuentes de ineficiencia con causas y remedios distintos. Segundo, desde el punto de vista energético, se formaliza una aproximación reproducible que, aunque no constituye instrumentación física perfecta, es consistente entre corridas y permite comparación relativa útil para la optimización. Tercero, desde el punto de vista estructural, la integración con `torch.fx` y, cuando corresponde, con `torch.export` produce artefactos de topología admisibles para el modelo ILP, transformando la transferencia de datos entre dispositivos en una magnitud optimizable en lugar de un efecto colateral ignorado. Cuarto, desde el punto de vista estadístico, el esquema de robustificación mediante $k_\sigma$ introduce un parámetro interpretable que controla el conservadurismo de los coeficientes y puede ajustarse en función del nivel de riesgo operacional admisible por el experimento.
 
-El capítulo presenta también limitaciones metodológicas que deben reconocerse abiertamente en la presentación doctoral. La aproximación backward por factor $\gamma$ constante puede introducir sesgo sistemático en entornos donde la relación backward/forward es marcadamente variable entre capas. El modelo de transferencia alpha-beta es un modelo lineal de primer orden que no captura saturación ni efectos de congestión bajo alta carga de PCIe. La medición energética mediante potencia promedio no distingue contribuciones de subsistemas de hardware, limitando la granularidad del diagnóstico energético. Estas limitaciones son reconocidas y delinean una agenda de investigación futura que incluye instrumentación backward por capa con mayor precisión, modelos de transferencia con términos no lineales calibrados por tramo y medición energética por dominio funcional.
+El capítulo presenta también limitaciones metodológicas que deben reconocerse abiertamente en la presentación doctoral. Aunque la medición backward por hooks reduce sustancialmente el sesgo de una aproximación puramente heurística, persisten casos de observabilidad incompleta donde debe activarse el fallback con $\gamma$. El modelo de transferencia por tramos y presión local captura congestión de primer orden, pero no representa explícitamente contención multi-flujo global en el bus compartido. La medición energética mediante potencia promedio no distingue contribuciones de subsistemas de hardware, limitando la granularidad del diagnóstico energético. Estas limitaciones son reconocidas y delinean una agenda de investigación futura orientada a telemetría de bus de mayor resolución y desagregación energética por dominio funcional.
 
 En conjunto, el profiling deja de ser una fase auxiliar de ingeniería y se consolida como el fundamento empírico del modelo de partición presentado en el Capítulo 5. Sin la base de métricas trazables que este capítulo produce, la formulación ILP carecería de los coeficientes necesarios para traducir sus ecuaciones formales en decisiones de partición válidas para hardware heterogéneo real.
 
@@ -322,16 +322,16 @@ La siguiente tabla mapea cada ecuación del capítulo con las variables que intr
 | (P-2) | Dispatch no negativo | $T^{dispatch}_\ell$ | `src/runner/training_profiler.py` |
 | (P-3) | Tiempo de paso | $T^{step}$, $T^{fwd}$, $T^{bwd}$, $T^{opt}$ | `src/runner/training_profiler.py` |
 | (P-4) | Energía de fase | $E$, $P_{avg}$, $T$ | `src/core/metrics.py` |
-| (P-5) | Heurística backward | $T^{bwd}_\ell$, $E^{bwd}_\ell$, $\gamma$ | `src/core/metrics.py` |
+| (P-5) | Backward medido con fallback | $T^{bwd}_\ell$, $E^{bwd}_\ell$, $\gamma$ | `src/runner/training_profiler.py` |
 | (P-6) | FLOPs convolución 2D | $C_{out}$, $H_{out}$, $W_{out}$, $C_{in}$, $K_x$, $K_y$ | `src/core/metrics.py` |
 | (P-7) | FLOPs capa lineal | $P$, $in\_features$, $out\_features$ | `src/core/metrics.py` |
 | (P-8) | FLOPs atención | $B$, $S$, $D$ | `src/core/metrics.py` |
 | (P-9) | Pico empírico de throughput | $N$, $\Delta t$ | `src/core/metrics.py` |
 | (P-10) | Eficiencia relativa | $\eta_\ell$, $\mathrm{TFLOPS}_{peak}$ | `src/core/metrics.py` |
 | (P-11) | Timeout backward adaptativo | $\tau_{bwd}$, $T_{fwd}$, $\gamma$, $s$ | `src/core/precision_policy.py` |
-| (P-12) | Transferencia direccional | $t_{dir}$, $\alpha_{dir}$, $\beta_{dir}$, $S$ | `src/core/system.py` |
-| (P-13) | Factor de overlap | $f_{ov}$, $\sigma$ | `src/core/system.py` |
-| (P-14) | Costo efectivo direccional | $t^{eff}_{h2d}$, $t^{eff}_{d2h}$, $f_{ov}$ | `src/core/system.py` |
+| (P-12) | Transferencia direccional por tramos | $t_{dir}$, $\alpha_{dir}$, $\beta^{nom}_{dir}$, $\beta^{cong}_{dir}$, $S_{knee}$ | `src/runner/training_profiler.py` |
+| (P-13) | Factor de overlap | $f_{ov}$, $\sigma$ | `src/runner/training_profiler.py` |
+| (P-14) | Costo efectivo con presión de ramificación | $t^{eff}_{edge}$, $f_{ov}$, $\kappa$, $p_u$ | `src/runner/training_profiler.py` |
 | (P-15) | Media muestral | $\mu$ | `validation/aggregate_metrics_stats.py` |
 | (P-16) | Desviación estándar muestral | $\sigma$ | `validation/aggregate_metrics_stats.py` |
 | (P-17) | Coeficiente robusto | $\hat{m}$, $\mu_m$, $k_\sigma$, $\sigma_m$ | `validation/aggregate_metrics_stats.py` |
@@ -339,4 +339,4 @@ La siguiente tabla mapea cada ecuación del capítulo con las variables que intr
 
 ### 4.14 Referencias de implementación
 
-Los módulos de código fuente relevantes para este capítulo se organizan por función en el pipeline. El punto de entrada de la orquestación es `src/profiler.py`. La captura de métricas y el bucle de entrenamiento instrumentado se implementan en `src/runner/training_profiler.py`. La política de precisión con sondeo ISA y preflight adaptativo reside en `src/core/precision_policy.py`. El cálculo de métricas derivadas —FLOPs, eficiencia, energía— se centraliza en `src/core/metrics.py`. La extracción de grafo por `torch.fx`, la ruta `torch.export` para modelos decoder-only y la topología lineal solo diagnóstica se implementan en `src/core/graph_extractor.py`. El modelo de transferencia alpha-beta con factor de overlap reside en `src/core/system.py`. La agregación estadística robusta de réplicas se ejecuta mediante `validation/aggregate_metrics_stats.py`. Las validaciones de integridad de artefactos se encuentran en `validation/validate_all_models.py`.
+Los módulos de código fuente relevantes para este capítulo se organizan por función en el pipeline. El punto de entrada de la orquestación es `src/profiler.py`. La captura de métricas, los hooks backward y el modelado de transferencia por tramos con presión de ramificación se implementan en `src/runner/training_profiler.py`. La política de precisión con sondeo ISA y preflight adaptativo reside en `src/core/precision_policy.py`. El cálculo de métricas derivadas —FLOPs, eficiencia, energía— se centraliza en `src/core/metrics.py`. La extracción de grafo por `torch.fx`, la ruta `torch.export` para modelos decoder-only y la topología lineal solo diagnóstica se implementan en `src/core/graph_extractor.py`. La agregación estadística robusta de réplicas se ejecuta mediante `validation/aggregate_metrics_stats.py`. Las validaciones de integridad de artefactos se encuentran en `validation/validate_all_models.py`.

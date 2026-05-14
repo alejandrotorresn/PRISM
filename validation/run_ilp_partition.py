@@ -19,13 +19,7 @@ ILPConfig = importlib.import_module("ilp.model_builder").ILPConfig
 ILPConfig4 = importlib.import_module("ilp.model_builder").ILPConfig4
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
 solve_partition_ilp_phase4 = importlib.import_module("ilp.solve").solve_partition_ilp_phase4
-load_execution_plan = importlib.import_module("runtime.plan_representation").load_execution_plan
-infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
-load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
-load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
-SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
-simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
-simulate_plan_phase4 = importlib.import_module("runtime.simulator").simulate_plan_phase4
+refine_solution_hierarchical_local = importlib.import_module("ilp.solve").refine_solution_hierarchical_local
 
 
 def _default_paths(config_dir: Path, model_name: str):
@@ -59,6 +53,8 @@ def main() -> int:
     parser.add_argument("--graph_edges_csv", default=None, help="Explicit graph edges CSV path")
     parser.add_argument("--transfer_edges_csv", default=None, help="Explicit transfer edges CSV path")
     parser.add_argument("--k_sigma", type=float, default=1.0, help="Robustness factor for mu + k*sigma")
+    parser.add_argument("--k_sigma_time", type=float, default=None, help="Optional robustness factor for time costs (overrides --k_sigma for time only)")
+    parser.add_argument("--k_sigma_energy", type=float, default=None, help="Optional robustness factor for energy costs (overrides --k_sigma for energy only)")
     parser.add_argument("--strict_graph_mapping", action="store_true", help="Fail if graph edges cannot be mapped to metrics layers")
     parser.add_argument("--strict_transfer_mapping", action="store_true", help="Fail if matched graph edges miss transfer costs")
     parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow ILP solve on metrics_stats.csv rows flagged as low quality (diagnostic only)")
@@ -67,8 +63,16 @@ def main() -> int:
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
+    parser.add_argument("--w_fragmentation", type=float, default=0.0, help="Regularization penalty per cut/cross-phase fragmentation event")
+    parser.add_argument("--w_congestion", type=float, default=0.0, help="Weight for explicit frontier-congestion overflow penalty")
+    parser.add_argument("--congestion_knee_ms", type=float, default=0.0, help="Congestion knee in aggregated cut-transfer ms (0 = auto)")
     parser.add_argument("--gpu_mem_budget_mb", type=float, default=1e18)
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
+    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx"], default="peak_approx")
+    parser.add_argument("--peak_activation_overlap", type=float, default=0.35)
+    parser.add_argument("--backward_meta_model_json", default=None, help="Deprecated and ignored. Backward costs now come from profiling artifacts.")
+    parser.add_argument("--backward_meta_blend", type=float, default=1.0, help="Deprecated and ignored. Backward costs now come from profiling artifacts.")
+    parser.add_argument("--local_refine_budget", type=int, default=0, help="Hierarchical local-search budget (max number of assignment flips)")
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
@@ -85,6 +89,22 @@ def main() -> int:
     parser.add_argument("--strict_graph_subset", action="store_true")
     parser.add_argument("--strict_topology", action="store_true")
     args = parser.parse_args()
+
+    load_execution_plan = None
+    infer_ilp_input_paths = None
+    load_graph_edges = None
+    load_transfer_costs = None
+    SimulationConfig = None
+    simulate_plan = None
+    simulate_plan_phase4 = None
+    if not args.no_simulate:
+        load_execution_plan = importlib.import_module("runtime.plan_representation").load_execution_plan
+        infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
+        load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
+        load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
+        SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
+        simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
+        simulate_plan_phase4 = importlib.import_module("runtime.simulator").simulate_plan_phase4
 
     config_dirs: list[Path]
     if args.config_dirs:
@@ -112,6 +132,8 @@ def main() -> int:
             graph_edges_csv=str(graph_csv),
             transfer_edges_csv=str(transfer_csv),
             k_sigma=args.k_sigma,
+            k_sigma_time=args.k_sigma_time,
+            k_sigma_energy=args.k_sigma_energy,
             strict_graph_mapping=args.strict_graph_mapping,
             strict_transfer_mapping=args.strict_transfer_mapping,
             strict_sample_quality=not args.allow_low_quality_stats,
@@ -127,6 +149,8 @@ def main() -> int:
                 graph_edges_csv=str(graph_csv),
                 transfer_edges_csv=str(transfer_csv),
                 k_sigma=args.k_sigma,
+                k_sigma_time=args.k_sigma_time,
+                k_sigma_energy=args.k_sigma_energy,
                 strict_graph_mapping=args.strict_graph_mapping,
                 strict_transfer_mapping=args.strict_transfer_mapping,
                 strict_sample_quality=not args.allow_low_quality_stats,
@@ -145,13 +169,24 @@ def main() -> int:
                 strict_schema=True,
             )
 
+    if args.backward_meta_model_json:
+        print(
+            "[deprecated] Ignoring --backward_meta_model_json/--backward_meta_blend; "
+            "backward costs now come directly from profiling artifacts."
+        )
+
     if args.phase4_activation:
         cfg4 = ILPConfig4(
             w_time=args.w_time,
             w_energy=args.w_energy,
             w_transfer=args.w_transfer,
+            w_fragmentation=args.w_fragmentation,
+            w_congestion=args.w_congestion,
+            congestion_knee_ms=args.congestion_knee_ms,
             gpu_mem_budget_mb=args.gpu_mem_budget_mb,
             cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            memory_model=args.memory_model,
+            peak_activation_overlap=args.peak_activation_overlap,
             w_io=args.phase4_w_io,
             w_recompute_penalty=args.phase4_recompute_penalty,
             w_checkpoint_penalty=args.phase4_checkpoint_penalty,
@@ -164,10 +199,33 @@ def main() -> int:
             w_time=args.w_time,
             w_energy=args.w_energy,
             w_transfer=args.w_transfer,
+            w_fragmentation=args.w_fragmentation,
+            w_congestion=args.w_congestion,
+            congestion_knee_ms=args.congestion_knee_ms,
             gpu_mem_budget_mb=args.gpu_mem_budget_mb,
             cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            memory_model=args.memory_model,
+            peak_activation_overlap=args.peak_activation_overlap,
         )
         sol = solve_partition_ilp(data, cfg, backend=args.backend)
+
+    if args.local_refine_budget > 0:
+        refine_cfg = ILPConfig(
+            w_time=args.w_time,
+            w_energy=args.w_energy,
+            w_transfer=args.w_transfer,
+            w_fragmentation=args.w_fragmentation,
+            gpu_mem_budget_mb=args.gpu_mem_budget_mb,
+            cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            memory_model=args.memory_model,
+            peak_activation_overlap=args.peak_activation_overlap,
+        )
+        sol = refine_solution_hierarchical_local(
+            data=data,
+            cfg=refine_cfg,
+            base_solution=sol,
+            max_assignment_changes=args.local_refine_budget,
+        )
     out = save_ilp_solution(sol, str(output_dir))
 
     print("=" * 80)
@@ -180,6 +238,11 @@ def main() -> int:
     print(f"CPU mem used (MB): {sol.cpu_mem_used_mb:.3f}")
     print(f"Layers assigned: {len(sol.assignment)}")
     print(f"Cut edges: {len(sol.cut_edges)}")
+    print(f"Fragmentation regularizer: {args.w_fragmentation}")
+    print(f"Memory model: {args.memory_model} (peak_activation_overlap={args.peak_activation_overlap})")
+    print(f"Congestion term: w_congestion={args.w_congestion}, knee_ms={args.congestion_knee_ms} (0=auto)")
+    if args.local_refine_budget > 0:
+        print(f"Local hierarchical refinement budget: {args.local_refine_budget}")
     if len(config_dirs) > 1:
         print(f"Hardware profiles merged: {len(config_dirs)}")
         print(f"Aggregation: {args.hw_aggregate} (k={args.hw_dispersion_k})")
@@ -209,11 +272,15 @@ def main() -> int:
         sim_cfg = SimulationConfig(
             mode=args.simulate_mode,
             k_sigma=args.k_sigma,
+            k_sigma_time=args.k_sigma_time,
+            k_sigma_energy=args.k_sigma_energy,
             w_time=args.w_time,
             w_energy=args.w_energy,
             w_transfer=args.w_transfer,
             gpu_mem_budget_mb=args.gpu_mem_budget_mb,
             cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+            memory_model=args.memory_model,
+            peak_activation_overlap=args.peak_activation_overlap,
             strict_transfer_mapping=args.strict_transfer_mapping,
             strict_graph_subset=args.strict_graph_subset,
             strict_topology=args.strict_topology,

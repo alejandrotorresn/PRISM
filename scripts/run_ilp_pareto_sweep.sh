@@ -14,6 +14,8 @@ CONFIG_DIR="${CONFIG_DIR:-data/test-m4/resnet50/SGD/fp32/batch_8}"
 CONFIG_DIRS="${CONFIG_DIRS:-}"
 GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-400,600,800,1000,1200}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
+MEMORY_MODEL="${MEMORY_MODEL:-peak_approx}"
+PEAK_ACTIVATION_OVERLAP="${PEAK_ACTIVATION_OVERLAP:-0.35}"
 K_SIGMA="${K_SIGMA:-1.0}"
 W_TIME="${W_TIME:-1.0}"
 W_ENERGY="${W_ENERGY:-0.0}"
@@ -56,6 +58,8 @@ fi
   --model "$MODEL" \
   --gpu_budgets_mb "$GPU_BUDGETS_MB" \
   --cpu_mem_budget_mb "$CPU_MEM_BUDGET_MB" \
+  --memory_model "$MEMORY_MODEL" \
+  --peak_activation_overlap "$PEAK_ACTIVATION_OVERLAP" \
   --k_sigma "$K_SIGMA" \
   --w_time "$W_TIME" \
   --w_energy "$W_ENERGY" \

@@ -13,11 +13,15 @@ from .plan_representation import ExecutionPlan
 class SimulationConfig:
     mode: str = "robust"  # robust or nominal
     k_sigma: float = 1.0
+    k_sigma_time: float | None = None
+    k_sigma_energy: float | None = None
     w_time: float = 1.0
     w_energy: float = 0.0
     w_transfer: float = 1.0
     gpu_mem_budget_mb: float = 1e18
     cpu_mem_budget_mb: float = 1e18
+    memory_model: str = "peak_approx"  # peak_approx (default) or nodal_sum
+    peak_activation_overlap: float = 0.35
     strict_transfer_mapping: bool = False
     strict_graph_subset: bool = False
     strict_topology: bool = False
@@ -125,7 +129,13 @@ def _robust_value(df: pd.DataFrame, base_col: str, k_sigma: float) -> pd.Series:
     return mu + (k_sigma * sd)
 
 
-def _layer_profiles(metrics_stats_csv: str | Path, mode: str, k_sigma: float) -> pd.DataFrame:
+def _layer_profiles(
+    metrics_stats_csv: str | Path,
+    mode: str,
+    k_sigma: float,
+    k_sigma_time: float | None = None,
+    k_sigma_energy: float | None = None,
+) -> pd.DataFrame:
     path = Path(metrics_stats_csv)
     if not path.exists():
         raise FileNotFoundError(f"metrics_stats csv not found: {path}")
@@ -138,6 +148,9 @@ def _layer_profiles(metrics_stats_csv: str | Path, mode: str, k_sigma: float) ->
 
     if mode not in {"robust", "nominal"}:
         raise ValueError(f"Unsupported mode: {mode}. Expected robust|nominal")
+
+    time_sigma = k_sigma if k_sigma_time is None else k_sigma_time
+    energy_sigma = k_sigma if k_sigma_energy is None else k_sigma_energy
 
     if mode == "nominal":
         for col in [
@@ -165,15 +178,15 @@ def _layer_profiles(metrics_stats_csv: str | Path, mode: str, k_sigma: float) ->
         df["cpu_fwd_energy_j"] = pd.to_numeric(df["cpu_fwd_energy_j_mean"], errors="coerce").fillna(0.0)
         df["cpu_bwd_energy_j"] = pd.to_numeric(df["cpu_bwd_energy_j_mean"], errors="coerce").fillna(0.0)
     else:
-        df["gpu_fwd_time_ms"] = _robust_value(df, "gpu_fwd_time_ms", k_sigma)
-        df["gpu_bwd_time_ms"] = _robust_value(df, "gpu_bwd_time_ms", k_sigma)
-        df["cpu_fwd_time_ms"] = _robust_value(df, "cpu_fwd_time_ms", k_sigma)
-        df["cpu_bwd_time_ms"] = _robust_value(df, "cpu_bwd_time_ms", k_sigma)
+        df["gpu_fwd_time_ms"] = _robust_value(df, "gpu_fwd_time_ms", time_sigma)
+        df["gpu_bwd_time_ms"] = _robust_value(df, "gpu_bwd_time_ms", time_sigma)
+        df["cpu_fwd_time_ms"] = _robust_value(df, "cpu_fwd_time_ms", time_sigma)
+        df["cpu_bwd_time_ms"] = _robust_value(df, "cpu_bwd_time_ms", time_sigma)
 
-        df["gpu_fwd_energy_j"] = _robust_value(df, "gpu_fwd_energy_j", k_sigma)
-        df["gpu_bwd_energy_j"] = _robust_value(df, "gpu_bwd_energy_j", k_sigma)
-        df["cpu_fwd_energy_j"] = _robust_value(df, "cpu_fwd_energy_j", k_sigma)
-        df["cpu_bwd_energy_j"] = _robust_value(df, "cpu_bwd_energy_j", k_sigma)
+        df["gpu_fwd_energy_j"] = _robust_value(df, "gpu_fwd_energy_j", energy_sigma)
+        df["gpu_bwd_energy_j"] = _robust_value(df, "gpu_bwd_energy_j", energy_sigma)
+        df["cpu_fwd_energy_j"] = _robust_value(df, "cpu_fwd_energy_j", energy_sigma)
+        df["cpu_bwd_energy_j"] = _robust_value(df, "cpu_bwd_energy_j", energy_sigma)
 
     df["gpu_time_ms"] = df["gpu_fwd_time_ms"] + df["gpu_bwd_time_ms"]
     df["cpu_time_ms"] = df["cpu_fwd_time_ms"] + df["cpu_bwd_time_ms"]
@@ -213,6 +226,20 @@ def _layer_profiles(metrics_stats_csv: str | Path, mode: str, k_sigma: float) ->
     return df[keep]
 
 
+def _effective_layer_memory(gpu_mem_mb: float, cpu_mem_mb: float, cfg: SimulationConfig) -> tuple[float, float]:
+    if cfg.memory_model == "nodal_sum":
+        return gpu_mem_mb, cpu_mem_mb
+
+    # peak_approx: activation-like portion overlaps partially in time.
+    overlap = max(0.0, min(1.0, float(cfg.peak_activation_overlap)))
+    act_gpu = max(0.0, min(gpu_mem_mb * 0.70, gpu_mem_mb))
+    non_act_gpu = max(0.0, gpu_mem_mb - act_gpu)
+    act_ratio = (act_gpu / gpu_mem_mb) if gpu_mem_mb > 1e-12 else 0.0
+    act_cpu = max(0.0, min(cpu_mem_mb * act_ratio, cpu_mem_mb))
+    non_act_cpu = max(0.0, cpu_mem_mb - act_cpu)
+    return non_act_gpu + (overlap * act_gpu), non_act_cpu + (overlap * act_cpu)
+
+
 def simulate_plan(
     plan: ExecutionPlan,
     metrics_stats_csv: str | Path,
@@ -220,7 +247,13 @@ def simulate_plan(
     transfer_costs: Dict[Tuple[str, str], float],
     cfg: SimulationConfig,
 ) -> SimulationResult:
-    prof = _layer_profiles(metrics_stats_csv, mode=cfg.mode, k_sigma=cfg.k_sigma)
+    prof = _layer_profiles(
+        metrics_stats_csv,
+        mode=cfg.mode,
+        k_sigma=cfg.k_sigma,
+        k_sigma_time=cfg.k_sigma_time,
+        k_sigma_energy=cfg.k_sigma_energy,
+    )
     prof_map = {str(r["layer"]): r for _, r in prof.iterrows()}
 
     warnings: List[str] = []
@@ -294,14 +327,17 @@ def simulate_plan(
         if layer not in prof_map:
             continue
         row = prof_map[layer]
+        row_gpu_mem = float(row["gpu_mem_mb"])
+        row_cpu_mem = float(row["cpu_mem_mb"])
+        eff_gpu_mem, eff_cpu_mem = _effective_layer_memory(row_gpu_mem, row_cpu_mem, cfg)
         if device == "GPU":
             total_time_ms += float(row["gpu_fwd_time_ms"])
             total_energy_j += float(row["gpu_fwd_energy_j"])
-            gpu_mem_forward_mb += float(row["gpu_mem_mb"])
+            gpu_mem_forward_mb += eff_gpu_mem
         elif device == "CPU":
             total_time_ms += float(row["cpu_fwd_time_ms"])
             total_energy_j += float(row["cpu_fwd_energy_j"])
-            cpu_mem_forward_mb += float(row["cpu_mem_mb"])
+            cpu_mem_forward_mb += eff_cpu_mem
         else:
             violations.append(f"Invalid forward device '{device}' for layer '{layer}'")
 
@@ -309,14 +345,17 @@ def simulate_plan(
         if layer not in prof_map:
             continue
         row = prof_map[layer]
+        row_gpu_mem = float(row["gpu_mem_mb"])
+        row_cpu_mem = float(row["cpu_mem_mb"])
+        eff_gpu_mem, eff_cpu_mem = _effective_layer_memory(row_gpu_mem, row_cpu_mem, cfg)
         if device == "GPU":
             total_time_ms += float(row["gpu_bwd_time_ms"])
             total_energy_j += float(row["gpu_bwd_energy_j"])
-            gpu_mem_backward_mb += float(row["gpu_mem_mb"])
+            gpu_mem_backward_mb += eff_gpu_mem
         elif device == "CPU":
             total_time_ms += float(row["cpu_bwd_time_ms"])
             total_energy_j += float(row["cpu_bwd_energy_j"])
-            cpu_mem_backward_mb += float(row["cpu_mem_mb"])
+            cpu_mem_backward_mb += eff_cpu_mem
         else:
             violations.append(f"Invalid backward device '{device}' for layer '{layer}'")
 
@@ -417,7 +456,13 @@ def simulate_plan_phase4(
     if activation_strategies is None:
         activation_strategies = {layer: "retain" for layer in plan.assignment_forward}
 
-    prof = _layer_profiles(metrics_stats_csv, mode=cfg.mode, k_sigma=cfg.k_sigma)
+    prof = _layer_profiles(
+        metrics_stats_csv,
+        mode=cfg.mode,
+        k_sigma=cfg.k_sigma,
+        k_sigma_time=cfg.k_sigma_time,
+        k_sigma_energy=cfg.k_sigma_energy,
+    )
     prof_map = {str(r["layer"]): r for _, r in prof.iterrows()}
 
     recompute_layers: List[str] = []
