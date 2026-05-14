@@ -204,7 +204,6 @@ def _run_single(
             )
 
     warnings = []
-    warnings = []
     export_trace_ctx = try_export_decoder_only_trace(model, inp)
     leaf_names = set(export_trace_ctx.node_layer_names.values()) if export_trace_ctx is not None else set(collect_leaf_module_names(model))
     plan_layers = set(plan.assignment_forward.keys()) | set(plan.assignment_backward.keys())
@@ -454,7 +453,7 @@ def main() -> int:
     print(f"Protocol CSV: {protocol_path}")
     print("=" * 80)
 
-    return 0
+    return 0 if ilp_result.status == "ok" else 2
 
 
 if __name__ == "__main__":

@@ -250,97 +250,111 @@ def main() -> int:
     print(f"Cut edges CSV: {out['cut_edges_csv']}")
     print(f"Summary JSON: {out['summary_json']}")
 
+    solve_status_ok = str(sol.status).lower() in {"optimal", "feasible"}
+    exit_code = 0 if solve_status_ok else 2
+
     if not args.no_simulate:
-        sim_plan = load_execution_plan(
-            assignment_csv=out["assignment_csv"],
-            cut_edges_csv=out["cut_edges_csv"],
-        )
-
-        inferred = infer_ilp_input_paths(config_dir=config_dirs[0], model_name=args.model)
-        measured_layers = set(data.nodes)
-        graph_edges = load_graph_edges(
-            inferred.graph_edges_csv,
-            transfer_edges_csv=inferred.transfer_edges_csv,
-            measured_layers=measured_layers,
-        )
-        transfer_costs = load_transfer_costs(
-            inferred.transfer_edges_csv,
-            graph_edges_csv=inferred.graph_edges_csv,
-            measured_layers=measured_layers,
-        )
-
-        sim_cfg = SimulationConfig(
-            mode=args.simulate_mode,
-            k_sigma=args.k_sigma,
-            k_sigma_time=args.k_sigma_time,
-            k_sigma_energy=args.k_sigma_energy,
-            w_time=args.w_time,
-            w_energy=args.w_energy,
-            w_transfer=args.w_transfer,
-            gpu_mem_budget_mb=args.gpu_mem_budget_mb,
-            cpu_mem_budget_mb=args.cpu_mem_budget_mb,
-            memory_model=args.memory_model,
-            peak_activation_overlap=args.peak_activation_overlap,
-            strict_transfer_mapping=args.strict_transfer_mapping,
-            strict_graph_subset=args.strict_graph_subset,
-            strict_topology=args.strict_topology,
-        )
-
-        if getattr(sim_plan, "activation_strategies", None):
-            sim_result = simulate_plan_phase4(
-                plan=sim_plan,
-                metrics_stats_csv=inferred.metrics_stats_csv,
-                graph_edges=graph_edges,
-                transfer_costs=transfer_costs,
-                cfg=sim_cfg,
-                activation_strategies=sim_plan.activation_strategies,
+        if not solve_status_ok or not sol.assignment:
+            print("-" * 80)
+            print("POST-SOLVE SIMULATION")
+            print("-" * 80)
+            print(
+                "Simulation skipped: ILP solution is not feasible/optimal "
+                f"(status={sol.status})."
             )
         else:
-            sim_result = simulate_plan(
-                plan=sim_plan,
-                metrics_stats_csv=inferred.metrics_stats_csv,
-                graph_edges=graph_edges,
-                transfer_costs=transfer_costs,
-                cfg=sim_cfg,
+            sim_plan = load_execution_plan(
+                assignment_csv=out["assignment_csv"],
+                cut_edges_csv=out["cut_edges_csv"],
             )
 
-        sim_out_dir = output_dir / "simulation"
-        sim_out_dir.mkdir(parents=True, exist_ok=True)
+            inferred = infer_ilp_input_paths(config_dir=config_dirs[0], model_name=args.model)
+            measured_layers = set(data.nodes)
+            graph_edges = load_graph_edges(
+                inferred.graph_edges_csv,
+                transfer_edges_csv=inferred.transfer_edges_csv,
+                measured_layers=measured_layers,
+            )
+            transfer_costs = load_transfer_costs(
+                inferred.transfer_edges_csv,
+                graph_edges_csv=inferred.graph_edges_csv,
+                measured_layers=measured_layers,
+            )
 
-        sim_summary_path = sim_out_dir / "simulation_summary.json"
-        import json
+            sim_cfg = SimulationConfig(
+                mode=args.simulate_mode,
+                k_sigma=args.k_sigma,
+                k_sigma_time=args.k_sigma_time,
+                k_sigma_energy=args.k_sigma_energy,
+                w_time=args.w_time,
+                w_energy=args.w_energy,
+                w_transfer=args.w_transfer,
+                gpu_mem_budget_mb=args.gpu_mem_budget_mb,
+                cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+                memory_model=args.memory_model,
+                peak_activation_overlap=args.peak_activation_overlap,
+                strict_transfer_mapping=args.strict_transfer_mapping,
+                strict_graph_subset=args.strict_graph_subset,
+                strict_topology=args.strict_topology,
+            )
 
-        with open(sim_summary_path, "w") as f:
-            json.dump(
-                {
-                    **sim_result.to_dict(),
-                    "inputs": {
-                        "metrics_stats_csv": str(inferred.metrics_stats_csv),
-                        "graph_edges_csv": str(inferred.graph_edges_csv),
-                        "transfer_edges_csv": str(inferred.transfer_edges_csv),
+            if getattr(sim_plan, "activation_strategies", None):
+                sim_result = simulate_plan_phase4(
+                    plan=sim_plan,
+                    metrics_stats_csv=inferred.metrics_stats_csv,
+                    graph_edges=graph_edges,
+                    transfer_costs=transfer_costs,
+                    cfg=sim_cfg,
+                    activation_strategies=sim_plan.activation_strategies,
+                )
+            else:
+                sim_result = simulate_plan(
+                    plan=sim_plan,
+                    metrics_stats_csv=inferred.metrics_stats_csv,
+                    graph_edges=graph_edges,
+                    transfer_costs=transfer_costs,
+                    cfg=sim_cfg,
+                )
+
+            sim_out_dir = output_dir / "simulation"
+            sim_out_dir.mkdir(parents=True, exist_ok=True)
+
+            sim_summary_path = sim_out_dir / "simulation_summary.json"
+            import json
+
+            with open(sim_summary_path, "w") as f:
+                json.dump(
+                    {
+                        **sim_result.to_dict(),
+                        "inputs": {
+                            "metrics_stats_csv": str(inferred.metrics_stats_csv),
+                            "graph_edges_csv": str(inferred.graph_edges_csv),
+                            "transfer_edges_csv": str(inferred.transfer_edges_csv),
+                        },
                     },
-                },
-                f,
-                indent=4,
-            )
+                    f,
+                    indent=4,
+                )
 
-        print("-" * 80)
-        print("POST-SOLVE SIMULATION")
-        print("-" * 80)
-        print(f"Simulation status: {sim_result.status}")
-        print(f"Simulation objective: {sim_result.objective_value:.6f}")
-        print(f"Simulation summary JSON: {sim_summary_path}")
-        if sim_result.warnings:
-            print("Simulation warnings:")
-            for msg in sim_result.warnings:
-                print(f"  - {msg}")
-        if sim_result.violations:
-            print("Simulation violations:")
-            for msg in sim_result.violations:
-                print(f"  - {msg}")
+            print("-" * 80)
+            print("POST-SOLVE SIMULATION")
+            print("-" * 80)
+            print(f"Simulation status: {sim_result.status}")
+            print(f"Simulation objective: {sim_result.objective_value:.6f}")
+            print(f"Simulation summary JSON: {sim_summary_path}")
+            if sim_result.warnings:
+                print("Simulation warnings:")
+                for msg in sim_result.warnings:
+                    print(f"  - {msg}")
+            if sim_result.violations:
+                print("Simulation violations:")
+                for msg in sim_result.violations:
+                    print(f"  - {msg}")
+            if sim_result.status != "ok":
+                exit_code = 2
     print("=" * 80)
 
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

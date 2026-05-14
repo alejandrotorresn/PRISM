@@ -42,7 +42,10 @@ def save_ilp_solution(solution: ILPSolution, output_dir: str) -> Dict[str, str]:
         }
         for layer in sorted(forward_assignment.keys())
     ]
-    pd.DataFrame(assign_rows).to_csv(assign_path, index=False)
+    pd.DataFrame(
+        assign_rows,
+        columns=["layer", "device", "device_forward", "device_backward", "activation_strategy"],
+    ).to_csv(assign_path, index=False)
 
     cut_rows = ([{"src_layer": u, "dst_layer": v, "phase": "forward"} for (u, v) in solution.cut_edges] +
                 [{"src_layer": u, "dst_layer": v, "phase": "backward"} for (u, v) in (solution.backward_cut_edges or [])] +

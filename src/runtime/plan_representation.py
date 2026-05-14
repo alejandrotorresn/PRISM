@@ -75,7 +75,10 @@ def load_execution_plan(assignment_csv: str | Path, cut_edges_csv: str | Path) -
     if not cut_path.exists():
         raise FileNotFoundError(f"cut_edges_csv not found: {cut_path}")
 
-    assign_df = pd.read_csv(assign_path)
+    try:
+        assign_df = pd.read_csv(assign_path)
+    except EmptyDataError:
+        assign_df = pd.DataFrame(columns=["layer", "device", "device_forward", "device_backward", "activation_strategy"])
     try:
         cut_df = pd.read_csv(cut_path)
     except EmptyDataError:
@@ -88,6 +91,11 @@ def load_execution_plan(assignment_csv: str | Path, cut_edges_csv: str | Path) -
         raise KeyError(
             f"Missing columns in assignment CSV {assign_path}: "
             f"{sorted(required_assign - set(assign_df.columns))}"
+        )
+    if assign_df.empty:
+        raise ValueError(
+            f"Assignment CSV has no layers: {assign_path}. "
+            "This typically indicates an infeasible ILP solve."
         )
     if not required_cut.issubset(cut_df.columns):
         raise KeyError(
