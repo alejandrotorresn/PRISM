@@ -32,17 +32,16 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ## 2) Validation (recommended order)
 
 ```bash
+conda activate thesis_env
 bash validation/run_unit_tests.sh
 python validation/validate_code.py
+python validation/validate_all_models.py --preflight-scope fast
 python validation/validate_zombie_fix.py
 bash validation/comprehensive_check.sh
 ```
 
-Optional all-model validation:
+Optional exhaustive model validation:
 ```bash
-# Fast default preflight
-python validation/validate_all_models.py --preflight-scope fast
-
 # Exhaustive (slow on some CPUs)
 python validation/validate_all_models.py --preflight-scope all
 ```
@@ -83,10 +82,10 @@ This script is intended for real operational verification with a small campaign 
 
 ### Fast script smoke mode
 ```bash
+conda activate thesis_env
 SMOKE_MODE=true \
 USE_SKIP_CPU=true \
 FORCE_THREADS=4 \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 

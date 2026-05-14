@@ -1041,7 +1041,7 @@ PRECISIONS_CSV=fp32 \
 OPTIMIZERS_CSV=SGD,AdamW \
 REPEATS=3 \
 USE_SKIP_CPU=true \
-PYTHON_CMD=.venv/bin/python \
+conda activate thesis_env && \
 bash scripts/run_experiments.sh
 ```
 
@@ -1148,11 +1148,15 @@ Perfiles soportados:
 Ejemplos:
 
 ```bash
-PYTHON_CMD=.venv/bin/python PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
+conda activate thesis_env
+PYTHON_CMD=$(which python) \
+PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
 ```
 
 ```bash
-PYTHON_CMD=.venv/bin/python PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
+conda activate thesis_env
+PYTHON_CMD=$(which python) \
+PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```
 
 Controles relevantes:
@@ -1221,12 +1225,12 @@ Pruebas en `tests/` incluyen:
 Secuencia recomendada de menor a mayor costo:
 
 1. `bash validation/run_unit_tests.sh`
-2. `.venv/bin/python validation/validate_code.py`
-3. `.venv/bin/python validation/validate_zombie_fix.py`
-4. `bash validation/comprehensive_check.sh`
-5. `.venv/bin/python validation/validate_all_models.py --preflight-scope fast`
-6. `.venv/bin/python validation/validate_ilp_pipeline.py --config_dir <config_dir> --model <model>`
-7. `.venv/bin/python validation/run_hybrid_execution.py --config_dir <config_dir> --model <model> --require_datasets`
+2. `python validation/validate_code.py`
+3. `python validation/validate_all_models.py --preflight-scope fast`
+4. `python validation/validate_zombie_fix.py`
+5. `bash validation/comprehensive_check.sh`
+6. `python validation/validate_ilp_pipeline.py --config_dir <config_dir> --model <model>`
+7. `python validation/run_hybrid_execution.py --config_dir <config_dir> --model <model> --require_datasets`
 
 ---
 

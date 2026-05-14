@@ -11,6 +11,7 @@ It explains, with direct code traceability:
 - how profiling data is captured (time, energy, memory, FLOPs, transfer)
 - how model graphs are extracted and persisted
 - how outputs are stored and aggregated
+- how memory semantics are selected at runtime (`memory_model` and `peak_activation_overlap`)
 - how the ILP model is built and solved
 - how multi-hardware data is merged
 - how scripts are executed end-to-end
@@ -52,7 +53,7 @@ The project implements a complete empirical-to-optimization pipeline:
 2. Export metrics and metadata artifacts.
 3. Export a DAG graph and edge transfer costs.
 4. Aggregate repeated runs into robust statistics.
-5. Build and solve a robust ILP partition model (CPU/GPU assignment per layer).
+5. Build and solve a robust ILP partition model (CPU/GPU assignment per layer) with selectable memory semantics via `memory_model` (`nodal_sum` conservative or `peak_approx` with activation overlap controlled by `peak_activation_overlap`).
 6. Run Pareto sweeps under GPU memory budgets.
 7. Generate consolidated plots and LaTeX tables for reporting.
 
@@ -1019,13 +1020,13 @@ Common environment controls:
 Example:
 
 ```bash
+conda activate thesis_env
 MODELS_CSV=simple_mlp,resnet50 \
 BATCH_SIZES_CSV=8,16 \
 PRECISIONS_CSV=fp32 \
 OPTIMIZERS_CSV=SGD,AdamW \
 REPEATS=3 \
 USE_SKIP_CPU=true \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
@@ -1132,11 +1133,15 @@ Supported profiles:
 Examples:
 
 ```bash
-PYTHON_CMD=.venv/bin/python PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
+conda activate thesis_env
+PYTHON_CMD=$(which python) \
+PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
 ```
 
 ```bash
-PYTHON_CMD=.venv/bin/python PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
+conda activate thesis_env
+PYTHON_CMD=$(which python) \
+PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```
 
 Relevant controls:
@@ -1204,13 +1209,16 @@ Tests in `tests/` include:
 
 Recommended sequence from lowest to highest cost:
 
-1. `bash validation/run_unit_tests.sh`
-2. `.venv/bin/python validation/validate_code.py`
-3. `.venv/bin/python validation/validate_zombie_fix.py`
-4. `bash validation/comprehensive_check.sh`
-5. `.venv/bin/python validation/validate_all_models.py --preflight-scope fast`
-6. `.venv/bin/python validation/validate_ilp_pipeline.py --config_dir <config_dir> --model <model>`
-7. `.venv/bin/python validation/run_hybrid_execution.py --config_dir <config_dir> --model <model> --require_datasets`
+```bash
+conda activate thesis_env
+bash validation/run_unit_tests.sh
+python validation/validate_code.py
+python validation/validate_all_models.py --preflight-scope fast
+python validation/validate_zombie_fix.py
+bash validation/comprehensive_check.sh
+python validation/validate_ilp_pipeline.py --config_dir <config_dir> --model <model>
+python validation/run_hybrid_execution.py --config_dir <config_dir> --model <model> --require_datasets
+```
 
 ---
 

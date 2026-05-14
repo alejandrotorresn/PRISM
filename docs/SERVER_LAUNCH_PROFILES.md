@@ -51,10 +51,10 @@ Default output root remains host-scoped under:
 Use this on every server before a real campaign.
 
 ```bash
+conda activate thesis_env
 SMOKE_MODE=true \
 DRY_RUN=true \
 FAIL_FAST=true \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
@@ -70,6 +70,7 @@ Purpose:
 Use this on GPU servers when you want `fp32`, `fp16`, and `bf16` without being blocked by CPU precision limitations.
 
 ```bash
+conda activate thesis_env
 MODELS_CSV=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small,distilgpt2 \
 BATCH_SIZES_CSV=8,16,32,64 \
 PRECISIONS_CSV=fp32,fp16,bf16 \
@@ -81,7 +82,6 @@ REPEATS=3 \
 WARMUP=3 \
 MEASURE=10 \
 FAIL_FAST=false \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
@@ -90,6 +90,7 @@ bash scripts/run_experiments.sh
 Use this on well-instrumented nodes when you want full CPU and GPU profiling with the most portable precision.
 
 ```bash
+conda activate thesis_env
 MODELS_CSV=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small,distilgpt2 \
 BATCH_SIZES_CSV=8,16,32,64 \
 PRECISIONS_CSV=fp32 \
@@ -101,7 +102,6 @@ REPEATS=3 \
 WARMUP=3 \
 MEASURE=10 \
 FAIL_FAST=false \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
@@ -110,6 +110,7 @@ bash scripts/run_experiments.sh
 Use this only on nodes already validated for accelerated BF16 support.
 
 ```bash
+conda activate thesis_env
 MODELS_CSV=simple_mlp,resnet50,vit_b16,bert_base \
 BATCH_SIZES_CSV=8,16,32 \
 PRECISIONS_CSV=fp32,bf16 \
@@ -121,14 +122,14 @@ REPEATS=3 \
 WARMUP=3 \
 MEASURE=10 \
 FAIL_FAST=false \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
 Validate such nodes first with:
 
 ```bash
-.venv/bin/python validation/validate_all_models.py --preflight-scope fast
+conda activate thesis_env
+python validation/validate_all_models.py --preflight-scope fast
 ```
 
 ## Profile 4: Conservative Low-Memory GPU Node
@@ -136,6 +137,7 @@ Validate such nodes first with:
 Use this for older or smaller GPUs where OOM is likely.
 
 ```bash
+conda activate thesis_env
 MODELS_CSV=simple_mlp,resnet50,vit_b16 \
 BATCH_SIZES_CSV=8,16 \
 PRECISIONS_CSV=fp32,fp16 \
@@ -147,7 +149,6 @@ REPEATS=2 \
 WARMUP=2 \
 MEASURE=5 \
 FAIL_FAST=false \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
@@ -156,6 +157,7 @@ bash scripts/run_experiments.sh
 Run this before a full production launch on each server class.
 
 ```bash
+conda activate thesis_env
 MODELS_CSV=simple_mlp \
 BATCH_SIZES_CSV=8 \
 PRECISIONS_CSV=fp32 \
@@ -166,7 +168,6 @@ REPEATS=1 \
 WARMUP=1 \
 MEASURE=1 \
 FAIL_FAST=true \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 

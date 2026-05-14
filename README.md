@@ -110,10 +110,10 @@ python validation/sweep_ilp_pareto.py \
 ### Server preflight before real collection
 
 ```bash
+conda activate thesis_env
 SMOKE_MODE=true \
 DRY_RUN=true \
 FAIL_FAST=true \
-PYTHON_CMD=.venv/bin/python \
 bash scripts/run_experiments.sh
 ```
 
