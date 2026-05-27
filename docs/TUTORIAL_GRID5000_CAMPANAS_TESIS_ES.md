@@ -18,16 +18,16 @@ Scripts principales:
 5. Debe existir el script local `scripts/launch_grid5k.sh` en la maquina desde donde se ejecuta `oarsub`.
 
 ## 3. Politica de semillas implementada
-La logica de [scripts/launch_grid5k.sh](scripts/launch_grid5k.sh) es:
+La interfaz canonica de ejecucion en frontend es por banderas de [scripts/run_thesis.sh](scripts/run_thesis.sh). La logica operacional equivalente en [scripts/launch_grid5k.sh](scripts/launch_grid5k.sh) es:
 
-- Si `CAMPAIGN_PROFILE=doctoral_full`:
-  - ejecuta una corrida por cada valor de `FULL_SEEDS_CSV`
-  - por defecto: `FULL_SEEDS_CSV=42,43,44`
-  - repeticion por semilla controlada por `FULL_REPEATS_PER_SEED` (default 1)
+- Si `--profile doctoral_full`:
+  - ejecuta una corrida por cada valor de `--full-seeds`
+  - por defecto: `42,43,44`
+  - repeticion por semilla controlada por `--full-repeats` (default 1)
 
-- Si `CAMPAIGN_PROFILE` es distinto de doctoral_full (quick_smoke o doctoral_minimal):
-  - ejecuta una sola semilla `SINGLE_SEED` (default 42)
-  - repeticion controlada por `NON_FULL_REPEATS` (default 1)
+- Si `--profile` es distinto de doctoral_full (`quick_smoke` o `doctoral_minimal`):
+  - ejecuta una sola semilla `--single-seed` (default 42)
+  - repeticion controlada por `--non-full-repeats` (default 1)
 
 ## 4. Ejecucion recomendada
 
@@ -58,16 +58,22 @@ oarsub -S "./scripts/run_thesis.sh --profile doctoral_full --full-seeds 42,43,44
 
 Uso: producir datos finales con estimacion de variabilidad y robustez.
 
-## 5. Variables mas importantes
-Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_grid5k.sh](scripts/launch_grid5k.sh):
+## 5. Banderas canonicas (interfaz publica)
+Usar siempre estas banderas en la invocacion OAR:
 
-- `CAMPAIGN_PROFILE`: `quick_smoke` | `doctoral_minimal` | `doctoral_full`
+- `--profile`: `quick_smoke` | `doctoral_minimal` | `doctoral_full`
+- `--single-seed`: semilla unica para quick_smoke/doctoral_minimal
+- `--non-full-repeats`: replicas en quick_smoke/doctoral_minimal
+- `--full-seeds`: lista CSV de semillas para doctoral_full
+- `--full-repeats`: replicas por semilla en doctoral_full
+- `--run-hybrid`: habilita o deshabilita etapa de ejecucion hibrida
+
+Nota de estandarizacion: aunque el pipeline conserva variables de entorno por compatibilidad interna, la interfaz soportada para ejecucion de campanas en Grid5000 es por banderas para evitar ambiguedades de propagacion en OAR.
+
+## 6. Overrides avanzados (solo operacion/integracion)
+Variables de infraestructura de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_grid5k.sh](scripts/launch_grid5k.sh):
+
 - `CONDA_ENV_NAME`: entorno conda a activar (default: `prism_env`)
-- `RUN_HYBRID`: habilita etapa de ejecucion hibrida
-- `FULL_SEEDS_CSV`: lista CSV de semillas para doctoral_full
-- `SINGLE_SEED`: semilla unica para quick_smoke/doctoral_minimal
-- `FULL_REPEATS_PER_SEED`: replicas por semilla en doctoral_full
-- `NON_FULL_REPEATS`: replicas en quick_smoke/doctoral_minimal
 - `PROJECT_ROOT`: ruta del repo en nodo remoto (default `/root/PRISM`)
 - `LOCAL_PROJECT_ROOT`: ruta local del repositorio a sincronizar (default: raiz del repo deducida desde `scripts/run_thesis.sh`)
 - `SYNC_PROJECT_BEFORE_RUN`: sincroniza el arbol del proyecto al nodo remoto antes de ejecutar (default: `true`)
@@ -77,19 +83,19 @@ Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_gr
   - Puede ser ruta absoluta o relativa al repositorio local.
   - Si no existe, `scripts/run_thesis.sh` aborta antes de invocar `kadeploy3`.
 
-## 6. Salidas y trazabilidad
+## 7. Salidas y trazabilidad
 - Logs OAR: `thesis_job.<jobid>.output` y `thesis_job.<jobid>.error`
 - Logs de launcher: carpeta `logs/` del proyecto remoto
 - Resultados: subdirectorios separados por perfil y semilla para evitar sobreescritura
 
-## 7. Diagnostico rapido de fallos
+## 8. Diagnostico rapido de fallos
 1. Si falla kadeploy: revisar validez de `KADEPLOY_FILE` y acceso al sitio/cola.
 2. Si falla conda: verificar que `prism_env` exista en la imagen desplegada.
 3. Si aparecen errores `ModuleNotFoundError: No module named src.data`: verificar que no se haya desactivado `SYNC_PROJECT_BEFORE_RUN` y que `LOCAL_PROJECT_ROOT` apunte al repo correcto.
   - El wrapper ahora valida antes y despues del rsync que exista `src/data/__init__.py`.
 4. Si faltan artefactos: revisar logs en `logs/` y confirmar que no se uso `DRY_RUN=true`.
 
-## 8. Flujo operativo sugerido para campana final
+## 9. Flujo operativo sugerido para campana final
 1. Ejecutar quick_smoke (1 semilla).
 2. Ejecutar doctoral_minimal (1 semilla).
 3. Ejecutar doctoral_full con 3-5 semillas.
