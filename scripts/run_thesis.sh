@@ -19,7 +19,8 @@ LOCAL_LAUNCH_SCRIPT="${LOCAL_LAUNCH_SCRIPT:-scripts/launch_grid5k.sh}"
 LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-scripts}"
 LOCAL_PROJECT_ROOT="${LOCAL_PROJECT_ROOT:-$(pwd)}"
 SYNC_PROJECT_BEFORE_RUN="${SYNC_PROJECT_BEFORE_RUN:-true}"
-SYNC_EXCLUDES="${SYNC_EXCLUDES:-.git,.venv,logs,reports,data,datasets,books,paper_thesis,papers}"
+# IMPORTANT: defaults are anchored to repository root to avoid excluding src/data.
+SYNC_EXCLUDES="${SYNC_EXCLUDES:-/.git,/.venv,/logs,/reports,/data,/datasets,/books,/paper_thesis,/papers}"
 KADEPLOY_FILE="${KADEPLOY_FILE:-rocky9_profiling.yaml}"
 
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
@@ -68,12 +69,22 @@ if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
     ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT'"
 
     # Build rsync exclude args from comma-separated list.
+    # Bare names are anchored to repo root (e.g., data -> /data) to prevent
+    # accidental exclusions like src/data.
     IFS=',' read -r -a _sync_ex_items <<< "$SYNC_EXCLUDES"
     _rsync_excludes=()
     for _item in "${_sync_ex_items[@]}"; do
         _item="$(echo "$_item" | xargs)"
         [ -n "$_item" ] || continue
-        _rsync_excludes+=("--exclude=$_item")
+        case "$_item" in
+            /*|*"*"*|*"?"*)
+                _pattern="$_item"
+                ;;
+            *)
+                _pattern="/$_item"
+                ;;
+        esac
+        _rsync_excludes+=("--exclude=$_pattern")
     done
 
     rsync -az --delete "${_rsync_excludes[@]}" \

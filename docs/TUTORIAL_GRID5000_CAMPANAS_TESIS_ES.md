@@ -80,7 +80,8 @@ Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_gr
 - `PROJECT_ROOT`: ruta del repo en nodo remoto (default `/root/PRISM`)
 - `LOCAL_PROJECT_ROOT`: ruta local del repositorio a sincronizar (default: directorio actual)
 - `SYNC_PROJECT_BEFORE_RUN`: sincroniza el arbol del proyecto al nodo remoto antes de ejecutar (default: `true`)
-- `SYNC_EXCLUDES`: lista CSV de rutas excluidas durante rsync (default: `.git,.venv,logs,reports,data,datasets,books,paper_thesis,papers`)
+- `SYNC_EXCLUDES`: lista CSV de rutas excluidas durante rsync (default: `/.git,/.venv,/logs,/reports,/data,/datasets,/books,/paper_thesis,/papers`)
+  - Nota: usar rutas ancladas (con `/` al inicio) evita excluir por error `src/data`.
 - `KADEPLOY_FILE`: manifest de despliegue kadeploy
 
 ## 6. Salidas y trazabilidad
