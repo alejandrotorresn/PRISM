@@ -22,6 +22,13 @@ echo "Using Python: ${PYTHON_BIN}"
 echo ""
 
 cd "${ROOT_DIR}"
+
+# Ensure both import styles are resolvable in heterogeneous environments:
+# - src.* imports require project root on PYTHONPATH
+# - legacy data.* / models.* imports require src/ on PYTHONPATH
+export PYTHONPATH="${ROOT_DIR}:${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+echo "Using PYTHONPATH: ${PYTHONPATH}"
+
 "${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1 || {
   echo "ERROR: torch is not available in ${PRISM_ENV_NAME}."
   echo "Install dependencies in ${PRISM_ENV_NAME} before running tests."
