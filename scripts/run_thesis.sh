@@ -13,11 +13,13 @@ set -Eeuo pipefail
 #OAR -O thesis_job.%jobid%.output
 #OAR -E thesis_job.%jobid%.error
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 PROJECT_ROOT="${PROJECT_ROOT:-/root/PRISM}"
 REMOTE_LAUNCH_SCRIPT="${REMOTE_LAUNCH_SCRIPT:-$PROJECT_ROOT/scripts/launch_grid5k.sh}"
 LOCAL_LAUNCH_SCRIPT="${LOCAL_LAUNCH_SCRIPT:-scripts/launch_grid5k.sh}"
 LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-scripts}"
-LOCAL_PROJECT_ROOT="${LOCAL_PROJECT_ROOT:-$(pwd)}"
+LOCAL_PROJECT_ROOT="${LOCAL_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 SYNC_PROJECT_BEFORE_RUN="${SYNC_PROJECT_BEFORE_RUN:-true}"
 # IMPORTANT: defaults are anchored to repository root to avoid excluding src/data.
 SYNC_EXCLUDES="${SYNC_EXCLUDES:-/.git,/.venv,/logs,/reports,/data,/datasets,/books,/paper_thesis,/papers}"
@@ -66,6 +68,13 @@ kadeploy3 -f "$OAR_FILE_NODES" -a "$KADEPLOY_FILE" -k
 
 if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
     log_msg "Synchronizing project sources to remote node..."
+    if [ ! -f "$LOCAL_PROJECT_ROOT/src/data/__init__.py" ]; then
+        log_msg "ERROR: Local project root seems incorrect: $LOCAL_PROJECT_ROOT"
+        log_msg "ERROR: Missing required file: $LOCAL_PROJECT_ROOT/src/data/__init__.py"
+        log_msg "Hint: set LOCAL_PROJECT_ROOT to the repository root before oarsub."
+        exit 1
+    fi
+
     ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT'"
 
     # Build rsync exclude args from comma-separated list.
@@ -89,6 +98,12 @@ if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
 
     rsync -az --delete "${_rsync_excludes[@]}" \
         "$LOCAL_PROJECT_ROOT/" "root@$TARGET_NODE:$PROJECT_ROOT/"
+
+    if ! ssh "root@$TARGET_NODE" "test -f '$PROJECT_ROOT/src/data/__init__.py'"; then
+        log_msg "ERROR: Remote sync incomplete: missing $PROJECT_ROOT/src/data/__init__.py"
+        log_msg "ERROR: Aborting before campaign launch to avoid import failures."
+        exit 1
+    fi
 fi
 
 log_msg "Copying campaign scripts to deployed node..."
