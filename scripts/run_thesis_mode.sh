@@ -161,6 +161,105 @@ is_true() {
   [ "$1" = true ]
 }
 
+normalize_output_dir_for_host_sh() {
+  local output_dir="$1"
+  local host_name="$2"
+
+  if [ -z "$output_dir" ]; then
+    printf '%s' "$output_dir"
+    return
+  fi
+
+  local normalized="${output_dir//\\//}"
+  local leading_slash=""
+  if [[ "$normalized" == /* ]]; then
+    leading_slash="/"
+  fi
+
+  local IFS='/'
+  local raw_parts=()
+  local parts=()
+  read -r -a raw_parts <<< "$normalized"
+
+  local p
+  for p in "${raw_parts[@]}"; do
+    if [ -n "$p" ]; then
+      parts+=("$p")
+    fi
+  done
+
+  if [ ${#parts[@]} -eq 0 ]; then
+    printf '%s' "$output_dir"
+    return
+  fi
+
+  local data_idx=-1
+  local i
+  for i in "${!parts[@]}"; do
+    if [ "${parts[$i]}" = "data" ]; then
+      data_idx=$i
+      break
+    fi
+  done
+
+  if [ "$data_idx" -lt 0 ]; then
+    printf '%s' "$output_dir"
+    return
+  fi
+
+  if [ $((data_idx + 1)) -lt ${#parts[@]} ] && [ "${parts[$((data_idx + 1))]}" = "$host_name" ]; then
+    printf '%s' "$output_dir"
+    return
+  fi
+
+  local before=()
+  local after=()
+  if [ "$data_idx" -gt 0 ]; then
+    before=("${parts[@]:0:$data_idx}")
+  fi
+  if [ $((data_idx + 1)) -lt ${#parts[@]} ]; then
+    after=("${parts[@]:$((data_idx + 1))}")
+  fi
+
+  local rebuilt=()
+  rebuilt+=("${before[@]}")
+  rebuilt+=("data" "$host_name")
+  rebuilt+=("${after[@]}")
+
+  local joined=""
+  for p in "${rebuilt[@]}"; do
+    if [ -z "$joined" ]; then
+      joined="$p"
+    else
+      joined="$joined/$p"
+    fi
+  done
+
+  printf '%s%s' "$leading_slash" "$joined"
+}
+
+discover_config_dirs() {
+  local base_dir="$1"
+  local host_name="$2"
+  local normalized_dir
+  normalized_dir="$(normalize_output_dir_for_host_sh "$base_dir" "$host_name")"
+
+  mapfile -t CONFIG_DIRS < <(
+    {
+      [ -d "$base_dir" ] && find "$base_dir" -type d -name 'batch_*'
+      if [ "$normalized_dir" != "$base_dir" ] && [ -d "$normalized_dir" ]; then
+        find "$normalized_dir" -type d -name 'batch_*'
+      fi
+    } | sort -u
+  )
+
+  if [ ${#CONFIG_DIRS[@]} -gt 0 ]; then
+    local unique_roots
+    unique_roots="$(printf '%s\n' "${CONFIG_DIRS[@]}" | sed -E 's|(.*?/batch_[^/]+).*|\1|' | sort -u | head -n 3 | paste -sd ', ' -)"
+    log_msg "Discovered ${#CONFIG_DIRS[@]} config dirs (sample roots: ${unique_roots})"
+  fi
+}
+
 section "THESIS MODE - PREFLIGHT"
 log_msg "PROFILE=$PROFILE"
 log_msg "PYTHON_CMD=$PYTHON_CMD"
@@ -217,7 +316,7 @@ if is_true "$RUN_ILP"; then
     log_msg "DRY_RUN=true -> skipping ILP and Pareto execution (no real artifacts expected)"
   else
 
-    mapfile -t CONFIG_DIRS < <(find "$BASE_OUTPUT_DIR" -type d -name 'batch_*' | sort)
+    discover_config_dirs "$BASE_OUTPUT_DIR" "$HOST_TAG"
 
     if [ ${#CONFIG_DIRS[@]} -eq 0 ]; then
       log_msg "ERROR: No configuration directories found under $BASE_OUTPUT_DIR"
@@ -282,7 +381,7 @@ if is_true "$RUN_HYBRID"; then
     log_msg "DRY_RUN=true -> skipping hybrid runtime execution"
     log_msg "Hybrid runtime stage finished"
   else
-  mapfile -t CONFIG_DIRS < <(find "$BASE_OUTPUT_DIR" -type d -name 'batch_*' | sort)
+  discover_config_dirs "$BASE_OUTPUT_DIR" "$HOST_TAG"
 
   for cfg in "${CONFIG_DIRS[@]}"; do
     model="$(basename "$(dirname "$(dirname "$(dirname "$cfg")")")")"
