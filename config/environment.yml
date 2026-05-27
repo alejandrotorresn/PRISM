@@ -11,21 +11,23 @@ dependencies:
   - pandas>=2.0
   - psutil>=5.9
   # Core DL stack (GPU build by default). For CPU-only, see notes below.
-  - pytorch::pytorch>=2.1
-  - pytorch::torchvision>=0.16
+  - pytorch::pytorch>=2.5,<2.6
+  - pytorch::torchvision>=0.20,<0.21
   - pytorch-cuda=12.1  # Remove this line and add 'cpuonly' (from pytorch channel) for CPU-only nodes
   # GPU telemetry
   - nvidia-ml-py>=12.535  # module import remains `pynvml`
   # NLP models
-  - transformers>=4.40
+  - transformers>=4.40,<4.50
   # Optional helpers (safe to keep; can help with HF model loading)
-  - huggingface_hub>=0.20
+  - huggingface_hub>=0.20,<0.28
   - safetensors>=0.4
   
   # ILP solver (CBC backend embedded in PuLP)
   - pulp>=2.7
   # Plotting / report generation
   - matplotlib>=3.7
+  # Test runner
+  - pytest>=8.0
   - pip:
       # CPU energy (RAPL). Requires read access to /sys/class/powercap/intel-rapl/* on Linux
       - pyRAPL>=0.2.3
