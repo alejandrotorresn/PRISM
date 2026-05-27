@@ -20,7 +20,15 @@ set -euo pipefail
 # Activate Conda Environment
 if [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
     source ~/anaconda3/etc/profile.d/conda.sh
+    _had_nounset=0
+    if [[ "$-" == *u* ]]; then
+        _had_nounset=1
+        set +u
+    fi
     conda activate prism_env 2>/dev/null || true
+    if [ "$_had_nounset" -eq 1 ]; then
+        set -u
+    fi
 fi
 
 source "$(dirname "$0")/sanitize_cuda_env.sh"

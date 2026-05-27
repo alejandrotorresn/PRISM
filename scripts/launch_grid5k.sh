@@ -63,7 +63,19 @@ activate_conda_env() {
         exit 1
     fi
 
+    # Some conda activate scripts (e.g., MKL hooks) are not nounset-safe.
+    # Temporarily relax nounset only for activation.
+    local _had_nounset=0
+    if [[ "$-" == *u* ]]; then
+        _had_nounset=1
+        set +u
+    fi
+
     conda activate "$CONDA_ENV_NAME"
+
+    if [ "$_had_nounset" -eq 1 ]; then
+        set -u
+    fi
     log_msg "Conda environment activated: $CONDA_ENV_NAME"
 }
 
