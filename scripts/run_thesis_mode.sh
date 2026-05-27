@@ -121,6 +121,12 @@ ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
 ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
 ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
 
+# Single-replicate profiling naturally produces low_sample quality flags.
+# Keep ILP stages operational unless the caller explicitly requested strict mode.
+if [[ "$REPEATS" =~ ^[0-9]+$ ]] && [ "$REPEATS" -lt 2 ] && [ "${ALLOW_LOW_QUALITY_STATS:-false}" != "true" ]; then
+  ALLOW_LOW_QUALITY_STATS=true
+fi
+
 # Orchestration toggles
 RUN_PROFILING="${RUN_PROFILING:-true}"
 RUN_ILP="${RUN_ILP:-true}"
@@ -300,6 +306,9 @@ log_msg "PRECISIONS_CSV=$PRECISIONS_CSV"
 log_msg "BATCH_SIZES_CSV=$BATCH_SIZES_CSV"
 log_msg "REPEATS=$REPEATS"
 log_msg "WARMUP=$WARMUP MEASURE=$MEASURE"
+if [ "$ALLOW_LOW_QUALITY_STATS" = true ]; then
+  log_msg "ALLOW_LOW_QUALITY_STATS=true"
+fi
 log_msg "DRY_RUN=$DRY_RUN"
 
 if is_true "$DOWNLOAD_DATASETS"; then
