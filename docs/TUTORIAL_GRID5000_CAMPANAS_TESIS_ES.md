@@ -83,6 +83,8 @@ Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_gr
 - `SYNC_EXCLUDES`: lista CSV de rutas excluidas durante rsync (default: `/.git,/.venv,/logs,/reports,/data,/datasets,/books,/paper_thesis,/papers`)
   - Nota: usar rutas ancladas (con `/` al inicio) evita excluir por error `src/data`.
 - `KADEPLOY_FILE`: manifest de despliegue kadeploy
+  - Puede ser ruta absoluta o relativa al repositorio local.
+  - Si no existe, `scripts/run_thesis.sh` aborta antes de invocar `kadeploy3`.
 
 ## 6. Salidas y trazabilidad
 - Logs OAR: `thesis_job.<jobid>.output` y `thesis_job.<jobid>.error`

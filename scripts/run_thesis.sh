@@ -4,26 +4,27 @@ set -Eeuo pipefail
 # OAR submission wrapper for Grid5000 final thesis campaigns.
 # Submit with: oarsub -S ./scripts/run_thesis.sh
 
-#OAR -n Thesis_Profiling
+#OAR -n PRISM_profiling
 #OAR -q abaca
-#OAR -q besteffort
-#OAR -p esterel35
+#OAR -p musa
 #OAR -t deploy
 #OAR -l nodes=1,walltime=96:00:00
-#OAR -O thesis_job.%jobid%.output
-#OAR -E thesis_job.%jobid%.error
+#OAR -O prism_job.%jobid%.output
+#OAR -E prism_job.%jobid%.error
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROJECT_ROOT="${PROJECT_ROOT:-/root/PRISM}"
 REMOTE_LAUNCH_SCRIPT="${REMOTE_LAUNCH_SCRIPT:-$PROJECT_ROOT/scripts/launch_grid5k.sh}"
-LOCAL_LAUNCH_SCRIPT="${LOCAL_LAUNCH_SCRIPT:-scripts/launch_grid5k.sh}"
-LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-scripts}"
 LOCAL_PROJECT_ROOT="${LOCAL_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+LOCAL_LAUNCH_SCRIPT="${LOCAL_LAUNCH_SCRIPT:-$LOCAL_PROJECT_ROOT/scripts/launch_grid5k.sh}"
+LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-$LOCAL_PROJECT_ROOT/scripts}"
 SYNC_PROJECT_BEFORE_RUN="${SYNC_PROJECT_BEFORE_RUN:-true}"
 # IMPORTANT: defaults are anchored to repository root to avoid excluding src/data.
 SYNC_EXCLUDES="${SYNC_EXCLUDES:-/.git,/.venv,/logs,/reports,/data,/datasets,/books,/paper_thesis,/papers}"
 KADEPLOY_FILE="${KADEPLOY_FILE:-rocky9_profiling.yaml}"
+KADEPLOY_HOME="${KADEPLOY_HOME:-/home/ltorresnino}"
 
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
@@ -45,6 +46,48 @@ on_error() {
 
 trap on_error ERR
 
+resolve_local_path() {
+    local candidate="$1"
+    if [ -z "$candidate" ]; then
+        return 1
+    fi
+    if [ -f "$candidate" ]; then
+        printf '%s' "$candidate"
+        return 0
+    fi
+    if [ -f "$LOCAL_PROJECT_ROOT/$candidate" ]; then
+        printf '%s' "$LOCAL_PROJECT_ROOT/$candidate"
+        return 0
+    fi
+    if [ -f "$SCRIPT_DIR/$candidate" ]; then
+        printf '%s' "$SCRIPT_DIR/$candidate"
+        return 0
+    fi
+    return 1
+}
+
+resolve_kadeploy_path() {
+    local candidate="$1"
+    if [ -z "$candidate" ]; then
+        return 1
+    fi
+
+    # If absolute path is provided, use it as-is.
+    if [[ "$candidate" = /* ]]; then
+        [ -f "$candidate" ] || return 1
+        printf '%s' "$candidate"
+        return 0
+    fi
+
+    # Relative KADEPLOY paths are always resolved from KADEPLOY_HOME.
+    if [ -f "$KADEPLOY_HOME/$candidate" ]; then
+        printf '%s' "$KADEPLOY_HOME/$candidate"
+        return 0
+    fi
+
+    return 1
+}
+
 if [ -z "${OAR_JOB_ID:-}" ]; then
     log_msg "WARNING: OAR_JOB_ID is empty. This script should be launched by oarsub."
 fi
@@ -60,11 +103,29 @@ if [ -z "$TARGET_NODE" ]; then
     exit 1
 fi
 
+if [ ! -f "$LOCAL_PROJECT_ROOT/src/data/__init__.py" ]; then
+    log_msg "ERROR: LOCAL_PROJECT_ROOT does not look like PRISM root: $LOCAL_PROJECT_ROOT"
+    log_msg "ERROR: Missing file: $LOCAL_PROJECT_ROOT/src/data/__init__.py"
+    exit 1
+fi
+
+if ! RESOLVED_KADEPLOY_FILE="$(resolve_kadeploy_path "$KADEPLOY_FILE")"; then
+    log_msg "ERROR: KADEPLOY file not found: $KADEPLOY_FILE"
+    log_msg "Hint: KADEPLOY files are resolved from KADEPLOY_HOME=$KADEPLOY_HOME"
+    log_msg "Example: KADEPLOY_FILE=PRISM/rocky9_profiling.yaml"
+    exit 1
+fi
+
+if ! RESOLVED_LOCAL_LAUNCH_SCRIPT="$(resolve_local_path "$LOCAL_LAUNCH_SCRIPT")"; then
+    log_msg "ERROR: launch script not found: $LOCAL_LAUNCH_SCRIPT"
+    exit 1
+fi
+
 log_msg "Starting job ${OAR_JOB_ID:-unknown} on node: $TARGET_NODE"
-log_msg "Deploying image with kadeploy3: $KADEPLOY_FILE"
+log_msg "Deploying image with kadeploy3: $RESOLVED_KADEPLOY_FILE"
 
 # Deploy image on the reserved nodes and copy SSH key for root access.
-kadeploy3 -f "$OAR_FILE_NODES" -a "$KADEPLOY_FILE" -k
+kadeploy3 -f "$OAR_FILE_NODES" -a "$RESOLVED_KADEPLOY_FILE" -k
 
 if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
     log_msg "Synchronizing project sources to remote node..."
@@ -109,7 +170,7 @@ fi
 log_msg "Copying campaign scripts to deployed node..."
 ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT/scripts'"
 
-scp "$LOCAL_LAUNCH_SCRIPT" "root@$TARGET_NODE:$REMOTE_LAUNCH_SCRIPT"
+scp "$RESOLVED_LOCAL_LAUNCH_SCRIPT" "root@$TARGET_NODE:$REMOTE_LAUNCH_SCRIPT"
 
 for dep in run_thesis_mode.sh run_experiments.sh run_ilp_partition.sh run_ilp_pareto_sweep.sh sanitize_cuda_env.sh; do
     if [ -f "$LOCAL_SCRIPTS_DIR/$dep" ]; then
