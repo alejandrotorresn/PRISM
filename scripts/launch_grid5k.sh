@@ -89,7 +89,21 @@ prepare_storage() {
                 ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
             fi
         elif [ -e "$DATA_LINK" ]; then
-            log_msg "WARNING: $DATA_LINK exists and is not a symlink. Keeping it as-is."
+            if [ -d "$DATA_LINK" ]; then
+                local first_entry
+                first_entry="$(find "$DATA_LINK" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
+                if [ -n "$first_entry" ]; then
+                    log_msg "Migrating existing data directory into home-backed storage: $DATA_LINK -> $DATA_MOUNT_SRC"
+                    mkdir -p "$DATA_MOUNT_SRC"
+                    cp -a "$DATA_LINK"/. "$DATA_MOUNT_SRC"/
+                else
+                    log_msg "Replacing empty data directory with symlink: $DATA_LINK -> $DATA_MOUNT_SRC"
+                fi
+                rm -rf "$DATA_LINK"
+                ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
+            else
+                log_msg "WARNING: $DATA_LINK exists and is not a directory/symlink. Keeping it as-is."
+            fi
         else
             ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
         fi
