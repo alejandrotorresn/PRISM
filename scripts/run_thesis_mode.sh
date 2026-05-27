@@ -155,6 +155,33 @@ LOG_FILE="${LOG_DIR}/thesis_mode_$(date +%Y%m%d_%H%M%S).txt"
 
 mkdir -p "$BASE_OUTPUT_DIR" "$REPORTS_DIR" "$LATEX_DIR" "$LOG_DIR"
 
+cat > "$BASE_OUTPUT_DIR/README_RUN_CONTENTS.txt" <<EOF
+PRISM thesis-mode run artifacts
+
+Host tag: $HOST_TAG
+Profile: $PROFILE
+Seed base: $SEED_BASE
+Repeats: $REPEATS
+
+Expected subtree per configuration:
+  <model>/<optimizer>/<precision>/batch_<N>/
+
+Inside each batch_<N> directory, the pipeline may generate:
+  - run_*/<model>_metrics.csv
+  - run_*/<model>_meta.json
+  - run_*/<model>_graph_edges.csv
+  - run_*/<model>_transfer_edges.csv
+  - <model>_metrics_stats.csv
+  - <model>_pareto_sweep.csv
+  - <model>_pareto_summary.json
+  - ilp_solution*/
+
+Companion outputs for this run are stored in:
+  Reports: $REPORTS_DIR
+  LaTeX:   $LATEX_DIR
+  Log:     $LOG_FILE
+EOF
+
 log_msg() {
   local msg="$1"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$LOG_FILE"

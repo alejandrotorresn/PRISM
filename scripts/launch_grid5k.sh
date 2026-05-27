@@ -172,12 +172,17 @@ run_campaign() {
     local host_tag
     local base_output_root
     local reports_root
+    local run_namespace
     local repeats_for_run
     local seed
 
     host_tag="${HOST_TAG:-$(hostname)}"
-    base_output_root="${BASE_OUTPUT_DIR:-$DATA_LINK/raw}"
-    reports_root="${REPORTS_DIR:-$PROJECT_ROOT/reports/ilp_results/grid5k_${HOSTNAME}_thesis_mode}"
+    run_namespace="${RUN_NAMESPACE:-job_${OAR_JOB_ID:-adhoc}_$(date +%Y%m%d_%H%M%S)}"
+    base_output_root="${BASE_OUTPUT_DIR:-$DATA_LINK/$host_tag/thesis_runs/$run_namespace}"
+    reports_root="${REPORTS_DIR:-$PROJECT_ROOT/reports/ilp_results/grid5k_${host_tag}_thesis_mode}"
+
+    log_msg "Run namespace: $run_namespace"
+    log_msg "Base output root: $base_output_root"
 
     run_single_seed() {
         local campaign_seed="$1"

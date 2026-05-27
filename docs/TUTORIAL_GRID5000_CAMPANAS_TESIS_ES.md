@@ -86,7 +86,11 @@ Variables de infraestructura de [scripts/run_thesis.sh](scripts/run_thesis.sh) y
 ## 7. Salidas y trazabilidad
 - Logs OAR: `thesis_job.<jobid>.output` y `thesis_job.<jobid>.error`
 - Logs de launcher: carpeta `logs/` del proyecto remoto
-- Resultados: subdirectorios separados por perfil y semilla para evitar sobreescritura
+- Resultados de datos (storage compartido) bajo ruta explicita por host y ejecucion:
+  - `/root/PRISM/data/<host_tag>/thesis_runs/job_<oar_job_id>_<timestamp>/<profile>/seed_<N>/`
+- En cada `seed_<N>` se genera `README_RUN_CONTENTS.txt` con el inventario de artefactos esperados y rutas de reportes.
+- Reportes consolidados:
+  - `/root/PRISM/reports/ilp_results/grid5k_<host_tag>_thesis_mode/<profile>/seed_<N>/`
 
 ## 8. Diagnostico rapido de fallos
 1. Si falla kadeploy: revisar validez de `KADEPLOY_FILE` y acceso al sitio/cola.
