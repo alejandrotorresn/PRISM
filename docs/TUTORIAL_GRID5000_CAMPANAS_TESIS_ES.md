@@ -35,10 +35,7 @@ La logica de [scripts/launch_grid5k.sh](scripts/launch_grid5k.sh) es:
 Comando:
 
 ```bash
-CAMPAIGN_PROFILE=quick_smoke \
-SINGLE_SEED=42 \
-NON_FULL_REPEATS=1 \
-oarsub -S ./scripts/run_thesis.sh
+oarsub -S "./scripts/run_thesis.sh --profile quick_smoke --single-seed 42 --non-full-repeats 1"
 ```
 
 Uso: validar que despliegue, entorno, rutas, permisos, logs y artefactos funcionan.
@@ -47,10 +44,7 @@ Uso: validar que despliegue, entorno, rutas, permisos, logs y artefactos funcion
 Comando:
 
 ```bash
-CAMPAIGN_PROFILE=doctoral_minimal \
-SINGLE_SEED=42 \
-NON_FULL_REPEATS=1 \
-oarsub -S ./scripts/run_thesis.sh
+oarsub -S "./scripts/run_thesis.sh --profile doctoral_minimal --single-seed 42 --non-full-repeats 1"
 ```
 
 Uso: validar pipeline completo en escala intermedia antes de produccion final.
@@ -59,10 +53,7 @@ Uso: validar pipeline completo en escala intermedia antes de produccion final.
 Comando:
 
 ```bash
-CAMPAIGN_PROFILE=doctoral_full \
-FULL_SEEDS_CSV=42,43,44,45,46 \
-FULL_REPEATS_PER_SEED=1 \
-oarsub -S ./scripts/run_thesis.sh
+oarsub -S "./scripts/run_thesis.sh --profile doctoral_full --full-seeds 42,43,44,45,46 --full-repeats 1"
 ```
 
 Uso: producir datos finales con estimacion de variabilidad y robustez.

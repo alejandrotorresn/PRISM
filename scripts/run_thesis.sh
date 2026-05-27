@@ -33,6 +33,58 @@ FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-1}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --profile)
+                CAMPAIGN_PROFILE="$2"
+                shift 2
+                ;;
+            --single-seed)
+                SINGLE_SEED="$2"
+                shift 2
+                ;;
+            --non-full-repeats)
+                NON_FULL_REPEATS="$2"
+                shift 2
+                ;;
+            --full-seeds)
+                FULL_SEEDS_CSV="$2"
+                shift 2
+                ;;
+            --full-repeats)
+                FULL_REPEATS_PER_SEED="$2"
+                shift 2
+                ;;
+            --run-hybrid)
+                RUN_HYBRID="$2"
+                shift 2
+                ;;
+            --help|-h)
+                cat <<'EOF'
+Usage: run_thesis.sh [options]
+
+Options:
+  --profile <quick_smoke|doctoral_minimal|doctoral_full>
+  --single-seed <int>
+  --non-full-repeats <int>
+  --full-seeds <csv>
+  --full-repeats <int>
+  --run-hybrid <true|false>
+
+Example:
+  oarsub -S "./scripts/run_thesis.sh --profile quick_smoke --single-seed 42 --non-full-repeats 1"
+EOF
+                exit 0
+                ;;
+            *)
+                log_msg "ERROR: Unknown argument: $1"
+                exit 2
+                ;;
+        esac
+    done
+}
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-8}"
 SSH_MAX_ATTEMPTS="${SSH_MAX_ATTEMPTS:-40}"
 SSH_RETRY_SECONDS="${SSH_RETRY_SECONDS:-5}"
@@ -49,6 +101,8 @@ on_error() {
 }
 
 trap on_error ERR
+
+parse_args "$@"
 
 resolve_local_path() {
     local candidate="$1"
@@ -181,6 +235,8 @@ if ! RESOLVED_LOCAL_LAUNCH_SCRIPT="$(resolve_local_path "$LOCAL_LAUNCH_SCRIPT")"
 fi
 
 log_msg "Starting job ${OAR_JOB_ID:-unknown} on node: $TARGET_NODE"
+log_msg "Requested profile: $CAMPAIGN_PROFILE"
+log_msg "Seeds config: SINGLE_SEED=$SINGLE_SEED FULL_SEEDS_CSV=$FULL_SEEDS_CSV"
 log_msg "Deploying image with kadeploy3: $RESOLVED_KADEPLOY_FILE"
 
 # Deploy image on the reserved nodes and copy SSH key for root access.
