@@ -80,6 +80,10 @@ activate_conda_env() {
 }
 
 prepare_storage() {
+    if [ ! -d "$DATA_MOUNT_SRC" ]; then
+        mkdir -p "$DATA_MOUNT_SRC" 2>/dev/null || true
+    fi
+
     if [ -d "$DATA_MOUNT_SRC" ]; then
         if [ -L "$DATA_LINK" ]; then
             local current_target

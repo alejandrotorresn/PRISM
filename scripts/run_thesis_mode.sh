@@ -74,7 +74,11 @@ case "$PROFILE" in
     : "${MEASURE:=1}"
     : "${GPU_BUDGETS_MB:=200,400}"
     : "${RUN_HYBRID:=false}"
+    : "${STRICT_GRAPH_MAPPING:=false}"
+    : "${STRICT_TRANSFER_MAPPING:=false}"
     : "${ALLOW_LOW_QUALITY_STATS:=true}"
+    : "${ALLOW_TRANSFER_CALIBRATION_FALLBACK:=true}"
+    : "${ALLOW_FALLBACK_GRAPH_TRACE:=true}"
     ;;
   custom)
     ;;
