@@ -18,9 +18,9 @@ Desktop.ini
 # Notebook checkpoints
 .ipynb_checkpoints/
 
-# Data (Avoid uploading large datasets)
-data/
-datasets/
+# Data (avoid uploading large runtime datasets from repository root)
+/data/
+/datasets/
 *.csv
 *.pth
 *.pt
