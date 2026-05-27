@@ -17,6 +17,9 @@ PROJECT_ROOT="${PROJECT_ROOT:-/root/PRISM}"
 REMOTE_LAUNCH_SCRIPT="${REMOTE_LAUNCH_SCRIPT:-$PROJECT_ROOT/scripts/launch_grid5k.sh}"
 LOCAL_LAUNCH_SCRIPT="${LOCAL_LAUNCH_SCRIPT:-scripts/launch_grid5k.sh}"
 LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-scripts}"
+LOCAL_PROJECT_ROOT="${LOCAL_PROJECT_ROOT:-$(pwd)}"
+SYNC_PROJECT_BEFORE_RUN="${SYNC_PROJECT_BEFORE_RUN:-true}"
+SYNC_EXCLUDES="${SYNC_EXCLUDES:-.git,.venv,logs,reports,data,datasets,books,paper_thesis,papers}"
 KADEPLOY_FILE="${KADEPLOY_FILE:-rocky9_profiling.yaml}"
 
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
@@ -59,6 +62,23 @@ log_msg "Deploying image with kadeploy3: $KADEPLOY_FILE"
 
 # Deploy image on the reserved nodes and copy SSH key for root access.
 kadeploy3 -f "$OAR_FILE_NODES" -a "$KADEPLOY_FILE" -k
+
+if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
+    log_msg "Synchronizing project sources to remote node..."
+    ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT'"
+
+    # Build rsync exclude args from comma-separated list.
+    IFS=',' read -r -a _sync_ex_items <<< "$SYNC_EXCLUDES"
+    _rsync_excludes=()
+    for _item in "${_sync_ex_items[@]}"; do
+        _item="$(echo "$_item" | xargs)"
+        [ -n "$_item" ] || continue
+        _rsync_excludes+=("--exclude=$_item")
+    done
+
+    rsync -az --delete "${_rsync_excludes[@]}" \
+        "$LOCAL_PROJECT_ROOT/" "root@$TARGET_NODE:$PROJECT_ROOT/"
+fi
 
 log_msg "Copying campaign scripts to deployed node..."
 ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT/scripts'"
