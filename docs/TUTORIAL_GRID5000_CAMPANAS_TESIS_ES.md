@@ -13,7 +13,7 @@ Scripts principales:
 ## 2. Requisitos previos
 1. Debe existir una reserva OAR valida y acceso al cluster objetivo.
 2. Debe estar disponible el archivo de despliegue Kadeploy (por defecto `rocky9_profiling.yaml`).
-3. El repositorio debe existir en el nodo desplegado en `/root/Final-Thesis-Code`.
+3. El repositorio debe existir en el nodo desplegado en `/root/PRISM`.
 4. El entorno conda `thesis_env` debe existir en la imagen desplegada.
 5. Debe existir el script local `scripts/launch_grid5k.sh` en la maquina desde donde se ejecuta `oarsub`.
 
@@ -77,7 +77,7 @@ Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_gr
 - `SINGLE_SEED`: semilla unica para quick_smoke/doctoral_minimal
 - `FULL_REPEATS_PER_SEED`: replicas por semilla en doctoral_full
 - `NON_FULL_REPEATS`: replicas en quick_smoke/doctoral_minimal
-- `PROJECT_ROOT`: ruta del repo en nodo remoto (default `/root/Final-Thesis-Code`)
+- `PROJECT_ROOT`: ruta del repo en nodo remoto (default `/root/PRISM`)
 - `KADEPLOY_FILE`: manifest de despliegue kadeploy
 
 ## 6. Salidas y trazabilidad

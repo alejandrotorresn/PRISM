@@ -13,7 +13,7 @@ set -Eeuo pipefail
 #OAR -O thesis_job.%jobid%.output
 #OAR -E thesis_job.%jobid%.error
 
-PROJECT_ROOT="${PROJECT_ROOT:-/root/Final-Thesis-Code}"
+PROJECT_ROOT="${PROJECT_ROOT:-/root/PRISM}"
 REMOTE_LAUNCH_SCRIPT="${REMOTE_LAUNCH_SCRIPT:-$PROJECT_ROOT/scripts/launch_grid5k.sh}"
 LOCAL_LAUNCH_SCRIPT="${LOCAL_LAUNCH_SCRIPT:-scripts/launch_grid5k.sh}"
 LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-scripts}"
