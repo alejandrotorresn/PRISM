@@ -33,6 +33,10 @@ FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-1}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-8}"
+SSH_MAX_ATTEMPTS="${SSH_MAX_ATTEMPTS:-40}"
+SSH_RETRY_SECONDS="${SSH_RETRY_SECONDS:-5}"
+SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout="$SSH_CONNECT_TIMEOUT")
 
 log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -88,6 +92,61 @@ resolve_kadeploy_path() {
     return 1
 }
 
+wait_for_ssh_ready() {
+    local attempt=1
+    while [ "$attempt" -le "$SSH_MAX_ATTEMPTS" ]; do
+        if ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "true" >/dev/null 2>&1; then
+            log_msg "Remote node is reachable via SSH."
+            return 0
+        fi
+        if [ $((attempt % 5)) -eq 0 ]; then
+            log_msg "Waiting for node SSH readiness (attempt $attempt/$SSH_MAX_ATTEMPTS)..."
+        fi
+        sleep "$SSH_RETRY_SECONDS"
+        attempt=$((attempt + 1))
+    done
+
+    log_msg "ERROR: Node did not become SSH-ready in time after deployment."
+    return 1
+}
+
+sync_project_to_remote() {
+    local _item
+    local _pattern
+
+    ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT'"
+
+    # Build exclude patterns from comma-separated list.
+    IFS=',' read -r -a _sync_ex_items <<< "$SYNC_EXCLUDES"
+    _rsync_excludes=()
+    _tar_excludes=()
+    for _item in "${_sync_ex_items[@]}"; do
+        _item="$(echo "$_item" | xargs)"
+        [ -n "$_item" ] || continue
+        case "$_item" in
+            /*|*"*"*|*"?"*)
+                _pattern="$_item"
+                ;;
+            *)
+                _pattern="/$_item"
+                ;;
+        esac
+        _rsync_excludes+=("--exclude=$_pattern")
+        _tar_excludes+=("--exclude=${_pattern#/}")
+    done
+
+    if command -v rsync >/dev/null 2>&1 && ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "command -v rsync >/dev/null 2>&1"; then
+        log_msg "Sync method: rsync"
+        rsync -az --delete -e "ssh ${SSH_OPTS[*]}" "${_rsync_excludes[@]}" \
+            "$LOCAL_PROJECT_ROOT/" "root@$TARGET_NODE:$PROJECT_ROOT/"
+        return 0
+    fi
+
+    log_msg "Sync method: tar+ssh fallback (rsync unavailable on sender or target)"
+    tar -C "$LOCAL_PROJECT_ROOT" -cf - "${_tar_excludes[@]}" . \
+        | ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "tar -xf - -C '$PROJECT_ROOT'"
+}
+
 if [ -z "${OAR_JOB_ID:-}" ]; then
     log_msg "WARNING: OAR_JOB_ID is empty. This script should be launched by oarsub."
 fi
@@ -127,6 +186,8 @@ log_msg "Deploying image with kadeploy3: $RESOLVED_KADEPLOY_FILE"
 # Deploy image on the reserved nodes and copy SSH key for root access.
 kadeploy3 -f "$OAR_FILE_NODES" -a "$RESOLVED_KADEPLOY_FILE" -k
 
+wait_for_ssh_ready
+
 if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
     log_msg "Synchronizing project sources to remote node..."
     if [ ! -f "$LOCAL_PROJECT_ROOT/src/data/__init__.py" ]; then
@@ -136,31 +197,9 @@ if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
         exit 1
     fi
 
-    ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT'"
+    sync_project_to_remote
 
-    # Build rsync exclude args from comma-separated list.
-    # Bare names are anchored to repo root (e.g., data -> /data) to prevent
-    # accidental exclusions like src/data.
-    IFS=',' read -r -a _sync_ex_items <<< "$SYNC_EXCLUDES"
-    _rsync_excludes=()
-    for _item in "${_sync_ex_items[@]}"; do
-        _item="$(echo "$_item" | xargs)"
-        [ -n "$_item" ] || continue
-        case "$_item" in
-            /*|*"*"*|*"?"*)
-                _pattern="$_item"
-                ;;
-            *)
-                _pattern="/$_item"
-                ;;
-        esac
-        _rsync_excludes+=("--exclude=$_pattern")
-    done
-
-    rsync -az --delete "${_rsync_excludes[@]}" \
-        "$LOCAL_PROJECT_ROOT/" "root@$TARGET_NODE:$PROJECT_ROOT/"
-
-    if ! ssh "root@$TARGET_NODE" "test -f '$PROJECT_ROOT/src/data/__init__.py'"; then
+    if ! ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "test -f '$PROJECT_ROOT/src/data/__init__.py'"; then
         log_msg "ERROR: Remote sync incomplete: missing $PROJECT_ROOT/src/data/__init__.py"
         log_msg "ERROR: Aborting before campaign launch to avoid import failures."
         exit 1
@@ -168,19 +207,19 @@ if [ "$SYNC_PROJECT_BEFORE_RUN" = true ]; then
 fi
 
 log_msg "Copying campaign scripts to deployed node..."
-ssh "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT/scripts'"
+ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT/scripts'"
 
-scp "$RESOLVED_LOCAL_LAUNCH_SCRIPT" "root@$TARGET_NODE:$REMOTE_LAUNCH_SCRIPT"
+scp "${SSH_OPTS[@]}" "$RESOLVED_LOCAL_LAUNCH_SCRIPT" "root@$TARGET_NODE:$REMOTE_LAUNCH_SCRIPT"
 
 for dep in run_thesis_mode.sh run_experiments.sh run_ilp_partition.sh run_ilp_pareto_sweep.sh sanitize_cuda_env.sh; do
     if [ -f "$LOCAL_SCRIPTS_DIR/$dep" ]; then
-        scp "$LOCAL_SCRIPTS_DIR/$dep" "root@$TARGET_NODE:$PROJECT_ROOT/scripts/$dep"
+        scp "${SSH_OPTS[@]}" "$LOCAL_SCRIPTS_DIR/$dep" "root@$TARGET_NODE:$PROJECT_ROOT/scripts/$dep"
     fi
 done
 
 log_msg "Ensuring executable permissions and starting thesis campaign..."
-ssh "root@$TARGET_NODE" "chmod +x '$PROJECT_ROOT/scripts/'*.sh"
-ssh "root@$TARGET_NODE" \
+ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "chmod +x '$PROJECT_ROOT/scripts/'*.sh"
+ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" \
     "cd '$PROJECT_ROOT' && \
      CAMPAIGN_PROFILE='$CAMPAIGN_PROFILE' \
      CONDA_ENV_NAME='$CONDA_ENV_NAME' \
