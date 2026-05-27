@@ -260,6 +260,32 @@ discover_config_dirs() {
   fi
 }
 
+has_pareto_files() {
+  local root_dir="$1"
+  [ -d "$root_dir" ] || return 1
+  find "$root_dir" -type f -name '*_pareto_sweep.csv' -print -quit | grep -q .
+}
+
+resolve_report_input_root() {
+  local base_dir="$1"
+  local host_name="$2"
+  local normalized_dir
+  normalized_dir="$(normalize_output_dir_for_host_sh "$base_dir" "$host_name")"
+
+  if has_pareto_files "$base_dir"; then
+    printf '%s' "$base_dir"
+    return
+  fi
+
+  if [ "$normalized_dir" != "$base_dir" ] && has_pareto_files "$normalized_dir"; then
+    printf '%s' "$normalized_dir"
+    return
+  fi
+
+  # Fallback keeps previous behavior, preserving clear error reporting downstream.
+  printf '%s' "$base_dir"
+}
+
 section "THESIS MODE - PREFLIGHT"
 log_msg "PROFILE=$PROFILE"
 log_msg "PYTHON_CMD=$PYTHON_CMD"
@@ -527,8 +553,11 @@ if is_true "$RUN_REPORTS"; then
     log_msg "Report stage finished"
   else
 
+  REPORT_INPUT_ROOT="$(resolve_report_input_root "$BASE_OUTPUT_DIR" "$HOST_TAG")"
+  log_msg "Report input root: $REPORT_INPUT_ROOT"
+
   PYTHON_CMD="$PYTHON_CMD" \
-  INPUT_ROOT="$BASE_OUTPUT_DIR" \
+  INPUT_ROOT="$REPORT_INPUT_ROOT" \
   OUTPUT_DIR="$REPORTS_DIR" \
   bash scripts/generate_ilp_report_assets.sh >> "$LOG_FILE" 2>&1
 
