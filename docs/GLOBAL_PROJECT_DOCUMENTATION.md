@@ -1020,7 +1020,7 @@ Common environment controls:
 Example:
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 MODELS_CSV=simple_mlp,resnet50 \
 BATCH_SIZES_CSV=8,16 \
 PRECISIONS_CSV=fp32 \
@@ -1133,13 +1133,13 @@ Supported profiles:
 Examples:
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 PYTHON_CMD=$(which python) \
 PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
 ```
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 PYTHON_CMD=$(which python) \
 PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```
@@ -1210,7 +1210,7 @@ Tests in `tests/` include:
 Recommended sequence from lowest to highest cost:
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 bash validation/run_unit_tests.sh
 python validation/validate_code.py
 python validation/validate_all_models.py --preflight-scope fast

@@ -1041,7 +1041,7 @@ PRECISIONS_CSV=fp32 \
 OPTIMIZERS_CSV=SGD,AdamW \
 REPEATS=3 \
 USE_SKIP_CPU=true \
-conda activate thesis_env && \
+conda activate prism_env && \
 bash scripts/run_experiments.sh
 ```
 
@@ -1148,13 +1148,13 @@ Perfiles soportados:
 Ejemplos:
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 PYTHON_CMD=$(which python) \
 PROFILE=quick_smoke bash scripts/run_thesis_mode.sh
 ```
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 PYTHON_CMD=$(which python) \
 PROFILE=doctoral_minimal RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```

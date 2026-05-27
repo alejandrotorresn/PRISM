@@ -39,7 +39,7 @@ cd <repo-folder>
 
 # Option A: Conda
 conda env create -f config/environment.yml
-conda activate thesis_env
+conda activate prism_env
 
 # Option B: Pip + virtualenv
 python -m venv .venv
@@ -110,7 +110,7 @@ python validation/sweep_ilp_pareto.py \
 ### Server preflight before real collection
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 SMOKE_MODE=true \
 DRY_RUN=true \
 FAIL_FAST=true \

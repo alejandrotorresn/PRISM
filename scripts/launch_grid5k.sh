@@ -10,7 +10,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-thesis_env}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
 PYTHON_CMD="${PYTHON_CMD:-python}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"

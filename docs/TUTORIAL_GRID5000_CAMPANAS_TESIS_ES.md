@@ -14,7 +14,7 @@ Scripts principales:
 1. Debe existir una reserva OAR valida y acceso al cluster objetivo.
 2. Debe estar disponible el archivo de despliegue Kadeploy (por defecto `rocky9_profiling.yaml`).
 3. El repositorio debe existir en el nodo desplegado en `/root/PRISM`.
-4. El entorno conda `thesis_env` debe existir en la imagen desplegada.
+4. El entorno conda `prism_env` debe existir en la imagen desplegada.
 5. Debe existir el script local `scripts/launch_grid5k.sh` en la maquina desde donde se ejecuta `oarsub`.
 
 ## 3. Politica de semillas implementada
@@ -71,7 +71,7 @@ Uso: producir datos finales con estimacion de variabilidad y robustez.
 Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_grid5k.sh](scripts/launch_grid5k.sh):
 
 - `CAMPAIGN_PROFILE`: `quick_smoke` | `doctoral_minimal` | `doctoral_full`
-- `CONDA_ENV_NAME`: entorno conda a activar (default: `thesis_env`)
+- `CONDA_ENV_NAME`: entorno conda a activar (default: `prism_env`)
 - `RUN_HYBRID`: habilita etapa de ejecucion hibrida
 - `FULL_SEEDS_CSV`: lista CSV de semillas para doctoral_full
 - `SINGLE_SEED`: semilla unica para quick_smoke/doctoral_minimal
@@ -87,7 +87,7 @@ Variables de [scripts/run_thesis.sh](scripts/run_thesis.sh) y [scripts/launch_gr
 
 ## 7. Diagnostico rapido de fallos
 1. Si falla kadeploy: revisar validez de `KADEPLOY_FILE` y acceso al sitio/cola.
-2. Si falla conda: verificar que `thesis_env` exista en la imagen desplegada.
+2. Si falla conda: verificar que `prism_env` exista en la imagen desplegada.
 3. Si falla al copiar scripts: validar ruta local `scripts/` y conectividad SSH root al nodo.
 4. Si faltan artefactos: revisar logs en `logs/` y confirmar que no se uso `DRY_RUN=true`.
 

@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-THESIS_ENV_NAME="thesis_env"
-CONDA_PYTHON="${HOME}/anaconda3/envs/${THESIS_ENV_NAME}/bin/python"
+PRISM_ENV_NAME="prism_env"
+CONDA_PYTHON="${HOME}/anaconda3/envs/${PRISM_ENV_NAME}/bin/python"
 
 if [[ -x "${CONDA_PYTHON}" ]]; then
   PYTHON_BIN="${CONDA_PYTHON}"
 else
   echo "ERROR: ${CONDA_PYTHON} not found."
-  echo "This project requires the conda environment '${THESIS_ENV_NAME}'."
+  echo "This project requires the conda environment '${PRISM_ENV_NAME}'."
   echo "Create it with: conda env create -f config/environment.yml"
   exit 1
 fi
@@ -23,8 +23,8 @@ echo ""
 
 cd "${ROOT_DIR}"
 "${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1 || {
-  echo "ERROR: torch is not available in ${THESIS_ENV_NAME}."
-  echo "Install dependencies in ${THESIS_ENV_NAME} before running tests."
+  echo "ERROR: torch is not available in ${PRISM_ENV_NAME}."
+  echo "Install dependencies in ${PRISM_ENV_NAME} before running tests."
   echo "Example: ${PYTHON_BIN} -m pip install -r config/requirements.txt"
   exit 1
 }

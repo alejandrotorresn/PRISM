@@ -18,7 +18,7 @@ set -euo pipefail
 # Optional conda activation (kept consistent with project scripts)
 if [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
   source ~/anaconda3/etc/profile.d/conda.sh
-  conda activate thesis_env 2>/dev/null || true
+  conda activate prism_env 2>/dev/null || true
 fi
 
 source "$(dirname "$0")/sanitize_cuda_env.sh"

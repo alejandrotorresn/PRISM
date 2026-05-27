@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}1. INSTALLATION${NC}"
 echo "   ┌─ Option A: Conda (Recommended)"
 echo "   │  conda env create -f config/environment.yml"
-echo "   │  conda activate thesis_env"
+echo "   │  conda activate prism_env"
 echo "   └─"
 echo ""
 echo "   ┌─ Option B: Pip + Manual PyTorch Install"

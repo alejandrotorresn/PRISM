@@ -17,7 +17,7 @@ If you want a shell-friendly cheat sheet for terminal sessions, [QUICK_START.sh]
 ### Option A: Conda (recommended)
 ```bash
 conda env create -f config/environment.yml
-conda activate thesis_env
+conda activate prism_env
 ```
 
 ### Option B: Pip + virtualenv
@@ -32,7 +32,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ## 2) Validation (recommended order)
 
 ```bash
-conda activate thesis_env
+conda activate prism_env
 bash validation/run_unit_tests.sh
 python validation/validate_code.py
 python validation/validate_all_models.py --preflight-scope fast
@@ -82,7 +82,7 @@ This script is intended for real operational verification with a small campaign 
 
 ### Fast script smoke mode
 ```bash
-conda activate thesis_env
+conda activate prism_env
 SMOKE_MODE=true \
 USE_SKIP_CPU=true \
 FORCE_THREADS=4 \

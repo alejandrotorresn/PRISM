@@ -1,4 +1,4 @@
-name: hybrid-profiler
+name: prism_env
 channels:
   - pytorch
   - nvidia

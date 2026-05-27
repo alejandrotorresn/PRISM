@@ -1217,7 +1217,7 @@ La forma correcta de auditar un caso así es secuencial:
 
 En este repositorio, la causa raíz del caso `resnet50` fue doble:
 
-- el entorno activo del workspace no era inicialmente `thesis_env`
+- el entorno activo del workspace no era inicialmente `prism_env`
 - el solver CBC no estaba accesible para PuLP aunque sí podía instalarse en el entorno
 
 Una vez corregidos esos dos problemas, la solución persistida pasó a ser coherente y el caso dejó de ser ambiguo. Esta lección es importante metodológicamente: cuando una solución ILP parece extraña, antes de concluir que el modelo está mal formulado conviene verificar si el problema está en el solver, en el entorno o en la persistencia de artefactos.
@@ -1467,7 +1467,7 @@ Si se usa Conda:
 
 ```bash
 conda env create -f config/environment.yml
-conda activate thesis_env
+conda activate prism_env
 ```
 
 Si se usa `pip` sobre un entorno ya creado:
