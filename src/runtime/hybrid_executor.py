@@ -252,6 +252,66 @@ def _run_layer_with_dual_placement(
     forward_device: torch.device,
     backward_device: torch.device,
 ) -> Any:
+    def _detach_to_cpu(value: Any) -> Any:
+        if torch.is_tensor(value):
+            return value.detach().to("cpu")
+        if isinstance(value, tuple):
+            return tuple(_detach_to_cpu(v) for v in value)
+        if isinstance(value, list):
+            return [_detach_to_cpu(v) for v in value]
+        if isinstance(value, dict):
+            return {k: _detach_to_cpu(v) for k, v in value.items()}
+        return value
+
+    def _compare_outputs(expected: Any, observed: Any) -> Tuple[bool, float, str]:
+        if torch.is_tensor(expected) and torch.is_tensor(observed):
+            if expected.shape != observed.shape:
+                return False, float("inf"), f"shape mismatch: expected {tuple(expected.shape)} vs observed {tuple(observed.shape)}"
+            expected_f = expected.to(torch.float32)
+            observed_f = observed.to(torch.float32)
+            diff = (expected_f - observed_f).abs()
+            max_diff = float(diff.max().item()) if diff.numel() > 0 else 0.0
+            allclose = bool(torch.allclose(expected_f, observed_f, rtol=1e-4, atol=1e-5))
+            return allclose, max_diff, "tensor mismatch" if not allclose else ""
+
+        if type(expected) is not type(observed):
+            return False, float("inf"), f"type mismatch: expected {type(expected).__name__} vs observed {type(observed).__name__}"
+
+        if isinstance(expected, tuple):
+            if len(expected) != len(observed):
+                return False, float("inf"), f"tuple length mismatch: expected {len(expected)} vs observed {len(observed)}"
+            max_diff = 0.0
+            for exp_item, obs_item in zip(expected, observed):
+                ok, item_diff, reason = _compare_outputs(exp_item, obs_item)
+                max_diff = max(max_diff, item_diff)
+                if not ok:
+                    return False, max_diff, reason
+            return True, max_diff, ""
+
+        if isinstance(expected, list):
+            if len(expected) != len(observed):
+                return False, float("inf"), f"list length mismatch: expected {len(expected)} vs observed {len(observed)}"
+            max_diff = 0.0
+            for exp_item, obs_item in zip(expected, observed):
+                ok, item_diff, reason = _compare_outputs(exp_item, obs_item)
+                max_diff = max(max_diff, item_diff)
+                if not ok:
+                    return False, max_diff, reason
+            return True, max_diff, ""
+
+        if isinstance(expected, dict):
+            if expected.keys() != observed.keys():
+                return False, float("inf"), "dict key mismatch"
+            max_diff = 0.0
+            for key in expected:
+                ok, item_diff, reason = _compare_outputs(expected[key], observed[key])
+                max_diff = max(max_diff, item_diff)
+                if not ok:
+                    return False, max_diff, reason
+            return True, max_diff, ""
+
+        return True, 0.0, ""
+
     class _DualPlacementFn(torch.autograd.Function):
         @staticmethod
         def forward(ctx, x: torch.Tensor) -> torch.Tensor:
@@ -265,6 +325,7 @@ def _run_layer_with_dual_placement(
             ctx.backward_device = backward_device
             ctx.input_device = x.device
             ctx.save_for_backward(x.detach().to("cpu"))
+            ctx.forward_output_cpu = _detach_to_cpu(output)
             return output
 
         @staticmethod
@@ -279,6 +340,13 @@ def _run_layer_with_dual_placement(
 
             with torch.enable_grad():
                 recompute_output = layer_local(recompute_input)
+
+            recompute_output_cpu = _detach_to_cpu(recompute_output)
+            outputs_match, max_diff, reason = _compare_outputs(ctx.forward_output_cpu, recompute_output_cpu)
+            if not outputs_match:
+                raise RuntimeError(
+                    f"Dual-device recompute mismatch for layer={ctx.layer_name} (max_abs_diff={max_diff:.6e}): {reason}"
+                )
 
             grad_output_local = grad_output.to(ctx.backward_device)
             grads = torch.autograd.grad(

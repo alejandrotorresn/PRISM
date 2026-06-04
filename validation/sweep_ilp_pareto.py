@@ -74,6 +74,33 @@ def _build_effective_from_dual(data, cfg) -> Any:
     )
 
 
+def _node_flip_delta(problem, bits: Dict[str, int], node: str, new_bit: int, data) -> float:
+    old_bit = bits[node]
+    if old_bit == new_bit:
+        return 0.0
+
+    delta = 0.0
+    if new_bit == 0:
+        delta += problem.objective_node_cpu[node] - problem.objective_node_gpu[node]
+    else:
+        delta += problem.objective_node_gpu[node] - problem.objective_node_cpu[node]
+
+    for u, v in data.edges:
+        if node not in {u, v}:
+            continue
+        other = v if u == node else u
+        old_cut = int(bits[u] != bits[v])
+        if node == u:
+            new_cut = int(new_bit != bits[v])
+        else:
+            new_cut = int(bits[u] != new_bit)
+        if old_cut != new_cut:
+            edge_delta = problem.objective_edge_cut[(u, v)]
+            delta += edge_delta if new_cut else -edge_delta
+
+    return float(delta)
+
+
 def _parse_budget_list(text: str) -> List[float]:
     vals = []
     for chunk in text.split(","):
@@ -150,7 +177,8 @@ def _eval_bits_policy(bits: Dict[str, int], data, cfg: Any) -> Dict[str, float |
 def _greedy_bits(data, cfg: Any) -> Dict[str, int] | None:
     problem = _build_effective_from_dual(data, cfg)
 
-    # Start from per-layer local best (ignores graph cuts by design).
+    # Start from per-layer local best and then repair budget violations using
+    # a cut-aware flip score.
     bits = {
         n: 1 if problem.objective_node_gpu[n] <= problem.objective_node_cpu[n] else 0
         for n in data.nodes
@@ -173,7 +201,7 @@ def _greedy_bits(data, cfg: Any) -> Dict[str, int] | None:
             new_cpu_mem = cpu_mem + problem.cpu_mem[n]
             if new_cpu_mem > cfg.cpu_mem_budget_mb:
                 continue
-            obj_penalty = max(0.0, problem.objective_node_cpu[n] - problem.objective_node_gpu[n])
+            obj_penalty = _node_flip_delta(problem, bits, n, 0, data)
             gpu_reduction = max(problem.gpu_mem[n], 1e-12)
             score = obj_penalty / gpu_reduction
             candidates.append((score, n))
@@ -192,7 +220,7 @@ def _greedy_bits(data, cfg: Any) -> Dict[str, int] | None:
             new_gpu_mem = gpu_mem + problem.gpu_mem[n]
             if new_gpu_mem > cfg.gpu_mem_budget_mb:
                 continue
-            obj_penalty = max(0.0, problem.objective_node_gpu[n] - problem.objective_node_cpu[n])
+            obj_penalty = _node_flip_delta(problem, bits, n, 1, data)
             cpu_reduction = max(problem.cpu_mem[n], 1e-12)
             score = obj_penalty / cpu_reduction
             candidates.append((score, n))
@@ -238,6 +266,35 @@ def _phase_assignment_counts(ilp) -> Dict[str, int]:
     }
 
 
+def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bool]:
+    regime = str(args.regime).strip().lower()
+    if regime not in {"deterministic", "diagnostic"}:
+        raise ValueError(f"Unsupported --regime value: {args.regime}")
+
+    if regime == "deterministic":
+        if args.allow_low_quality_stats:
+            raise ValueError("Deterministic regime does not allow --allow_low_quality_stats")
+        if args.allow_transfer_calibration_fallback:
+            raise ValueError("Deterministic regime does not allow --allow_transfer_calibration_fallback")
+        if args.allow_fallback_graph_trace:
+            raise ValueError("Deterministic regime does not allow --allow_fallback_graph_trace")
+        if not args.strict_graph_mapping:
+            raise ValueError("Deterministic regime requires --strict_graph_mapping")
+        if not args.strict_transfer_mapping:
+            raise ValueError("Deterministic regime requires --strict_transfer_mapping")
+
+    enforce_convex = bool(args.enforce_convex_weights or regime == "deterministic")
+    if enforce_convex:
+        weight_sum = float(args.w_time + args.w_energy)
+        if abs(weight_sum - 1.0) > 1e-9:
+            raise ValueError(
+                "Convex weighting required: w_time + w_energy must be 1.0; "
+                f"got {weight_sum} (w_time={args.w_time}, w_energy={args.w_energy})"
+            )
+
+    return regime, enforce_convex
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep ILP over GPU memory budgets and compare baselines")
     parser.add_argument("--config_dir", default=None)
@@ -264,7 +321,11 @@ def main() -> int:
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_csv", default=None)
     parser.add_argument("--output_json", default=None)
+    parser.add_argument("--regime", choices=["deterministic", "diagnostic"], default="diagnostic")
+    parser.add_argument("--enforce_convex_weights", action="store_true", help="Require w_time + w_energy == 1")
     args = parser.parse_args()
+
+    regime, enforce_convex_weights = _resolve_regime_and_weight_policy(args)
 
     config_dirs: list[Path]
     if args.config_dirs:
@@ -295,6 +356,7 @@ def main() -> int:
             strict_sample_quality=not args.allow_low_quality_stats,
             strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
             strict_graph_trace_source=not args.allow_fallback_graph_trace,
+            strict_metric_validity=False,
         )
         profiles.append(profile)
 
@@ -315,6 +377,7 @@ def main() -> int:
         cfg = ILPConfig(
             w_time=args.w_time,
             w_energy=args.w_energy,
+            enforce_convex_weights=enforce_convex_weights,
             w_transfer=args.w_transfer,
             w_fragmentation=args.w_fragmentation,
             gpu_mem_budget_mb=b,
@@ -371,6 +434,8 @@ def main() -> int:
         "rows": int(len(out_df)),
         "gpu_budgets_mb": budgets,
         "backend_requested": args.backend,
+        "regime": regime,
+        "enforce_convex_weights": enforce_convex_weights,
         "output_csv": str(out_csv),
         "best_feasible_row": None,
     }

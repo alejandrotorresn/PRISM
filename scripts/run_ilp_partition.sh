@@ -23,11 +23,37 @@ BACKEND="${BACKEND:-auto}"
 HW_AGGREGATE="${HW_AGGREGATE:-max}"
 HW_DISPERSION_K="${HW_DISPERSION_K:-0.0}"
 OUT_DIR="${OUT_DIR:-${CONFIG_DIR}/ilp_solution}"
+REGIME="${REGIME:-diagnostic}"
+ENFORCE_CONVEX_WEIGHTS="${ENFORCE_CONVEX_WEIGHTS:-false}"
 STRICT_GRAPH_MAPPING="${STRICT_GRAPH_MAPPING:-true}"
 STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
 ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
 ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
 ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
+
+# Fail fast if CBC is not available; strict campaigns should not start ILP with
+# an unusable MILP backend and then fall back to exhaustive search limits.
+CBC_BIN="${CBC_BIN:-}"
+if [ -z "$CBC_BIN" ]; then
+  if command -v cbc >/dev/null 2>&1; then
+    CBC_BIN="$(command -v cbc)"
+  else
+    PY_DIR="$(dirname "$PYTHON_CMD")"
+    if [ -x "$PY_DIR/cbc" ]; then
+      CBC_BIN="$PY_DIR/cbc"
+    fi
+  fi
+fi
+
+if [ -z "$CBC_BIN" ] || [ ! -x "$CBC_BIN" ]; then
+  echo "[ERROR] CBC solver executable not found or not executable." >&2
+  echo "[ERROR] Required for scalable ILP solve (PuLP + CBC)." >&2
+  echo "[ERROR] Conda fix: conda install -n prism_env -c conda-forge coin-or-cbc pulp" >&2
+  echo "[ERROR] Current PYTHON_CMD: $PYTHON_CMD" >&2
+  exit 2
+fi
+
+export PATH="$(dirname "$CBC_BIN"):$PATH"
 
 STRICT_FLAGS=()
 if [ "$STRICT_GRAPH_MAPPING" = true ]; then
@@ -45,6 +71,9 @@ fi
 if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
   STRICT_FLAGS+=(--allow_fallback_graph_trace)
 fi
+if [ "$ENFORCE_CONVEX_WEIGHTS" = true ]; then
+  STRICT_FLAGS+=(--enforce_convex_weights)
+fi
 
 CONFIG_FLAGS=(--config_dir "$CONFIG_DIR")
 if [ -n "$CONFIG_DIRS" ]; then
@@ -54,6 +83,7 @@ fi
 "$PYTHON_CMD" validation/run_ilp_partition.py \
   "${CONFIG_FLAGS[@]}" \
   --model "$MODEL" \
+  --regime "$REGIME" \
   --k_sigma "$K_SIGMA" \
   --w_time "$W_TIME" \
   --w_energy "$W_ENERGY" \

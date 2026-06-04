@@ -22,8 +22,9 @@ dependencies:
   - huggingface_hub>=0.20,<0.28
   - safetensors>=0.4
   
-  # ILP solver (CBC backend embedded in PuLP)
+  # ILP solver stack: PuLP modeler + CBC executable for MILP solves
   - pulp>=2.7
+  - coin-or-cbc>=2.10
   # Plotting / report generation
   - matplotlib>=3.7
   # Test runner

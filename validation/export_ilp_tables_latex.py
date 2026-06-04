@@ -181,14 +181,32 @@ def _prepare_hybrid_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
-    body = df.to_latex(index=False, escape=False)
+    try:
+        # Pandas >= 1.3 uses Styler for booktabs natively if we want full control, 
+        # but to_latex with booktabs=True works on older and newer (with FutureWarning).
+        # We'll use style.to_latex if available, else fallback to df.to_latex.
+        if hasattr(df, "style"):
+            body = df.style.hide(axis="index").to_latex(hrules=True, environment=None)
+        else:
+            body = df.to_latex(index=False, escape=False, booktabs=True)
+    except Exception:
+        # Fallback if both fail
+        body = df.to_latex(index=False, escape=False)
+        # Manually inject booktabs if missing
+        if "\\toprule" not in body:
+            body = body.replace("\\hline\n", "\\toprule\n", 1)
+            body = body.replace("\\hline\n", "\\midrule\n", 1)
+            body = body.replace("\\hline\n", "\\bottomrule\n")
+
     return "\n".join(
         [
             "\\begin{table}[t]",
             "\\centering",
             f"\\caption{{{caption}}}",
             f"\\label{{{label}}}",
+            "\\resizebox{\\textwidth}{!}{",
             body,
+            "}",
             "\\end{table}",
             "",
         ]

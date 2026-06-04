@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import product
 import importlib
+import os
+import shutil
+import sys
 from typing import Any, Dict, List, Tuple
 
 from .data_loader import ILPInputData
@@ -35,6 +38,23 @@ class ILPSolution:
     backward_cut_edges: List[Tuple[str, str]] | None = None
     cross_phase_edges: List[Tuple[str, str]] | None = None
     activation_strategies: Dict[str, Any] | None = None
+
+
+def _build_cbc_solver(pulp):
+    """Create a CBC solver with an explicit binary path when discoverable.
+
+    Some environments install `cbc` outside PuLP's bundled solverdir, so
+    delegating discovery to PATH/sys.executable keeps MILP solving operational.
+    """
+    cbc_path = shutil.which("cbc")
+    if cbc_path and os.access(cbc_path, os.X_OK):
+        return pulp.COIN_CMD(msg=False, path=cbc_path)
+
+    candidate = os.path.join(os.path.dirname(sys.executable), "cbc")
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return pulp.COIN_CMD(msg=False, path=candidate)
+
+    return pulp.PULP_CBC_CMD(msg=False)
 
 
 def _eval_assignment(
@@ -140,7 +160,7 @@ def _solve_with_pulp(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     prob += pulp.lpSum(problem_data.gpu_mem[n] * x[n] for n in data.nodes) <= cfg.gpu_mem_budget_mb
     prob += pulp.lpSum(problem_data.cpu_mem[n] * (1 - x[n]) for n in data.nodes) <= cfg.cpu_mem_budget_mb
 
-    solver = pulp.PULP_CBC_CMD(msg=False)
+    solver = _build_cbc_solver(pulp)
     prob.solve(solver)
 
     status = pulp.LpStatus.get(prob.status, "unknown")
@@ -380,7 +400,7 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         + pulp.lpSum(problem_data.cpu_mem[n] * (1 - xb[n]) for n in data.nodes)
     ) <= cfg.cpu_mem_budget_mb
 
-    solver = pulp.PULP_CBC_CMD(msg=False)
+    solver = _build_cbc_solver(pulp)
     prob.solve(solver)
 
     status = pulp.LpStatus.get(prob.status, "unknown")

@@ -80,7 +80,7 @@ CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
 BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results_smoke}"
 REPORTS_DIR="${REPORTS_DIR:-reports/ilp_results/${HOST_TAG}_smoke}"
 LATEX_DIR="${LATEX_DIR:-${REPORTS_DIR}/latex}"
-LOG_DIR="${LOG_DIR:-logs}"
+LOG_DIR="${LOG_DIR:-logs/thesis_smoke_workflow}"
 LOG_FILE="${LOG_DIR}/thesis_smoke_workflow_$(date +%Y%m%d_%H%M%S).txt"
 
 mkdir -p "$BASE_OUTPUT_DIR" "$REPORTS_DIR" "$LATEX_DIR" "$LOG_DIR"

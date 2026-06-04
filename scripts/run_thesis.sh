@@ -31,7 +31,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
 RUN_HYBRID="${RUN_HYBRID:-true}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
-FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-1}"
+FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
 
 parse_args() {
@@ -66,7 +66,7 @@ parse_args() {
 Usage: run_thesis.sh [options]
 
 Options:
-  --profile <quick_smoke|doctoral_minimal|doctoral_full>
+    --profile <quick_smoke|doctoral_minimal|doctoral_full|doctoral_diagnostic>
   --single-seed <int>
   --non-full-repeats <int>
   --full-seeds <csv>
@@ -103,6 +103,16 @@ on_error() {
 trap on_error ERR
 
 parse_args "$@"
+
+case "$CAMPAIGN_PROFILE" in
+    quick_smoke|doctoral_minimal|doctoral_full|doctoral_diagnostic)
+        ;;
+    *)
+        log_msg "ERROR: Unsupported --profile '$CAMPAIGN_PROFILE'"
+        log_msg "ERROR: Allowed values: quick_smoke, doctoral_minimal, doctoral_full, doctoral_diagnostic"
+        exit 2
+        ;;
+esac
 
 resolve_local_path() {
     local candidate="$1"
@@ -267,7 +277,7 @@ ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT/scripts'"
 
 scp "${SSH_OPTS[@]}" "$RESOLVED_LOCAL_LAUNCH_SCRIPT" "root@$TARGET_NODE:$REMOTE_LAUNCH_SCRIPT"
 
-for dep in run_thesis_mode.sh run_experiments.sh run_ilp_partition.sh run_ilp_pareto_sweep.sh sanitize_cuda_env.sh; do
+for dep in run_thesis_mode.sh run_experiments.sh run_ilp_partition.sh run_ilp_pareto_sweep.sh sanitize_cuda_env.sh audit_experimental_grid.sh; do
     if [ -f "$LOCAL_SCRIPTS_DIR/$dep" ]; then
         scp "${SSH_OPTS[@]}" "$LOCAL_SCRIPTS_DIR/$dep" "root@$TARGET_NODE:$PROJECT_ROOT/scripts/$dep"
     fi

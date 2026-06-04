@@ -909,6 +909,11 @@ class TrainingProfiler:
             "gpu_precision_executed": getattr(self.args, "gpu_precision_executed", "unknown"),
             "cpu_instruction_flags": getattr(self.args, "cpu_instruction_flags", []),
             "cpu_isa_probe": getattr(self.args, "cpu_isa_probe", {}),
+            "cpu_fwd_power_w": float(self.args.cpu_fwd_power_w) if hasattr(self.args, "cpu_fwd_power_w") else 0.0,
+            "cpu_bwd_power_w": float(self.args.cpu_bwd_power_w) if hasattr(self.args, "cpu_bwd_power_w") else 0.0,
+            "analytical_fallback_gpu": getattr(self.args, "gpu_oom_fallback_triggered", False),
+            "measured_gpu_peak_tflops": float(measured_gpu_peak_tflops) if 'measured_gpu_peak_tflops' in locals() else 0.0,
+            "gpu_tdp_w": float(getattr(self.args, "gpu_tdp_w", 0.0)),
         })
 
         json_path = os.path.join(self.args.output_dir, f"{self.model_name}_meta.json")
@@ -1027,27 +1032,72 @@ class TrainingProfiler:
         warmup = int(getattr(self.args, "warmup", WARMUP_STEPS))
         measure = int(getattr(self.args, "measure", MEASURE_STEPS))
 
-        self._run_epoch(input_data, "cuda" if self.has_gpu else "cpu", warmup)
+        try:
+            self._run_epoch(input_data, "cuda" if self.has_gpu else "cpu", warmup)
+        except RuntimeError as ex:
+            if self.has_gpu and ("OOM retries were exhausted" in str(ex) or "out of memory" in str(ex).lower()):
+                logger.warning("Model structural requirements exceed physical VRAM (OOM) during warmup. Triggering analytical estimation regime.")
+                self.args.gpu_oom_fallback_triggered = True
+                try:
+                    import pynvml
+                    pynvml.nvmlInit()
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(self.gpu_id)
+                    tdp_mw = pynvml.nvmlDeviceGetEnforcedPowerLimit(handle)
+                    self.args.gpu_tdp_w = tdp_mw / 1000.0
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    self.args.gpu_tdp_w = 250.0
+            else:
+                raise
 
         gpu_total_energy, gpu_run_time_sec = 0.0, 0.0
         gpu_layer_stats = {}
         measured_gpu_peak_tflops = 0.0
 
-        if self.has_gpu:
+        if self.has_gpu and not getattr(self.args, "gpu_oom_fallback_triggered", False):
+            logger.info("--> Benchmarking empirical GPU TFLOPS before phase profiling...")
+            try:
+                measured_gpu_peak_tflops = self._measure_peak_flops("cuda")
+                self.args.measured_gpu_peak_tflops = measured_gpu_peak_tflops
+            except Exception as e:
+                logger.warning(f"Failed to measure empirical GPU TFLOPS: {e}")
+                measured_gpu_peak_tflops = 0.0
+                self.args.measured_gpu_peak_tflops = 0.0
+
             logger.info("--> Profiling GPU Execution...")
-            (
-                gpu_total_energy,
-                gpu_run_time_sec,
-                gpu_layer_stats,
-                measured_gpu_peak_tflops,
-            ) = self._profile_device_phase(input_data=input_data, device="cuda", measure=measure)
-            self._save_gpu_partial_results(
-                gpu_layer_stats=gpu_layer_stats,
-                gpu_total_energy=gpu_total_energy,
-                gpu_run_time_sec=gpu_run_time_sec,
-                measured_gpu_peak_tflops=measured_gpu_peak_tflops,
-                measure=measure,
-            )
+            try:
+                (
+                    gpu_total_energy,
+                    gpu_run_time_sec,
+                    gpu_layer_stats,
+                    _,
+                ) = self._profile_device_phase(input_data=input_data, device="cuda", measure=measure)
+                self._save_gpu_partial_results(
+                    gpu_layer_stats=gpu_layer_stats,
+                    gpu_total_energy=gpu_total_energy,
+                    gpu_run_time_sec=gpu_run_time_sec,
+                    measured_gpu_peak_tflops=measured_gpu_peak_tflops,
+                    measure=measure,
+                )
+            except RuntimeError as ex:
+                if "OOM retries were exhausted" in str(ex) or "out of memory" in str(ex).lower():
+                    logger.warning("Model structural requirements exceed physical VRAM (OOM). Triggering analytical estimation regime.")
+                    self.args.gpu_oom_fallback_triggered = True
+                    gpu_layer_stats = {}
+                    gpu_total_energy = 0.0
+                    gpu_run_time_sec = 0.0
+                    
+                    try:
+                        import pynvml
+                        pynvml.nvmlInit()
+                        handle = pynvml.nvmlDeviceGetHandleByIndex(self.gpu_id)
+                        tdp_mw = pynvml.nvmlDeviceGetEnforcedPowerLimit(handle)
+                        self.args.gpu_tdp_w = tdp_mw / 1000.0
+                        pynvml.nvmlShutdown()
+                    except Exception:
+                        self.args.gpu_tdp_w = 250.0
+                else:
+                    raise
 
         cpu_total_energy, cpu_run_time_sec = None, 0.0
         cpu_layer_stats = {}
@@ -1353,6 +1403,9 @@ class TrainingProfiler:
             "skip_unsupported_precision": False,
             "total_model_flops": total_model_flops,
             "total_model_flops_per_step": total_model_flops / measure,
+            "analytical_fallback_gpu": getattr(self.args, "gpu_oom_fallback_triggered", False),
+            "measured_gpu_peak_tflops": float(measured_gpu_peak_tflops) if 'measured_gpu_peak_tflops' in locals() else getattr(self.args, "measured_gpu_peak_tflops", 0.0),
+            "gpu_tdp_w": float(getattr(self.args, "gpu_tdp_w", 0.0)),
         })
 
         json_path = os.path.join(self.args.output_dir, f"{self.model_name}_meta.json")

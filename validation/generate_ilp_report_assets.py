@@ -5,8 +5,15 @@ import argparse
 from pathlib import Path
 from typing import Dict, List
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
+
+# Set academic theme for ILP plots
+sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
+sns.set_palette("colorblind")
 
 
 def _find_pareto_files(input_root: Path) -> List[Path]:
@@ -64,59 +71,115 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, out_dir: Pa
     y_cpu = model_df["all_cpu_objective"].astype(float)
     y_greedy = model_df["greedy_objective"].astype(float) if "greedy_objective" in model_df.columns else None
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(x, y_ilp, marker="o", linewidth=2.0, label="ILP")
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    
+    # Use seaborn lineplot for better default aesthetics without error bands
+    sns.lineplot(x=x, y=y_ilp, marker="o", markersize=8, linewidth=2.5, label="ILP Optimal", ax=ax, color=sns.color_palette()[0], errorbar=None)
+    
     if y_greedy is not None:
-        ax.plot(x, y_greedy, linestyle="-.", linewidth=1.8, label="Greedy")
-    ax.plot(x, y_cpu, linestyle="--", linewidth=1.8, label="All CPU")
+        sns.lineplot(x=x, y=y_greedy, linestyle="-.", linewidth=2.0, label="Greedy Heuristic", ax=ax, color=sns.color_palette()[1], errorbar=None)
+        
+    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label="All CPU", ax=ax, color=sns.color_palette()[2], errorbar=None)
 
     # Plot All GPU only where finite.
     finite_gpu = model_df[pd.to_numeric(model_df["all_gpu_objective"], errors="coerce").replace([float("inf")], pd.NA).notna()]
     if len(finite_gpu) > 0:
-        ax.plot(
-            finite_gpu["gpu_budget_mb"].astype(float),
-            finite_gpu["all_gpu_objective"].astype(float),
+        sns.lineplot(
+            x=finite_gpu["gpu_budget_mb"].astype(float),
+            y=finite_gpu["all_gpu_objective"].astype(float),
             linestyle=":",
-            linewidth=1.8,
+            linewidth=2.5,
             label="All GPU",
+            ax=ax,
+            color=sns.color_palette()[3],
+            errorbar=None
         )
 
-    ax.set_title(f"{model}: Objective vs GPU Memory Budget")
-    ax.set_xlabel("GPU Memory Budget (MB)")
-    ax.set_ylabel("Objective (lower is better)")
-    ax.grid(True, alpha=0.25)
-    ax.legend()
+    ax.set_title(f"{model}: Execution Latency vs GPU Memory Budget", pad=15, fontweight="bold")
+    ax.set_xlabel("GPU Memory Budget (MB)", fontweight="bold")
+    ax.set_ylabel("Total Latency (ms)", fontweight="bold")
+    ax.legend(title="Execution Strategy", frameon=True, loc="upper right")
+    sns.despine(left=True, bottom=True)
 
-    out = out_dir / f"{model}_objective_vs_budget.png"
+    # Note if it's a flat line
+    if len(y_ilp) > 1 and y_ilp.max() - y_ilp.min() < 1e-6:
+        ax.text(0.5, 0.05, "Note: Flat curve indicates optimal partition fits within minimum tested budget", 
+                transform=ax.transAxes, ha='center', va='bottom', fontsize=10, 
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    plot_dir = out_dir / "plots" / model / "cost_vs_budget"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    out = plot_dir / f"execution_cost_vs_budget.png"
     fig.tight_layout()
-    fig.savefig(out, dpi=200)
+    fig.savefig(out, dpi=300)
     plt.close(fig)
 
 
-def _plot_best_improvements(best_df: pd.DataFrame, out_dir: Path) -> None:
+def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
     if best_df.empty:
         return
 
-    plot_df = best_df.copy()
-    plot_df["improvement_vs_all_cpu_pct"] = plot_df.apply(
-        lambda r: _safe_pct_improvement(float(r["all_cpu_objective"]), float(r["ilp_objective"])),
-        axis=1,
-    )
+    for _, row in best_df.iterrows():
+        model = row["model"]
+        
+        data = []
+        data.append({"Strategy": "All-CPU", "Cost": float(row["all_cpu_objective"])})
+        
+        # Check if All-GPU is feasible
+        all_gpu_val = pd.to_numeric(row["all_gpu_objective"], errors="coerce")
+        if pd.isna(all_gpu_val) or all_gpu_val == float("inf"):
+            data.append({"Strategy": "All-GPU", "Cost": 0, "Is_OOM": True})
+        else:
+            data.append({"Strategy": "All-GPU", "Cost": float(all_gpu_val), "Is_OOM": False})
+            
+        if "greedy_objective" in row:
+            data.append({"Strategy": "Greedy", "Cost": float(row["greedy_objective"])})
+            
+        data.append({"Strategy": "ILP Optimal", "Cost": float(row["ilp_objective"])})
+        
+        plot_df = pd.DataFrame(data)
+        
+        fig, ax = plt.subplots(figsize=(8, 5))
+        
+        # Plot standard bars
+        valid_df = plot_df[plot_df.get("Is_OOM", False) != True]
+        sns.barplot(data=valid_df, x="Strategy", y="Cost", ax=ax, palette="viridis")
+        
+        # Plot OOM placeholder if needed
+        oom_df = plot_df[plot_df.get("Is_OOM", False) == True]
+        if not oom_df.empty:
+            for idx, strategy in enumerate(plot_df["Strategy"]):
+                if strategy == "All-GPU" and oom_df.iloc[0]["Strategy"] == "All-GPU":
+                    ax.bar(idx, ax.get_ylim()[1] * 0.1, color='lightgray', hatch='//', edgecolor='#666666')
+                    ax.text(idx, ax.get_ylim()[1] * 0.12, "OOM /\nInfeasible", color="#333333", ha="center", va="bottom", fontweight="bold")
+        
+        ax.set_title(f"Execution Latency Comparison: {model}", pad=15, fontweight="bold")
+        ax.set_ylabel("Total Latency (ms)", fontweight="bold")
+        ax.set_xlabel("Execution Strategy", fontweight="bold")
+        
+        # Add data labels
+        for p in ax.patches:
+            height = p.get_height()
+            if height > 0 and p.get_facecolor() != (0.8274509803921568, 0.8274509803921568, 0.8274509803921568, 1.0): # Skip OOM bar
+                ax.annotate(f"{height:.2f}", 
+                            (p.get_x() + p.get_width() / 2., height),
+                            ha="center", va="center", xytext=(0, 8), textcoords="offset points",
+                            fontsize=10, fontweight="bold")
+        
+        import matplotlib.patches as mpatches
+        if not oom_df.empty:
+            oom_patch = mpatches.Patch(facecolor='lightgray', hatch='//', edgecolor='#666666', label='OOM / Infeasible')
+            handles, labels = ax.get_legend_handles_labels()
+            ax.legend(handles=[oom_patch], bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(plot_df["model"], plot_df["improvement_vs_all_cpu_pct"], color="#1f77b4")
-    ax.set_title("Best ILP Improvement vs All-CPU Baseline")
-    ax.set_ylabel("Improvement (%)")
-    ax.set_xlabel("Model")
-    ax.grid(True, axis="y", alpha=0.25)
+        sns.despine()
 
-    for i, v in enumerate(plot_df["improvement_vs_all_cpu_pct"]):
-        ax.text(i, v, f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
-
-    out = out_dir / "best_ilp_vs_all_cpu_improvement.png"
-    fig.tight_layout()
-    fig.savefig(out, dpi=200)
-    plt.close(fig)
+        plot_dir = out_dir / "plots" / model / "comparisons"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        out = plot_dir / "strategy_comparison.png"
+        fig.tight_layout()
+        fig.savefig(out, dpi=300)
+        plt.close(fig)
 
 
 def _write_markdown_summary(
@@ -302,11 +365,14 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    consolidated_csv = out_dir / "ilp_pareto_consolidated.csv"
+    csv_dir = out_dir / "csv"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+
+    consolidated_csv = csv_dir / "ilp_pareto_consolidated.csv"
     full_df.to_csv(consolidated_csv, index=False)
 
     best_df = _best_feasible_rows(full_df)
-    best_csv = out_dir / "ilp_best_per_model.csv"
+    best_csv = csv_dir / "ilp_best_per_model.csv"
     best_df.to_csv(best_csv, index=False)
 
     hybrid_files = _find_hybrid_protocol_files(input_root)
@@ -318,18 +384,21 @@ def main() -> int:
             hdf["source_csv"] = str(p)
             hybrid_frames.append(hdf)
         hybrid_df = pd.concat(hybrid_frames, ignore_index=True)
-        hybrid_csv = out_dir / "hybrid_execution_consolidated.csv"
+        hybrid_csv = csv_dir / "hybrid_execution_consolidated.csv"
         hybrid_df.to_csv(hybrid_csv, index=False)
         hybrid_best_df = _best_hybrid_rows(hybrid_df)
-        hybrid_best_csv = out_dir / "hybrid_execution_best_per_model.csv"
+        hybrid_best_csv = csv_dir / "hybrid_execution_best_per_model.csv"
         hybrid_best_df.to_csv(hybrid_best_csv, index=False)
 
     for model in sorted(full_df["model"].astype(str).unique().tolist()):
         _plot_model_objective_curves(full_df[full_df["model"] == model], model, out_dir)
 
-    _plot_best_improvements(best_df, out_dir)
+    _plot_model_comparisons(best_df, out_dir)
 
-    md_summary = out_dir / "ILP_RESULTS_SUMMARY.md"
+    md_dir = out_dir / "summary_docs"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    
+    md_summary = md_dir / "ILP_RESULTS_SUMMARY.md"
     _write_markdown_summary(full_df, best_df, md_summary, hybrid_best_df=hybrid_best_df)
 
     ablation_files = _find_ablation_files(input_root)
@@ -341,10 +410,10 @@ def main() -> int:
             ablation_frames.append(adf)
 
         ablation_df = pd.concat(ablation_frames, ignore_index=True)
-        ablation_csv = out_dir / "ilp_ablation_consolidated.csv"
+        ablation_csv = csv_dir / "ilp_ablation_consolidated.csv"
         ablation_df.to_csv(ablation_csv, index=False)
 
-        ablation_md = out_dir / "ILP_ABLATION_SUMMARY.md"
+        ablation_md = md_dir / "ILP_ABLATION_SUMMARY.md"
         _write_ablation_markdown_summary(ablation_df, ablation_md)
 
     sensitivity_files = _find_sensitivity_files(input_root)
@@ -356,23 +425,23 @@ def main() -> int:
             sens_frames.append(sdf)
 
         sensitivity_df = pd.concat(sens_frames, ignore_index=True)
-        sensitivity_csv = out_dir / "ilp_sensitivity_consolidated.csv"
+        sensitivity_csv = csv_dir / "ilp_sensitivity_consolidated.csv"
         sensitivity_df.to_csv(sensitivity_csv, index=False)
 
-        sensitivity_md = out_dir / "ILP_SENSITIVITY_SUMMARY.md"
+        sensitivity_md = md_dir / "ILP_SENSITIVITY_SUMMARY.md"
         _write_sensitivity_markdown_summary(sensitivity_df, sensitivity_md)
 
-    print("=" * 80)
+    print("================================================================================")
     print("ILP REPORT ASSETS GENERATED")
-    print("=" * 80)
+    print("================================================================================")
     print(f"Input Pareto files: {len(pareto_files)}")
     print(f"Consolidated CSV: {consolidated_csv}")
     print(f"Best-per-model CSV: {best_csv}")
     print(f"Markdown summary: {md_summary}")
     if hybrid_files:
         print(f"Hybrid protocol files: {len(hybrid_files)}")
-        print(f"Hybrid consolidated CSV: {out_dir / 'hybrid_execution_consolidated.csv'}")
-        print(f"Hybrid best-per-model CSV: {out_dir / 'hybrid_execution_best_per_model.csv'}")
+        print(f"Hybrid consolidated CSV: {csv_dir / 'hybrid_execution_consolidated.csv'}")
+        print(f"Hybrid best-per-model CSV: {csv_dir / 'hybrid_execution_best_per_model.csv'}")
     if ablation_files:
         print(f"Ablation files: {len(ablation_files)}")
         print(f"Ablation consolidated CSV: {out_dir / 'ilp_ablation_consolidated.csv'}")

@@ -86,6 +86,7 @@ def _solve_one(
     w_energy: float,
     w_transfer: float,
     w_fragmentation: float,
+    enforce_convex_weights: bool,
     backend: str,
 ) -> Dict[str, Any]:
     """Reload data with the given k_sigma and solve ILP."""
@@ -97,6 +98,7 @@ def _solve_one(
     cfg = ILPConfig(
         w_time=w_time,
         w_energy=w_energy,
+        enforce_convex_weights=enforce_convex_weights,
         w_transfer=w_transfer,
         w_fragmentation=w_fragmentation,
         gpu_mem_budget_mb=gpu_budget_mb,
@@ -118,6 +120,35 @@ def _safe_delta_pct(baseline: float, candidate: float) -> Optional[float]:
     if baseline in (float("inf"), float("-inf"), 0.0) or baseline != baseline:
         return None
     return round(((candidate - baseline) / abs(baseline)) * 100.0, 4)
+
+
+def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bool]:
+    regime = str(args.regime).strip().lower()
+    if regime not in {"deterministic", "diagnostic"}:
+        raise ValueError(f"Unsupported --regime value: {args.regime}")
+
+    if regime == "deterministic":
+        if args.allow_low_quality_stats:
+            raise ValueError("Deterministic regime does not allow --allow_low_quality_stats")
+        if args.allow_transfer_calibration_fallback:
+            raise ValueError("Deterministic regime does not allow --allow_transfer_calibration_fallback")
+        if args.allow_fallback_graph_trace:
+            raise ValueError("Deterministic regime does not allow --allow_fallback_graph_trace")
+        if not args.strict_graph_mapping:
+            raise ValueError("Deterministic regime requires --strict_graph_mapping")
+        if not args.strict_transfer_mapping:
+            raise ValueError("Deterministic regime requires --strict_transfer_mapping")
+
+    enforce_convex = bool(args.enforce_convex_weights or regime == "deterministic")
+    if enforce_convex:
+        weight_sum = float(args.w_time + args.w_energy)
+        if abs(weight_sum - 1.0) > 1e-9:
+            raise ValueError(
+                "Convex weighting required: w_time + w_energy must be 1.0; "
+                f"got {weight_sum} (w_time={args.w_time}, w_energy={args.w_energy})"
+            )
+
+    return regime, enforce_convex
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +177,7 @@ def run_sensitivity(
     strict_sample_quality: bool,
     strict_transfer_calibration: bool,
     strict_graph_trace_source: bool,
+    enforce_convex_weights: bool,
 ) -> pd.DataFrame:
     """Run OAT sensitivity for k_sigma and w_transfer, return tidy DataFrame."""
 
@@ -184,7 +216,7 @@ def run_sensitivity(
     for b in gpu_budgets_mb:
         res = _solve_one(
             baseline_data, b, cpu_mem_budget_mb,
-            baseline_k_sigma, baseline_w_time, baseline_w_energy, baseline_w_transfer, baseline_w_fragmentation, backend,
+            baseline_k_sigma, baseline_w_time, baseline_w_energy, baseline_w_transfer, baseline_w_fragmentation, enforce_convex_weights, backend,
         )
         rows.append({
             "model": model,
@@ -232,7 +264,7 @@ def run_sensitivity(
         for b in gpu_budgets_mb:
             res = _solve_one(
                 data_ks, b, cpu_mem_budget_mb,
-                ks, baseline_w_time, baseline_w_energy, baseline_w_transfer, baseline_w_fragmentation, backend,
+                ks, baseline_w_time, baseline_w_energy, baseline_w_transfer, baseline_w_fragmentation, enforce_convex_weights, backend,
             )
             base_val = baseline_obj.get(b, float("nan"))
             delta_abs = res["ilp_objective"] - base_val if base_val == base_val else float("nan")
@@ -273,7 +305,7 @@ def run_sensitivity(
         for b in gpu_budgets_mb:
             res = _solve_one(
                 baseline_data, b, cpu_mem_budget_mb,
-                baseline_k_sigma, baseline_w_time, baseline_w_energy, wt, baseline_w_fragmentation, backend,
+                baseline_k_sigma, baseline_w_time, baseline_w_energy, wt, baseline_w_fragmentation, enforce_convex_weights, backend,
             )
             base_val = baseline_obj.get(b, float("nan"))
             delta_abs = res["ilp_objective"] - base_val if base_val == base_val else float("nan")
@@ -324,12 +356,16 @@ def main() -> int:
     parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow sensitivity runs on metrics_stats.csv rows flagged as low quality (diagnostic only)")
     parser.add_argument("--allow_transfer_calibration_fallback", action="store_true", help="Allow sensitivity runs when transfer calibration fell back to neutral defaults (diagnostic only)")
     parser.add_argument("--allow_fallback_graph_trace", action="store_true", help="Allow sensitivity runs from fallback_leaf_modules graph traces (diagnostic only)")
+    parser.add_argument("--regime", choices=["deterministic", "diagnostic"], default="diagnostic")
+    parser.add_argument("--enforce_convex_weights", action="store_true", help="Require w_time + w_energy == 1")
     parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0)
     parser.add_argument("--output_csv", default=None)
     parser.add_argument("--output_json", default=None)
     args = parser.parse_args()
+
+    _, enforce_convex_weights = _resolve_regime_and_weight_policy(args)
 
     if args.config_dirs:
         config_dirs = [Path(p.strip()) for p in args.config_dirs.split(",") if p.strip()]
@@ -368,6 +404,7 @@ def main() -> int:
         strict_sample_quality=not args.allow_low_quality_stats,
         strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
         strict_graph_trace_source=not args.allow_fallback_graph_trace,
+        enforce_convex_weights=enforce_convex_weights,
     )
 
     base_config_dir = config_dirs[0]

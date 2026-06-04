@@ -11,6 +11,8 @@ from .advanced_terms import ActivationMetadata
 class ILPConfig:
     w_time: float = 1.0
     w_energy: float = 0.0
+    enforce_convex_weights: bool = False
+    convex_weight_tolerance: float = 1e-9
     w_transfer: float = 1.0
     w_fragmentation: float = 0.0
     w_congestion: float = 0.0
@@ -58,6 +60,13 @@ def validate_ilp_config(cfg: ILPConfig) -> None:
         raise ValueError(f"w_time must be >= 0, got {cfg.w_time}")
     if cfg.w_energy < 0:
         raise ValueError(f"w_energy must be >= 0, got {cfg.w_energy}")
+    if cfg.enforce_convex_weights:
+        weight_sum = float(cfg.w_time + cfg.w_energy)
+        if abs(weight_sum - 1.0) > float(cfg.convex_weight_tolerance):
+            raise ValueError(
+                "w_time + w_energy must be 1.0 when enforce_convex_weights=true; "
+                f"got {weight_sum} (w_time={cfg.w_time}, w_energy={cfg.w_energy})"
+            )
     if cfg.w_transfer < 0:
         raise ValueError(f"w_transfer must be >= 0, got {cfg.w_transfer}")
     if cfg.w_fragmentation < 0:

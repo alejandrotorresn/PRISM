@@ -51,6 +51,13 @@ case "$PROFILE" in
     : "${K_SIGMA:=1.0}"
     : "${GPU_BUDGETS_MB:=400,600,800,1000,1200}"
     : "${RUN_HYBRID:=true}"
+    : "${FAIL_FAST:=false}"
+    : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
+    : "${STRICT_GRAPH_MAPPING:=true}"
+    : "${STRICT_TRANSFER_MAPPING:=true}"
+    : "${ALLOW_LOW_QUALITY_STATS:=false}"
+    : "${ALLOW_TRANSFER_CALIBRATION_FALLBACK:=false}"
+    : "${ALLOW_FALLBACK_GRAPH_TRACE:=false}"
     ;;
   doctoral_full)
     : "${MODELS_CSV:=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small,distilgpt2}"
@@ -63,6 +70,32 @@ case "$PROFILE" in
     : "${K_SIGMA:=1.0}"
     : "${GPU_BUDGETS_MB:=300,400,600,800,1000,1200,1600,2000}"
     : "${RUN_HYBRID:=true}"
+    : "${FAIL_FAST:=false}"
+    : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
+    : "${STRICT_GRAPH_MAPPING:=true}"
+    : "${STRICT_TRANSFER_MAPPING:=true}"
+    : "${ALLOW_LOW_QUALITY_STATS:=false}"
+    : "${ALLOW_TRANSFER_CALIBRATION_FALLBACK:=false}"
+    : "${ALLOW_FALLBACK_GRAPH_TRACE:=false}"
+    ;;
+  doctoral_diagnostic)
+    : "${MODELS_CSV:=simple_mlp,resnet50,resnet152,vit_b16}"
+    : "${OPTIMIZERS_CSV:=SGD,AdamW}"
+    : "${PRECISIONS_CSV:=fp32}"
+    : "${BATCH_SIZES_CSV:=8,32,64}"
+    : "${REPEATS:=5}"
+    : "${WARMUP:=3}"
+    : "${MEASURE:=10}"
+    : "${K_SIGMA:=1.0}"
+    : "${GPU_BUDGETS_MB:=400,600,800,1000,1200}"
+    : "${RUN_HYBRID:=true}"
+    : "${FAIL_FAST:=false}"
+    : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
+    : "${STRICT_GRAPH_MAPPING:=false}"
+    : "${STRICT_TRANSFER_MAPPING:=false}"
+    : "${ALLOW_LOW_QUALITY_STATS:=true}"
+    : "${ALLOW_TRANSFER_CALIBRATION_FALLBACK:=true}"
+    : "${ALLOW_FALLBACK_GRAPH_TRACE:=true}"
     ;;
   quick_smoke)
     : "${MODELS_CSV:=simple_mlp}"
@@ -83,7 +116,7 @@ case "$PROFILE" in
   custom)
     ;;
   *)
-    echo "[ERROR] Unsupported PROFILE: $PROFILE (use custom|quick_smoke|doctoral_minimal|doctoral_full)" >&2
+    echo "[ERROR] Unsupported PROFILE: $PROFILE (use custom|quick_smoke|doctoral_minimal|doctoral_full|doctoral_diagnostic)" >&2
     exit 2
     ;;
 esac
@@ -103,13 +136,14 @@ FORCE_THREADS="${FORCE_THREADS:-0}"
 USE_SKIP_CPU="${USE_SKIP_CPU:-false}"
 ENABLE_RAPL="${ENABLE_RAPL:-true}"
 AUTO_AGGREGATE_STATS="${AUTO_AGGREGATE_STATS:-true}"
-FAIL_FAST="${FAIL_FAST:-true}"
+FAIL_FAST="${FAIL_FAST:-false}"
+ALLOW_PARTIAL_PROFILING_FAILURES="${ALLOW_PARTIAL_PROFILING_FAILURES:-true}"
 DRY_RUN="${DRY_RUN:-false}"
 
 # ILP controls
 K_SIGMA="${K_SIGMA:-1.0}"
-W_TIME="${W_TIME:-1.0}"
-W_ENERGY="${W_ENERGY:-0.0}"
+W_ENERGY="${W_ENERGY:-0.5}"
+W_TIME="${W_TIME:-0.5}"
 W_TRANSFER="${W_TRANSFER:-1.0}"
 BACKEND="${BACKEND:-auto}"
 HW_AGGREGATE="${HW_AGGREGATE:-max}"
@@ -124,11 +158,33 @@ STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
 ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
 ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
 ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
+REGIME="${REGIME:-diagnostic}"
+ENFORCE_CONVEX_WEIGHTS="${ENFORCE_CONVEX_WEIGHTS:-false}"
 
 # Single-replicate profiling naturally produces low_sample quality flags.
-# Keep ILP stages operational unless the caller explicitly requested strict mode.
-if [[ "$REPEATS" =~ ^[0-9]+$ ]] && [ "$REPEATS" -lt 2 ] && [ "${ALLOW_LOW_QUALITY_STATS:-false}" != "true" ]; then
-  ALLOW_LOW_QUALITY_STATS=true
+# Keep ILP stages operational only for non-official diagnostic/custom paths.
+if [[ "$REPEATS" =~ ^[0-9]+$ ]] && [ "$REPEATS" -lt 2 ]; then
+  if [ "$PROFILE" = "doctoral_minimal" ] || [ "$PROFILE" = "doctoral_full" ]; then
+    echo "[ERROR] PROFILE=$PROFILE requires REPEATS>=2 to preserve strict statistical quality." >&2
+    echo "[ERROR] Use PROFILE=doctoral_diagnostic (or custom) for exploratory low-replicate runs." >&2
+    exit 2
+  fi
+  if [ "${ALLOW_LOW_QUALITY_STATS:-false}" != "true" ]; then
+    ALLOW_LOW_QUALITY_STATS=true
+  fi
+fi
+
+if [ "$PROFILE" = "doctoral_minimal" ] || [ "$PROFILE" = "doctoral_full" ]; then
+  REGIME="deterministic"
+  ENFORCE_CONVEX_WEIGHTS=true
+  if [ "${ALLOW_LOW_QUALITY_STATS:-false}" = "true" ]; then
+    echo "[ERROR] PROFILE=$PROFILE does not allow ALLOW_LOW_QUALITY_STATS=true under strict official mode." >&2
+    exit 2
+  fi
+fi
+
+if [ "$PROFILE" = "doctoral_diagnostic" ]; then
+  : "${REGIME:=diagnostic}"
 fi
 
 # Orchestration toggles
@@ -148,9 +204,9 @@ HYBRID_EXECUTION_MODE="${HYBRID_EXECUTION_MODE:-auto}"
 HYBRID_PLAN_SELECTION="${HYBRID_PLAN_SELECTION:-pareto_best}"
 
 BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results_thesis_mode}"
-REPORTS_DIR="${REPORTS_DIR:-reports/ilp_results/${HOST_TAG}_thesis_mode}"
+REPORTS_DIR="${REPORTS_DIR:-reports/${HOST_TAG}/${PROFILE}}"
 LATEX_DIR="${LATEX_DIR:-${REPORTS_DIR}/latex}"
-LOG_DIR="${LOG_DIR:-logs}"
+LOG_DIR="${LOG_DIR:-logs/${HOST_TAG}/thesis_mode}"
 LOG_FILE="${LOG_DIR}/thesis_mode_$(date +%Y%m%d_%H%M%S).txt"
 
 mkdir -p "$BASE_OUTPUT_DIR" "$REPORTS_DIR" "$LATEX_DIR" "$LOG_DIR"
@@ -337,8 +393,18 @@ log_msg "PRECISIONS_CSV=$PRECISIONS_CSV"
 log_msg "BATCH_SIZES_CSV=$BATCH_SIZES_CSV"
 log_msg "REPEATS=$REPEATS"
 log_msg "WARMUP=$WARMUP MEASURE=$MEASURE"
+log_msg "FAIL_FAST=$FAIL_FAST"
+if [ "$ALLOW_PARTIAL_PROFILING_FAILURES" = true ]; then
+  log_msg "ALLOW_PARTIAL_PROFILING_FAILURES=true"
+fi
 if [ "$ALLOW_LOW_QUALITY_STATS" = true ]; then
   log_msg "ALLOW_LOW_QUALITY_STATS=true"
+fi
+if [ "$ALLOW_TRANSFER_CALIBRATION_FALLBACK" = true ]; then
+  log_msg "ALLOW_TRANSFER_CALIBRATION_FALLBACK=true"
+fi
+if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
+  log_msg "ALLOW_FALLBACK_GRAPH_TRACE=true"
 fi
 log_msg "DRY_RUN=$DRY_RUN"
 
@@ -370,6 +436,7 @@ if is_true "$RUN_PROFILING"; then
   ENABLE_RAPL="$ENABLE_RAPL" \
   AUTO_AGGREGATE_STATS="$AUTO_AGGREGATE_STATS" \
   FAIL_FAST="$FAIL_FAST" \
+  ALLOW_PARTIAL_FAILURES="$ALLOW_PARTIAL_PROFILING_FAILURES" \
   DRY_RUN="$DRY_RUN" \
   bash scripts/run_experiments.sh >> "$LOG_FILE" 2>&1
   log_msg "Profiling campaign finished"
@@ -407,12 +474,17 @@ if is_true "$RUN_ILP"; then
       BACKEND="$BACKEND" \
       HW_AGGREGATE="$HW_AGGREGATE" \
       HW_DISPERSION_K="$HW_DISPERSION_K" \
+      REGIME="$REGIME" \
+      ENFORCE_CONVEX_WEIGHTS="$ENFORCE_CONVEX_WEIGHTS" \
       STRICT_GRAPH_MAPPING="$STRICT_GRAPH_MAPPING" \
       STRICT_TRANSFER_MAPPING="$STRICT_TRANSFER_MAPPING" \
       ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
       ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
       ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
-      bash scripts/run_ilp_partition.sh >> "$LOG_FILE" 2>&1
+      bash scripts/run_ilp_partition.sh >> "$LOG_FILE" 2>&1 || {
+        log_msg "[WARN] ILP partition failed for $cfg. See log for details. Skipping Pareto..."
+        continue
+      }
 
       log_msg "Pareto sweep -> model=$model cfg=$cfg"
       MODEL="$model" \
@@ -429,12 +501,17 @@ if is_true "$RUN_ILP"; then
       BACKEND="$BACKEND" \
       HW_AGGREGATE="$HW_AGGREGATE" \
       HW_DISPERSION_K="$HW_DISPERSION_K" \
+      REGIME="$REGIME" \
+      ENFORCE_CONVEX_WEIGHTS="$ENFORCE_CONVEX_WEIGHTS" \
       STRICT_GRAPH_MAPPING="$STRICT_GRAPH_MAPPING" \
       STRICT_TRANSFER_MAPPING="$STRICT_TRANSFER_MAPPING" \
       ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
       ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
       ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
-      bash scripts/run_ilp_pareto_sweep.sh >> "$LOG_FILE" 2>&1
+      bash scripts/run_ilp_pareto_sweep.sh >> "$LOG_FILE" 2>&1 || {
+        log_msg "[WARN] Pareto sweep failed for $cfg. See log for details. Continuing..."
+        continue
+      }
     done
   fi
 
@@ -518,12 +595,17 @@ PY
           HW_AGGREGATE="$HW_AGGREGATE" \
           HW_DISPERSION_K="$HW_DISPERSION_K" \
           OUT_DIR="$hybrid_plan_source" \
+          REGIME="$REGIME" \
+          ENFORCE_CONVEX_WEIGHTS="$ENFORCE_CONVEX_WEIGHTS" \
           STRICT_GRAPH_MAPPING="$STRICT_GRAPH_MAPPING" \
           STRICT_TRANSFER_MAPPING="$STRICT_TRANSFER_MAPPING" \
           ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
           ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
           ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
-          bash scripts/run_ilp_partition.sh >> "$LOG_FILE" 2>&1
+          bash scripts/run_ilp_partition.sh >> "$LOG_FILE" 2>&1 || {
+            log_msg "[WARN] Materialization of Pareto-best hybrid plan failed for $cfg. Continuing..."
+            continue
+          }
         fi
       else
         log_msg "Pareto-best selection unavailable for cfg=$cfg; falling back to default ilp_solution"
@@ -578,7 +660,10 @@ PY
       --output_dir "$hybrid_output_dir" \
         "${HYBRID_PLAN_FLAGS[@]}" \
       "${HYBRID_FLAGS[@]}" \
-      >> "$LOG_FILE" 2>&1
+      >> "$LOG_FILE" 2>&1 || {
+        log_msg "[WARN] Hybrid execution failed for $cfg. See log for details. Continuing..."
+        continue
+      }
   done
 
   log_msg "Hybrid runtime stage finished"
@@ -602,11 +687,36 @@ if is_true "$RUN_REPORTS"; then
   bash scripts/generate_ilp_report_assets.sh >> "$LOG_FILE" 2>&1
 
   PYTHON_CMD="$PYTHON_CMD" \
-  BEST_CSV="$REPORTS_DIR/ilp_best_per_model.csv" \
-  CONSOLIDATED_CSV="$REPORTS_DIR/ilp_pareto_consolidated.csv" \
-  HYBRID_CSV="$REPORTS_DIR/hybrid_execution_best_per_model.csv" \
+  BEST_CSV="$REPORTS_DIR/csv/ilp_best_per_model.csv" \
+  CONSOLIDATED_CSV="$REPORTS_DIR/csv/ilp_pareto_consolidated.csv" \
+  HYBRID_CSV="$REPORTS_DIR/csv/hybrid_execution_best_per_model.csv" \
   OUT_DIR="$LATEX_DIR" \
   bash scripts/export_ilp_tables_latex.sh >> "$LOG_FILE" 2>&1
+
+  log_msg "Generating advanced analytics plots..."
+  "$PYTHON_CMD" validation/generate_advanced_thesis_plots.py \
+    --input_root "$REPORT_INPUT_ROOT" \
+    --output_dir "$REPORTS_DIR/plots" \
+    --ilp_pareto_csv "$REPORTS_DIR/csv/ilp_pareto_consolidated.csv" \
+    --hybrid_csv "$REPORTS_DIR/csv/hybrid_execution_best_per_model.csv" >> "$LOG_FILE" 2>&1
+
+  PYTHON_CMD="$PYTHON_CMD" \
+  INPUT_ROOT="$REPORT_INPUT_ROOT" \
+  OUTPUT_DIR="$REPORTS_DIR/grid_audit" \
+  EXPECTED_MODELS_CSV="$MODELS_CSV" \
+  EXPECTED_OPTIMIZERS_CSV="$OPTIMIZERS_CSV" \
+  EXPECTED_PRECISIONS_CSV="$PRECISIONS_CSV" \
+  EXPECTED_BATCHES_CSV="$BATCH_SIZES_CSV" \
+  EXPECTED_REPEATS="$REPEATS" \
+  LOGS_ROOT="logs" \
+  REQUIRE_HYBRID="$RUN_HYBRID" \
+  bash scripts/audit_experimental_grid.sh >> "$LOG_FILE" 2>&1
+
+  # Move the markdown summary to summary_docs/ where it belongs
+  if [ -f "$REPORTS_DIR/grid_audit/GRID_AUDIT_SUMMARY.md" ]; then
+    mkdir -p "$REPORTS_DIR/summary_docs"
+    mv "$REPORTS_DIR/grid_audit/GRID_AUDIT_SUMMARY.md" "$REPORTS_DIR/summary_docs/"
+  fi
 
   cat > "$REPORTS_DIR/THESIS_MODE_PROTOCOL_CHECKLIST.md" <<EOF
 # Thesis Mode Protocol Checklist
@@ -618,6 +728,7 @@ This run executed the project-wide thesis mode orchestration.
 - Reports: $REPORTS_DIR
 - LaTeX: $LATEX_DIR
 - Log: $LOG_FILE
+- Grid audit: $REPORTS_DIR/grid_audit
 
 ## Automatically covered by script
 - Profiling campaign grid
@@ -625,6 +736,7 @@ This run executed the project-wide thesis mode orchestration.
 - ILP partition and Pareto sweep per config
 - Consolidated report assets and LaTeX tables
 - Optional hybrid runtime traces aligned to $HYBRID_PLAN_SELECTION plans (FX and export-backed DAG paths when supported)
+- Grid audit outputs: completeness by configuration, failed configurations with probable cause, and doctoral-readiness flag
 
 ## Must still be validated explicitly (doctoral criteria)
 - Final model quality metrics (accuracy/loss/AUC) vs baselines in target tasks

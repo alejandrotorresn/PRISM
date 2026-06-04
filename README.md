@@ -1,10 +1,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
-[![PyTorch 2.1+](https://img.shields.io/badge/PyTorch-2.1%2B-red)](https://pytorch.org)
+[![PyTorch 2.5.x](https://img.shields.io/badge/PyTorch-2.5.x-red)](https://pytorch.org)
 
 # PRISM
 
-*Partitioning and Resource Intelligence for System Memory*  
+*Partitioning and Routing via ILP for Scalable Memory*  
 *A Hybrid CPU-GPU Training Optimization Framework Guided by Profiling and ILP*
 
 Research code for a complete pipeline that measures deep learning training costs, builds robust Integer Linear Programming partition models, and validates hybrid CPU-GPU execution strategies aimed at reducing GPU VRAM pressure while making the CPU an active participant in training.
@@ -17,7 +17,8 @@ PRISM is organized as an end-to-end system, not as a standalone profiler. Its co
 - robust statistical aggregation across replicas and across heterogeneous servers
 - ILP-based partitioning under latency, memory, energy, and transfer constraints
 - simulation and hybrid runtime validation of the generated plans
-- report generation and thesis-ready artifacts
+- analytical estimation of GPU constraints for OOM (Out-of-Memory) models using structural CPU profiling and empirical TFLOPS
+- thesis-ready report generation featuring Top-K bottleneck horizontal charting and clean continuous Pareto curves
 
 The practical question addressed by PRISM is simple: how to decide which parts of a model should remain on GPU and which can be moved to CPU without treating the CPU as a passive fallback, but rather as an active computational actor in training.
 
@@ -90,6 +91,28 @@ bash scripts/run_experiments.sh
 bash scripts/run_thesis_smoke_workflow.sh
 ```
 
+### Thesis mode profiles
+
+`scripts/run_thesis_mode.sh` supports the following profiles:
+
+- `doctoral_minimal`: official strict doctoral profile (core evidence).
+- `doctoral_full`: official strict doctoral profile with broader campaign scope.
+- `doctoral_diagnostic`: fallback-enabled diagnostic profile for troubleshooting only.
+- `quick_smoke`: minimal operational smoke path.
+
+### OOM Hard-Crash Handling
+For architectures that exceed physical VRAM and cause hard system crashes during empirical profiling, PRISM provides an **Analytical Estimation Regime**:
+1. Run the profiler with `--no_gpu` to safely trace the structural execution graph and tensor dimensions on CPU.
+2. PRISM automatically projects the missing GPU metrics (latency and energy) based on measured CPU FLOPs and the host's empirically benchmarked GPU TFLOPS.
+3. The ILP partitioner seamlessly accepts these projections for robust simulation.
+- `custom`: fully explicit manual configuration.
+
+Example:
+
+```bash
+PROFILE=doctoral_diagnostic RUN_HYBRID=true bash scripts/run_thesis_mode.sh
+```
+
 ### Single ILP solve from existing artifacts
 
 ```bash
@@ -107,6 +130,14 @@ python validation/sweep_ilp_pareto.py \
   --gpu_budgets_mb 400,600,800,1000
 ```
 
+### Grid Audit (Post-Collection)
+
+`scripts/generate_grid_audit.py` is an operational auditing tool designed to evaluate the completeness of the executed grid across all servers. **This script should only be executed after all data from all execution nodes has been collected and consolidated in the `data/` directory.** It generates a comprehensive markdown report (`GRID_AUDIT_SUMMARY.md`) showing the readiness of the data for inclusion in the thesis chapters, but this report itself is not meant to be included in the academic manuscript.
+
+```bash
+python scripts/generate_grid_audit.py --input_root data/
+```
+
 ### Server preflight before real collection
 
 ```bash
@@ -115,6 +146,97 @@ SMOKE_MODE=true \
 DRY_RUN=true \
 FAIL_FAST=true \
 bash scripts/run_experiments.sh
+```
+
+### External server preflight (for Grid5000 or similar)
+
+Before consuming a reservation on a new server, run a strict preflight on a fresh clone and a fresh environment.
+
+```bash
+git clone <repo-url>
+cd <repo-folder>
+conda env create -f config/environment.yml
+conda activate prism_env
+
+# Verify CBC executable is present and callable
+which cbc && cbc -stop
+
+# Verify PuLP can see a CBC backend
+python - <<'PY'
+import pulp
+print('PuLP:', pulp.__version__)
+print('CBC available:', pulp.COIN_CMD().available())
+PY
+```
+
+If `cbc` is not found, install it in the same environment before launching campaigns:
+
+```bash
+conda install -n prism_env -c conda-forge coin-or-cbc
+```
+
+This project is fail-fast by design in strict modes. If CBC is missing on the target server, ILP stages can fail and you may lose reserved execution time.
+
+For profiling campaigns, OOM handling is controlled independently from `FAIL_FAST`:
+
+- `OOM_SKIP_CONFIGS=true` (default): when a configuration exhausts OOM retries, the campaign marks that batch configuration as skipped (`oom_skipped_config.json`) and continues.
+- `OOM_SKIP_CONFIGS=false`: OOM behaves as a normal failure and `FAIL_FAST=true` aborts immediately.
+
+Example (strict abort also on OOM):
+
+```bash
+FAIL_FAST=true OOM_SKIP_CONFIGS=false bash scripts/run_experiments.sh
+```
+
+### RAPL permissions and expected warnings
+
+CPU energy capture via RAPL requires kernel and filesystem permissions on the host. On many shared HPC systems, direct access to `/sys/class/powercap/.../energy_uj` is denied to regular users.
+
+1) Check whether RAPL is available and readable for your current user:
+
+```bash
+# Use -L because /sys/class/powercap entries are usually symlinks in sysfs.
+RAPL_FILES="$(find -L /sys/class/powercap -type f -name energy_uj 2>/dev/null)"
+if [ -z "$RAPL_FILES" ]; then
+  echo "RAPL not available on this host"
+else
+  echo "RAPL files detected:" && echo "$RAPL_FILES"
+  for f in $RAPL_FILES; do
+    [ -r "$f" ] && echo "OK   $f" || echo "NOPE $f"
+  done
+fi
+```
+
+2) If files exist but are not readable, use a temporary chmod fix for the current boot (requires root):
+
+```bash
+sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj /sys/class/powercap/intel-rapl:*/intel-rapl:*/energy_uj
+sudo chmod a+r /sys/class/powercap/intel-rapl:*/max_energy_range_uj /sys/class/powercap/intel-rapl:*/intel-rapl:*/max_energy_range_uj
+```
+
+3) For a permanent solution across reboots, create an udev rule (recommended on Fedora and Rocky Linux):
+
+```bash
+sudo tee /etc/udev/rules.d/99-powercap.rules >/dev/null <<'EOF'
+SUBSYSTEM=="powercap", RUN+="/bin/chmod 444 /sys/class/powercap/%k/energy_uj /sys/class/powercap/%k/max_energy_range_uj"
+EOF
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=powercap
+```
+
+4) Re-run the check command above. If permission is still unavailable and you do not have root control on the node, run with RAPL disabled:
+
+```bash
+ENABLE_RAPL=false PROFILE=doctoral_minimal bash scripts/run_thesis_mode.sh
+```
+
+Note: ACL-based approaches (for example `setfacl`) can fail on sysfs with `Operation not supported`, because sysfs is a virtual kernel filesystem and may not expose ACL/xattr semantics like a regular disk filesystem.
+
+If RAPL remains unavailable, warnings such as the following are expected and non-fatal:
+
+```text
+pyRAPL Init failed: [Errno 13] Permission denied: '/sys/class/powercap/.../energy_uj'
 ```
 
 ## Supported Models
@@ -142,9 +264,9 @@ All production data remains host-scoped under `data/<hostname>/...` so that hete
 ├── config/         # Environment and dependency definitions
 ├── data/           # Host-scoped experiment outputs and validation fixtures
 ├── datasets/       # Persisted datasets used by profiling and runtime
-├── docs/           # Technical, operational, and thesis-support documentation
-├── logs/           # Execution logs
-├── reports/        # ILP outputs and thesis-ready report assets
+├── docs/           # Documentation index plus architecture/, operations/, thesis/, archive/
+├── logs/           # Execution logs grouped by workflow plus archive/
+├── reports/        # Canonical ILP outputs, thesis figures, and diagnostics/
 ├── scripts/        # Orchestration entrypoints
 ├── src/            # Profiling, ILP, runtime, and dataset integration code
 ├── tests/          # Pytest suite
@@ -154,7 +276,7 @@ All production data remains host-scoped under `data/<hostname>/...` so that hete
 └── README.md       # This overview
 ```
 
-For the structural map of responsibilities, see [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md).
+For the structural map of responsibilities, see [docs/architecture/PROJECT_STRUCTURE.md](docs/architecture/PROJECT_STRUCTURE.md).
 
 ## Documentation Map
 
@@ -162,22 +284,22 @@ The documentation set was reduced so the core references now have distinct respo
 
 | Document | Role |
 |----------|------|
-| [docs/README.md](docs/README.md) | Short operational guide |
-| [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) | Structural map of the repository |
-| [docs/GLOBAL_PROJECT_DOCUMENTATION.md](docs/GLOBAL_PROJECT_DOCUMENTATION.md) | Canonical technical reference in English |
-| [docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md](docs/GLOBAL_PROJECT_DOCUMENTATION_ES.md) | Canonical technical reference in academic Spanish |
-| [docs/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](docs/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Master protocol for real multi-server data collection, Go/No-Go criteria, and operational closure |
-| [docs/SERVER_LAUNCH_PROFILES.md](docs/SERVER_LAUNCH_PROFILES.md) | Launch profiles by server class |
-| [docs/MULTI_NODE_ILP_RUNBOOK.md](docs/MULTI_NODE_ILP_RUNBOOK.md) | Multi-host discovery, merge, and solve workflow |
-| [docs/CAPITULO_TESIS_PROFILING_ES.md](docs/CAPITULO_TESIS_PROFILING_ES.md) | Monographic chapter on profiling methodology |
-| [docs/CAPITULO_TESIS_ILP_ES.md](docs/CAPITULO_TESIS_ILP_ES.md) | Monographic chapter on ILP formulation and validation |
-| [docs/schema.md](docs/schema.md) | Writing map for the doctoral manuscript |
-| [docs/QUICK_START.sh](docs/QUICK_START.sh) | Shell helper that prints frequent commands |
+| [docs/README.md](docs/README.md) | Main documentation index and navigation guide |
+| [docs/architecture/PROJECT_STRUCTURE.md](docs/architecture/PROJECT_STRUCTURE.md) | Structural map of the repository |
+| [docs/architecture/GLOBAL_PROJECT_DOCUMENTATION.md](docs/architecture/GLOBAL_PROJECT_DOCUMENTATION.md) | Canonical technical reference in English |
+| [docs/architecture/GLOBAL_PROJECT_DOCUMENTATION_ES.md](docs/architecture/GLOBAL_PROJECT_DOCUMENTATION_ES.md) | Canonical technical reference in academic Spanish |
+| [docs/operations/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](docs/operations/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Master protocol for real multi-server data collection, Go/No-Go criteria, and operational closure |
+| [docs/operations/SERVER_LAUNCH_PROFILES.md](docs/operations/SERVER_LAUNCH_PROFILES.md) | Launch profiles by server class |
+| [docs/operations/MULTI_NODE_ILP_RUNBOOK.md](docs/operations/MULTI_NODE_ILP_RUNBOOK.md) | Multi-host discovery, merge, and solve workflow |
+| [docs/thesis/CAPITULO_TESIS_PROFILING_ES.md](docs/thesis/CAPITULO_TESIS_PROFILING_ES.md) | Monographic chapter on profiling methodology |
+| [docs/thesis/CAPITULO_TESIS_ILP_ES.md](docs/thesis/CAPITULO_TESIS_ILP_ES.md) | Monographic chapter on ILP formulation and validation |
+| [docs/thesis/schema.md](docs/thesis/schema.md) | Writing map for the doctoral manuscript |
+| [docs/operations/QUICK_START.sh](docs/operations/QUICK_START.sh) | Shell helper that prints frequent commands |
 
 ## System Requirements
 
 - Python 3.10 or higher
-- PyTorch 2.1.0 or higher
+- PyTorch 2.5.x (validated baseline from config/environment.yml)
 - CUDA 12.1 or higher for GPU execution
 - NVIDIA GPU with NVML support for GPU energy monitoring
 - Linux with RAPL support if CPU energy capture is required
@@ -188,7 +310,7 @@ If you use PRISM in academic work, cite it as thesis code supporting the doctora
 
 ```bibtex
 @misc{torres2026prism,
-  title={PRISM: Partitioning and Resource Intelligence for System Memory},
+  title={PRISM: Partitioning and Routing via ILP for Scalable Memory},
   author={Torres, Luis Alejandro},
   year={2026},
   howpublished={\url{https://github.com/alejandrotorresn/PRISM}},
@@ -210,4 +332,4 @@ GitHub: @alejandrotorresn
 
 For detailed command semantics, artifact schemas, or deployment guidance, continue from [docs/README.md](docs/README.md).
 
-*Last Updated*: April 11, 2026
+*Last Updated*: June 2, 2026

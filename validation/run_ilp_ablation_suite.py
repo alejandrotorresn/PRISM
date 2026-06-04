@@ -168,6 +168,35 @@ def _solve_variant(data: Any, cfg: Any, backend: str) -> Dict[str, Any]:
     }
 
 
+def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bool]:
+    regime = str(args.regime).strip().lower()
+    if regime not in {"deterministic", "diagnostic"}:
+        raise ValueError(f"Unsupported --regime value: {args.regime}")
+
+    if regime == "deterministic":
+        if args.allow_low_quality_stats:
+            raise ValueError("Deterministic regime does not allow --allow_low_quality_stats")
+        if args.allow_transfer_calibration_fallback:
+            raise ValueError("Deterministic regime does not allow --allow_transfer_calibration_fallback")
+        if args.allow_fallback_graph_trace:
+            raise ValueError("Deterministic regime does not allow --allow_fallback_graph_trace")
+        if not args.strict_graph_mapping:
+            raise ValueError("Deterministic regime requires --strict_graph_mapping")
+        if not args.strict_transfer_mapping:
+            raise ValueError("Deterministic regime requires --strict_transfer_mapping")
+
+    enforce_convex = bool(args.enforce_convex_weights or regime == "deterministic")
+    if enforce_convex:
+        weight_sum = float(args.w_time + args.w_energy)
+        if abs(weight_sum - 1.0) > 1e-9:
+            raise ValueError(
+                "Convex weighting required: w_time + w_energy must be 1.0; "
+                f"got {weight_sum} (w_time={args.w_time}, w_energy={args.w_energy})"
+            )
+
+    return regime, enforce_convex
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run ILP ablation suite for one model and multiple GPU budgets")
     parser.add_argument("--config_dir", default=None)
@@ -192,7 +221,11 @@ def main() -> int:
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0)
     parser.add_argument("--output_csv", default=None)
     parser.add_argument("--output_json", default=None)
+    parser.add_argument("--regime", choices=["deterministic", "diagnostic"], default="diagnostic")
+    parser.add_argument("--enforce_convex_weights", action="store_true", help="Require w_time + w_energy == 1")
     args = parser.parse_args()
+
+    regime, enforce_convex_weights = _resolve_regime_and_weight_policy(args)
 
     config_dirs: List[Path]
     if args.config_dirs:
@@ -252,6 +285,7 @@ def main() -> int:
         cfg = ILPConfig(
             w_time=args.w_time,
             w_energy=args.w_energy,
+            enforce_convex_weights=enforce_convex_weights,
             w_transfer=args.w_transfer,
             w_fragmentation=args.w_fragmentation,
             gpu_mem_budget_mb=b,
@@ -298,6 +332,8 @@ def main() -> int:
         "rows": int(len(out_df)),
         "variants": list(variant_data.keys()),
         "gpu_budgets_mb": budgets,
+        "regime": regime,
+        "enforce_convex_weights": enforce_convex_weights,
         "output_csv": str(out_csv),
     }
 

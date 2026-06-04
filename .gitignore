@@ -27,13 +27,14 @@ Desktop.ini
 
 # Logs
 *.log
-logs/
+logs/*
+!logs/README.md
 experiments_logs/
 
 # Generated host/run report artifacts
-reports/ilp_results/zephyr_*/
-reports/ilp_nextgen_audit*/
-reports/AUDITORIA_COMPLETA_PROYECTO_TESIS_ES.md
+reports/*/
+reports/*.md
+reports/*.tsv
 
 # Local research artifacts (not source code)
 audios/
@@ -43,6 +44,7 @@ paper_thesis/
 final_thesis/
 thesis/
 docs/*.pdf
+docs/archive/reference_material/*.pdf
 
 # IDE settings
 .vscode/

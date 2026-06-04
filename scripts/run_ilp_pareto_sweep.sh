@@ -25,6 +25,8 @@ HW_AGGREGATE="${HW_AGGREGATE:-max}"
 HW_DISPERSION_K="${HW_DISPERSION_K:-0.0}"
 OUT_CSV="${OUT_CSV:-${CONFIG_DIR}/${MODEL}_pareto_sweep.csv}"
 OUT_JSON="${OUT_JSON:-${CONFIG_DIR}/${MODEL}_pareto_summary.json}"
+REGIME="${REGIME:-diagnostic}"
+ENFORCE_CONVEX_WEIGHTS="${ENFORCE_CONVEX_WEIGHTS:-false}"
 STRICT_GRAPH_MAPPING="${STRICT_GRAPH_MAPPING:-true}"
 STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
 ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
@@ -47,6 +49,9 @@ fi
 if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
   STRICT_FLAGS+=(--allow_fallback_graph_trace)
 fi
+if [ "$ENFORCE_CONVEX_WEIGHTS" = true ]; then
+  STRICT_FLAGS+=(--enforce_convex_weights)
+fi
 
 CONFIG_FLAGS=(--config_dir "$CONFIG_DIR")
 if [ -n "$CONFIG_DIRS" ]; then
@@ -56,6 +61,7 @@ fi
 "$PYTHON_CMD" validation/sweep_ilp_pareto.py \
   "${CONFIG_FLAGS[@]}" \
   --model "$MODEL" \
+  --regime "$REGIME" \
   --gpu_budgets_mb "$GPU_BUDGETS_MB" \
   --cpu_mem_budget_mb "$CPU_MEM_BUDGET_MB" \
   --memory_model "$MEMORY_MODEL" \

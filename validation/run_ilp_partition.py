@@ -44,6 +44,35 @@ def _default_paths(config_dir: Path, model_name: str):
     return stats, graph_edges, transfer_edges
 
 
+def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bool]:
+    regime = str(args.regime).strip().lower()
+    if regime not in {"deterministic", "diagnostic"}:
+        raise ValueError(f"Unsupported --regime value: {args.regime}")
+
+    if regime == "deterministic":
+        if args.allow_low_quality_stats:
+            raise ValueError("Deterministic regime does not allow --allow_low_quality_stats")
+        if args.allow_transfer_calibration_fallback:
+            raise ValueError("Deterministic regime does not allow --allow_transfer_calibration_fallback")
+        if args.allow_fallback_graph_trace:
+            raise ValueError("Deterministic regime does not allow --allow_fallback_graph_trace")
+        if not args.strict_graph_mapping:
+            raise ValueError("Deterministic regime requires --strict_graph_mapping")
+        if not args.strict_transfer_mapping:
+            raise ValueError("Deterministic regime requires --strict_transfer_mapping")
+
+    enforce_convex = bool(args.enforce_convex_weights or regime == "deterministic")
+    if enforce_convex:
+        weight_sum = float(args.w_time + args.w_energy)
+        if abs(weight_sum - 1.0) > 1e-9:
+            raise ValueError(
+                "Convex weighting required: w_time + w_energy must be 1.0; "
+                f"got {weight_sum} (w_time={args.w_time}, w_energy={args.w_energy})"
+            )
+
+    return regime, enforce_convex
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Solve robust CPU/GPU layer partitioning ILP")
     parser.add_argument("--config_dir", default=None, help="Path to batch directory containing run_* and metrics_stats")
@@ -88,7 +117,11 @@ def main() -> int:
     parser.add_argument("--simulate_mode", choices=["robust", "nominal"], default="robust")
     parser.add_argument("--strict_graph_subset", action="store_true")
     parser.add_argument("--strict_topology", action="store_true")
+    parser.add_argument("--regime", choices=["deterministic", "diagnostic"], default="diagnostic")
+    parser.add_argument("--enforce_convex_weights", action="store_true", help="Require w_time + w_energy == 1")
     args = parser.parse_args()
+
+    regime, enforce_convex_weights = _resolve_regime_and_weight_policy(args)
 
     load_execution_plan = None
     infer_ilp_input_paths = None
@@ -139,6 +172,7 @@ def main() -> int:
             strict_sample_quality=not args.allow_low_quality_stats,
             strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
             strict_graph_trace_source=not args.allow_fallback_graph_trace,
+            strict_metric_validity=False,
         )
     else:
         profiles = []
@@ -156,6 +190,7 @@ def main() -> int:
                 strict_sample_quality=not args.allow_low_quality_stats,
                 strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
                 strict_graph_trace_source=not args.allow_fallback_graph_trace,
+                strict_metric_validity=False,
             )
             profiles.append(profile)
 
@@ -179,6 +214,7 @@ def main() -> int:
         cfg4 = ILPConfig4(
             w_time=args.w_time,
             w_energy=args.w_energy,
+            enforce_convex_weights=enforce_convex_weights,
             w_transfer=args.w_transfer,
             w_fragmentation=args.w_fragmentation,
             w_congestion=args.w_congestion,
@@ -198,6 +234,7 @@ def main() -> int:
         cfg = ILPConfig(
             w_time=args.w_time,
             w_energy=args.w_energy,
+            enforce_convex_weights=enforce_convex_weights,
             w_transfer=args.w_transfer,
             w_fragmentation=args.w_fragmentation,
             w_congestion=args.w_congestion,
@@ -213,6 +250,7 @@ def main() -> int:
         refine_cfg = ILPConfig(
             w_time=args.w_time,
             w_energy=args.w_energy,
+            enforce_convex_weights=enforce_convex_weights,
             w_transfer=args.w_transfer,
             w_fragmentation=args.w_fragmentation,
             gpu_mem_budget_mb=args.gpu_mem_budget_mb,
@@ -239,6 +277,8 @@ def main() -> int:
     print(f"Layers assigned: {len(sol.assignment)}")
     print(f"Cut edges: {len(sol.cut_edges)}")
     print(f"Fragmentation regularizer: {args.w_fragmentation}")
+    print(f"Regime: {regime}")
+    print(f"Convex time/energy weights enforced: {enforce_convex_weights}")
     print(f"Memory model: {args.memory_model} (peak_activation_overlap={args.peak_activation_overlap})")
     print(f"Congestion term: w_congestion={args.w_congestion}, knee_ms={args.congestion_knee_ms} (0=auto)")
     if args.local_refine_budget > 0:

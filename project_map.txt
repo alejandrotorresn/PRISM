@@ -1,0 +1,464 @@
+.
+├── books
+│   ├── Björn-Andrist-Viktor-Sehr-C-High-Performance-Packt-2020 -- Björn-Andrist, Viktor-Sehr -- Second edition, Birmingham ; Mumbai, 2020 -- Packt -- 9781839216541 -- 88256e374ee68de26a0192df95895016 -- Anna’s Archive.pdf
+│   ├── C++ Memory Management_ Write leaner and safer C++ code using -- Joseph Babcock, Raghav Bali -- 1, 2025 -- Packt Publishing Limited -- 9781805129806 -- 18ed8748d47cb0e41e7435a12dae4643 -- Anna’s Archive.pdf
+│   ├── Computer Science An Overview 13th Ed.pdf
+│   ├── Deep Learning with Python, Third Edition -- Francois Chollet, Matthew Watson -- 3, 2026 -- Manning Publications Co_ LLC -- 9781633436589 -- 4a643a428be920ee02f353570d7712ca -- Anna’s Archive.pdf
+│   ├── Demystified Object-Oriented Programming with C++ _ Implement -- Dorothy R_ Kirk -- 1st edition, Erscheinungsort nicht ermittelbar, 2021 -- PACKT -- 9781839213540 -- dc89ef6dbb082852fcd8ca0994dcd6f7 -- Anna’s Archive.pdf
+│   ├── desktop.ini
+│   ├── Foundations of Deep Learning (Machine Learning_ Foundations, -- Fengxiang He, Dacheng Tao -- Machine Learning_ Foundations, Methodologies, and -- 9789811682322 -- a998b32e48a46e1f22aafcc0e296fb80 -- Anna’s Archive.pdf
+│   ├── GPU Programming with C++ and CUDA_ Uncover effective -- Paulo Motta -- 1, 2025 -- Packt Publishing - ebooks Account -- 9781805124542 -- 882aa3fc1b9d94fb9b52fee8a1e7c10f -- Anna’s Archive.pdf
+│   ├── Guide To Scientific Computing In C++ 2017.pdf
+│   ├── Introducción a la Programación Lineal -- Maria del Carmen Hernández Ayuso -- 2018-01-31 -- Universidad Nacional Autónoma de México -- 9786073001472 -- 57bf7a46adbb8a471ca009b92dc0c483 -- Anna’s Archive.pdf
+│   ├── Introduction To Deep Learning 2018.pdf
+│   ├── Investigación de operaciones I _ programación lineal -- Raymundo Palacios Figueroa -- México ; Buenos Aires, 2017 -- ALFAOMEGA GRUPO EDITOR -- 9786076227534 -- 0f28c823824bb06716ca1ea71e7cc187 -- Anna’s Archive.pdf
+│   ├── Learning Deep Learning Theory and Practice of Neural Networks, Computer Vision, Natural Language Processing, and Transformers... (Magnus Ekman) (z-lib.org).pdf
+│   ├── Linear And Non linear Programming 2016.pdf
+│   ├── Mastering Rust Programming_ From Foundations to Future -- Каmеrоn Нussаin, Frаhааn Нussаin -- 2024 -- Sonar Publishing -- 1c0a854edc93c70d07e01f177d65634f -- Anna’s Archive.pdf
+│   ├── Mathematical Foundations for Deep Learning -- Mehdi Ghayoumi -- 2026 -- Routledge -- 1b78d1c355285a3295a9aeac39633ec3 -- Anna’s Archive.pdf
+│   ├── Mathematical Foundations of Deep Learning -- Sourangshu Ghosh -- 2025 -- dfb6775ce694e6aad8e51b5edf720db7 -- Anna’s Archive.pdf
+│   ├── Modelos de programación lineal_ Guía para su formulación y -- Ezilda María Cabrera Gil-Grados -- Textos universitarios, 1, 1, 2017 -- Universidad de -- 9789972453984 -- 4d30a322ebefb1b3290d2d80a2f6088c -- Anna’s Archive.pdf
+│   ├── Neural Networks And Deep Learning 2017.pdf
+│   ├── neuralnetworksanddeeplearning.pdf
+│   ├── Programming Massively Parallel Processors_ A Hands-on -- Wen-mei W_ Hwu, David B_ Kirk, Izzat El Hajj, Ph_D_ -- 4th, 2023 -- Morgan Kaufmann -- 9780323912310 -- 4729b53f9f6154eafa340bf356c90163 -- Anna’s Archive.pdf
+│   ├── Programming with Rust -- Donis Marshall -- 1, 2024 -- Addison-Wesley _ Pearson -- 9780137889655 -- 995010890e600b82cb6081982b8060db -- Anna’s Archive.pdf
+│   ├── Python Deep Learning 2023.pdf
+│   └── Software Architecture with C++ -- Adrian Ostrowski & Piotr Gaczkowski -- 3d64f4770cba99df3e3851e1c283018f -- Anna’s Archive.pdf
+├── config
+│   ├── desktop.ini
+│   ├── environment.yml
+│   └── requirements.txt
+├── data
+│   ├── desktop.ini
+│   ├── paccaA100.unicartagena.edu.co.tar.gz
+│   ├── test-audit
+│   │   ├── desktop.ini
+│   │   ├── resnet50_bf16
+│   │   └── resnet50_fp32
+│   ├── test-audit-e2e
+│   │   ├── desktop.ini
+│   │   └── simple_mlp
+│   ├── test-audit-status
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_meta.json
+│   │   └── simple_mlp_metrics.csv
+│   ├── test-gpu-only-fp16
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_meta.json
+│   │   └── simple_mlp_metrics.csv
+│   ├── test-gpu-only-policy
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_meta.json
+│   │   └── simple_mlp_metrics.csv
+│   ├── test-graph-m1
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_graph_edges.csv
+│   │   ├── simple_mlp_graph_nodes.csv
+│   │   ├── simple_mlp_meta.json
+│   │   └── simple_mlp_metrics.csv
+│   ├── test-graph-m2
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_graph_edges.csv
+│   │   ├── simple_mlp_graph_nodes.csv
+│   │   ├── simple_mlp_meta.json
+│   │   ├── simple_mlp_metrics.csv
+│   │   └── simple_mlp_transfer_edges.csv
+│   ├── test-invalid-target
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_meta.json
+│   │   └── simple_mlp_metrics.csv
+│   ├── test-m3
+│   │   ├── desktop.ini
+│   │   └── simple_mlp
+│   ├── test-m3-device-fix
+│   │   ├── desktop.ini
+│   │   ├── simple_mlp_graph_edges.csv
+│   │   ├── simple_mlp_graph_nodes.csv
+│   │   ├── simple_mlp_meta.json
+│   │   ├── simple_mlp_metrics.csv
+│   │   └── simple_mlp_transfer_edges.csv
+│   ├── test-m3-r2
+│   │   ├── desktop.ini
+│   │   └── simple_mlp
+│   ├── test-m4
+│   │   ├── desktop.ini
+│   │   ├── resnet50
+│   │   └── vit_b16
+│   └── zephyr
+│       ├── results
+│       ├── results_smoke
+│       ├── results_thesis_mode
+│       ├── results_thesis_mode_diagnostic_local
+│       ├── results_thesis_mode_minimal_local
+│       ├── results_thesis_mode_minimal_local_b32
+│       ├── results_thesis_mode_minimal_local_b32_r5
+│       ├── results_thesis_mode_minimal_local_b32_r5_fix
+│       ├── results_thesis_mode_minimal_local_b32_resnet
+│       ├── strict_probe_resnet50
+│       ├── strict_probe_resnet50_cpu
+│       ├── vit_b16_graph_edges.csv
+│       ├── vit_b16_graph_nodes.csv
+│       ├── vit_b16_meta.json
+│       ├── vit_b16_metrics.csv
+│       └── vit_b16_transfer_edges.csv
+├── datasets
+│   ├── ag_news
+│   │   ├── desktop.ini
+│   │   ├── test.csv
+│   │   └── train.csv
+│   ├── archives
+│   │   ├── desktop.ini
+│   │   └── imagenette2-160.tgz
+│   ├── dataset_manifest.json
+│   ├── desktop.ini
+│   ├── imagenette2-160
+│   │   ├── desktop.ini
+│   │   ├── noisy_imagenette.csv
+│   │   ├── train
+│   │   └── val
+│   ├── metadata
+│   │   ├── desktop.ini
+│   │   └── imagenet_class_index.json
+│   ├── mnist
+│   │   ├── desktop.ini
+│   │   └── MNIST
+│   └── tiny_shakespeare
+│       ├── desktop.ini
+│       └── train.txt
+├── docs
+│   ├── architecture
+│   │   ├── desktop.ini
+│   │   ├── GLOBAL_PROJECT_DOCUMENTATION_ES.md
+│   │   ├── GLOBAL_PROJECT_DOCUMENTATION.md
+│   │   └── PROJECT_STRUCTURE.md
+│   ├── archive
+│   │   ├── desktop.ini
+│   │   ├── README.md
+│   │   └── reference_material
+│   ├── desktop.ini
+│   ├── operations
+│   │   ├── desktop.ini
+│   │   ├── MULTI_NODE_ILP_RUNBOOK.md
+│   │   ├── PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md
+│   │   ├── QUICK_START.sh
+│   │   ├── SERVER_LAUNCH_PROFILES.md
+│   │   ├── TUTORIAL_GRID5000_CAMPANAS_TESIS_ES.md
+│   │   └── TUTORIAL_INTEGRAL_PRISM_ES.md
+│   ├── README.md
+│   └── thesis
+│       ├── CAPITULO_TESIS_ILP_ES.md
+│       ├── CAPITULO_TESIS_PROFILING_ES.md
+│       ├── desktop.ini
+│       └── schema.md
+├── final_thesis
+│   ├── chapter01_introduction_problem_and_research_design.tex
+│   ├── chapter02_theoretical_framework_state_of_art.tex
+│   ├── chapter03_methodological_system_architecture.tex
+│   ├── PhD_Thesis___A_New_Parallelization_Approach_in_Deep_Learning_Using_CPUGPU_Architectures_for_Memory_Optimization__Spanish___Final.pdf
+│   └── references.bib
+├── LICENSE
+├── logs
+│   ├── archive
+│   ├── desktop.ini
+│   ├── experiments
+│   │   ├── experiments_20260602_115152.txt
+│   │   ├── experiments_20260602_142308.txt
+│   │   ├── experiments_20260602_142805.txt
+│   │   ├── experiments_20260602_144652.txt
+│   │   ├── experiments_20260602_145120.txt
+│   │   ├── experiments_20260602_145335.txt
+│   │   ├── experiments_20260602_145435.txt
+│   │   ├── experiments_20260602_151037.txt
+│   │   ├── experiments_20260602_154751.txt
+│   │   ├── experiments_20260602_154834.txt
+│   │   └── experiments_20260602_163138.txt
+│   ├── grid5k
+│   ├── README.md
+│   ├── thesis_mode
+│   │   ├── thesis_mode_20260602_115150.txt
+│   │   ├── thesis_mode_20260602_142305.txt
+│   │   ├── thesis_mode_20260602_142803.txt
+│   │   ├── thesis_mode_20260602_144649.txt
+│   │   ├── thesis_mode_20260602_145117.txt
+│   │   ├── thesis_mode_20260602_145332.txt
+│   │   ├── thesis_mode_20260602_145433.txt
+│   │   ├── thesis_mode_20260602_154749.txt
+│   │   ├── thesis_mode_20260602_154832.txt
+│   │   └── thesis_mode_20260602_163136.txt
+│   └── thesis_smoke_workflow
+│       ├── thesis_smoke_workflow_20260602_112828.txt
+│       ├── thesis_smoke_workflow_20260602_113815.txt
+│       ├── thesis_smoke_workflow_20260602_114632.txt
+│       └── thesis_smoke_workflow_20260602_154157.txt
+├── papers
+│   ├── 1905.11722v1.pdf
+│   ├── 2016 - Parallel and Distributed Deep Learning.pdf
+│   ├── 2017 power_capping.pdf
+│   ├── 2018 - Data Pinning and Back Propagation Memory.pdf
+│   ├── 2018 - Distributed Learning of CNNs on Heterogeneous CPU GPU Architectures.pdf
+│   ├── 2018 - Involving CPUs into Multi-GPU Deep Learning.pdf
+│   ├── 2019_A Parallel and Distributed stochastic gradient descent implementation using commodity clusters.pdf
+│   ├── 2019 - EFFICIENT AND ROBUST PARALLEL DNN TRAINING THROUGH MODEL PARALLELISM ON MULTI-GPU PLATFORM.pdf
+│   ├── 2019 - Low-Memory Neural Network Training A Technical Report1.pdf
+│   ├── 2020_Parallel_Training_of_Deep_Networks_with_Local_Upda.pdf
+│   ├── 2020_Survey_DNNCPU_MittalRajputSubramoney.pdf
+│   ├── 2021 - Memory Optimization Techniques in Neural.pdf
+│   ├── 2021 - Training CNN with Differential Evolution Using Concurrent Task Apportioning on Hybrid CPU-GPU Architectures.pdf
+│   ├── 2021 ZeRO Offload Democratizing Billion Scale Model Training.pdf
+│   ├── 2023 Benoit, Steiner MODeL Memory Optimizations for Deep Learning.pdf
+│   ├── 2024 Zeyu Yang Accurate and Convenient Energy Measurements for GPUs A Detailed Study of NVIDIA GPU’s Built-In Power Sensor.pdf
+│   ├── 2212.00824v3.pdf
+│   ├── 2303.14633v2.pdf
+│   ├── 2410.22262v2.pdf
+│   ├── 2509.02480v1.pdf
+│   ├── 2509.21271v1.pdf
+│   ├── 2510.21048v1.pdf
+│   ├── 2602.04816v2.pdf
+│   ├── 2602.23349v2.pdf
+│   ├── 2603.16428v1.pdf
+│   ├── 3178487.3178491.pdf
+│   ├── 3373376.3378505.pdf
+│   ├── 3373376.3378530.pdf
+│   ├── 3458817.3476205.pdf
+│   ├── 3620666.3651330.pdf
+│   ├── 3652024.3665508.pdf
+│   ├── 3689338.pdf
+│   ├── 7638_Out_of_the_Memory_Barrier.pdf
+│   ├── atc21-lim.pdf
+│   ├── CPU Offloading
+│   │   ├── 2019 - Optimal GPUCPU Offloading Strategies for Deep Neural Network Training.pdf
+│   │   ├── 2019 - Reducing the Memory Cost.pdf of Training.pdf
+│   │   ├── 2021 - Efficient combination of rematerialization and offloading for training dnns.pdf
+│   │   └── desktop.ini
+│   ├── DAMOV-Bottleneck-Analysis-and-DataMovement-Benchmarks_IEEEaccess21.pdf
+│   ├── desktop.ini
+│   ├── Exploiting_Input_Tensor_Dynamics_in_Activation_Checkpointing_for_Efficient_Training_on_GPU.pdf
+│   ├── HOME_A_Holistic_GPU_Memory_Management_Framework_for_Deep_Learning.pdf
+│   ├── Memory DNN
+│   │   ├── 2018 - A Scalable Near-Memory Architecture for Training Deep Neural Networks on Large In-Memory Datasets_Schuiki.pdf
+│   │   ├── 2019 - Beyond the Memory Wall A Case for Memory-centric HPC System for Deep Learning_Kwon.pdf
+│   │   ├── desktop.ini
+│   │   └── GPU
+│   ├── Memory Efficient
+│   │   ├── 2014 - Memory Bounded Deep Convolutional Networks.pdf
+│   │   ├── 2017 - Optimizing Memory Efficiency for Convolution Kernels onKepler GPUs.pdf
+│   │   ├── 2017 - Training Deeper Models by GPU Memory_Meng.pdf
+│   │   ├── 2018 - Efficient Multi-GPU Memory Management for Deep Learning Acceleration_Kin_2018.pdf
+│   │   ├── 2018 - SuperNeurons Dynamic GPU Memory Management.pdf
+│   │   ├── 2019 -Automatic GPU Memory Management for Large Neural Models in TensorFlow.pdf
+│   │   ├── 2019 - moDNN Memory Optimal Deep Neural Network Training.pdf
+│   │   ├── 2020 - A Novel Memory-Efficient Deep Learning Training Framework.pdf
+│   │   ├── 2020 - Scaling Distributed Deep Learning Workloads.pdf
+│   │   ├── 2020 - Sparse GPU Kernels for Deep Learning_Gale.pdf
+│   │   ├── 2020 - ZeRO - Memory Optimizations Toward Training Trillion Parameter Models.pdf
+│   │   ├── 2021 - ZeRO-Infinity Breaking the GPU Memory Wall.pdf
+│   │   └── desktop.ini
+│   ├── Memory Profiling
+│   │   ├── 2018 - Benchmarking and Analyzing Deep Neural Network_Zhu.pdf
+│   │   ├── 2019 - Memory System Characterization of Deep Learning.pdf
+│   │   ├── 2019 - Memory System Characterization of Deep Learning Workloads_Zeshan Chishti.pdf
+│   │   └── desktop.ini
+│   ├── NeurIPS-2021-efficient-combination-of-rematerialization-and-offloading-for-training-dnns-Paper.pdf
+│   ├── NeurIPS-2022-tempo-accelerating-transformer-based-model-training-through-memory-footprint-reduction-Paper-Conference.pdf
+│   ├── new_state_of_art.txt
+│   ├── old_state_of_art.txt
+│   ├── RAPL.pdf
+│   ├── report.pdf
+│   └── ZHAO_XUNYI_2024.pdf
+├── paper_thesis
+│   ├── CATAI2026_AlejandroEtAl
+│   │   ├── CATAI2026AlejandroEtAl.tex
+│   │   ├── CATAI2026_Presentation_Final
+│   │   ├── desktop.ini
+│   │   ├── figures
+│   │   ├── llncs.cls
+│   │   ├── PRESENTATION_DELIVERY_INFO.txt
+│   │   ├── PRESENTATION_GUIDE.md
+│   │   ├── references.bib
+│   │   ├── splncs04.bst
+│   │   └── tables
+│   ├── CATAI_original
+│   │   ├── CATAI2026AlejandroEtAl.tex
+│   │   ├── desktop.ini
+│   │   ├── Fig0.png
+│   │   ├── Fig1b.png
+│   │   ├── Fig2b.png
+│   │   ├── Fig3.png
+│   │   ├── Fig4.png
+│   │   ├── history.txt
+│   │   ├── llncs.cls
+│   │   ├── llncsdoc.pdf
+│   │   ├── readme.txt
+│   │   ├── references.bib
+│   │   └── splncs04.bst
+│   └── desktop.ini
+├── project_map.txt
+├── pytest.ini
+├── README.md
+├── reports
+│   ├── desktop.ini
+│   ├── diagnostics
+│   ├── ilp_nextgen_audit
+│   ├── ilp_nextgen_audit_v2
+│   ├── ilp_nextgen_audit_v2_smoke
+│   ├── ilp_nextgen_audit_v2_smoke_runner
+│   ├── ilp_results
+│   │   ├── zephyr_smoke
+│   │   ├── zephyr_thesis_mode
+│   │   ├── zephyr_thesis_mode_diagnostic_local
+│   │   ├── zephyr_thesis_mode_minimal_local
+│   │   ├── zephyr_thesis_mode_minimal_local_b32
+│   │   ├── zephyr_thesis_mode_minimal_local_b32_r5
+│   │   ├── zephyr_thesis_mode_minimal_local_b32_r5_fix
+│   │   └── zephyr_thesis_mode_minimal_local_b32_resnet
+│   ├── ilp_results_phase1
+│   ├── ilp_results_phase1_smoke
+│   ├── ilp_results_phase4_controlled
+│   ├── README.md
+│   └── thesis_figures
+│       ├── desktop.ini
+│       ├── prediction_vs_observation_simple_mlp_dual.png
+│       └── profiling_simple_mlp_layer_costs.png
+├── scripts
+│   ├── audit_experimental_grid.sh
+│   ├── desktop.ini
+│   ├── discover_ilp_config_dirs.sh
+│   ├── download_datasets.py
+│   ├── export_ilp_tables_latex.sh
+│   ├── generate_ilp_report_assets.sh
+│   ├── generate_thesis_figures.py
+│   ├── launch_grid5k.sh
+│   ├── run_experiments.sh
+│   ├── run_ilp_pareto_sweep.sh
+│   ├── run_ilp_partition.sh
+│   ├── run_thesis_mode.sh
+│   ├── run_thesis.sh
+│   ├── run_thesis_smoke_workflow.sh
+│   └── sanitize_cuda_env.sh
+├── src
+│   ├── core
+│   │   ├── constants.py
+│   │   ├── decoder_export_backend.py
+│   │   ├── desktop.ini
+│   │   ├── energy.py
+│   │   ├── graph_extractor.py
+│   │   ├── __init__.py
+│   │   ├── io_artifacts.py
+│   │   ├── loss_utils.py
+│   │   ├── metrics.py
+│   │   ├── precision_policy.py
+│   │   ├── stats_aggregator.py
+│   │   └── system.py
+│   ├── data
+│   │   ├── dataset_registry.py
+│   │   ├── desktop.ini
+│   │   └── __init__.py
+│   ├── desktop.ini
+│   ├── ilp
+│   │   ├── advanced_terms.py
+│   │   ├── backward_meta_model.py
+│   │   ├── data_loader.py
+│   │   ├── desktop.ini
+│   │   ├── export_solution.py
+│   │   ├── __init__.py
+│   │   ├── model_builder.py
+│   │   └── solve.py
+│   ├── __init__.py
+│   ├── models
+│   │   ├── desktop.ini
+│   │   ├── factory.py
+│   │   └── __init__.py
+│   ├── profiler_en.md
+│   ├── profiler_es.md
+│   ├── profiler.py
+│   ├── runner
+│   │   ├── desktop.ini
+│   │   ├── __init__.py
+│   │   └── training_profiler.py
+│   └── runtime
+│       ├── desktop.ini
+│       ├── device_plan.py
+│       ├── hybrid_executor.py
+│       ├── __init__.py
+│       ├── plan_representation.py
+│       └── simulator.py
+├── tests
+│   ├── desktop.ini
+│   ├── test_dataset_registry.py
+│   ├── test_factory_input_policy.py
+│   ├── test_graph_extractor_export_backend.py
+│   ├── test_hybrid_executor.py
+│   ├── test_ilp_data_loader_validity.py
+│   ├── test_ilp_nextgen_features.py
+│   ├── test_loss_utils.py
+│   ├── test_nlp_dataset_targets.py
+│   ├── test_phase1_integrity.py
+│   ├── test_phase4_activation.py
+│   ├── test_phase4_comparison.py
+│   ├── test_phase4_synthetic.py
+│   ├── test_precision_policy_unit.py
+│   ├── test_profiler_gpu_only_precision_policy.py
+│   ├── test_report_assets.py
+│   ├── test_runtime_simulator.py
+│   ├── test_timeout_validation.py
+│   ├── test_training_profiler_oom_fallback.py
+│   └── test_training_profiler_transfer_model.py
+├── thesis
+│   ├── build
+│   │   ├── desktop.ini
+│   │   ├── main.aux
+│   │   ├── main.fdb_latexmk
+│   │   ├── main.fls
+│   │   ├── main.log
+│   │   ├── main.out
+│   │   ├── main.pdf
+│   │   └── main.toc
+│   ├── chapters
+│   │   ├── chapter01_intro.tex
+│   │   ├── chapter02_estado_arte.tex
+│   │   ├── chapter03_arquitectura.tex
+│   │   ├── chapter04_profiling.tex
+│   │   ├── chapter05_ilp.tex
+│   │   ├── chapter06_simulacion_ejecucion.tex
+│   │   ├── chapter07_conclusiones.tex
+│   │   └── desktop.ini
+│   ├── desktop.ini
+│   ├── frontmatter
+│   │   ├── desktop.ini
+│   │   └── preliminaries.tex
+│   ├── main.aux
+│   ├── main.bbl
+│   ├── main.blg
+│   ├── main.fdb_latexmk
+│   ├── main.fls
+│   ├── main.lof
+│   ├── main.log
+│   ├── main.lot
+│   ├── main.out
+│   ├── main.pdf
+│   ├── main.tex
+│   ├── main.toc
+│   └── references.bib
+└── validation
+    ├── aggregate_metrics_stats.py
+    ├── audit_experimental_grid.py
+    ├── comprehensive_check.sh
+    ├── desktop.ini
+    ├── export_ilp_tables_latex.py
+    ├── generate_ilp_report_assets.py
+    ├── run_hybrid_execution.py
+    ├── run_ilp_ablation_suite.py
+    ├── run_ilp_controlled_hparam_sweep.py
+    ├── run_ilp_hierarchical_pipeline.py
+    ├── run_ilp_partition.py
+    ├── run_ilp_sensitivity.py
+    ├── run_unit_tests.sh
+    ├── sweep_ilp_pareto.py
+    ├── train_backward_meta_model.py
+    ├── validate_all_models.py
+    ├── validate_code.py
+    ├── validate_ilp_pipeline.py
+    ├── validate_zombie_fix.py
+    └── VALIDATION_SUMMARY.sh
+
+103 directories, 359 files

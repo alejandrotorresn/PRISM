@@ -15,11 +15,11 @@ PYTHON_CMD="${PYTHON_CMD:-python}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
-FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-1}"
+FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
 DATA_MOUNT_SRC="${DATA_MOUNT_SRC:-/home/ltorresnino/data}"
 DATA_LINK="${DATA_LINK:-$PROJECT_ROOT/data}"
-LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs}"
+LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs/grid5k}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/grid5k_launch_$(date +%Y%m%d_%H%M%S).log}"
 
 mkdir -p "$LOG_DIR"
@@ -71,7 +71,10 @@ activate_conda_env() {
         set +u
     fi
 
-    conda activate "$CONDA_ENV_NAME"
+    if ! conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
+        log_msg "ERROR: unable to activate requested conda environment: $CONDA_ENV_NAME"
+        exit 1
+    fi
 
     if [ "$_had_nounset" -eq 1 ]; then
         set -u
@@ -214,14 +217,14 @@ run_campaign() {
             REPEATS="$run_repeats" \
             BASE_OUTPUT_DIR="$seed_output_dir" \
             REPORTS_DIR="$seed_reports_dir" \
-            LOG_DIR="$PROJECT_ROOT/logs" \
+            LOG_DIR="$PROJECT_ROOT/logs/thesis_mode" \
             DATASETS_DIR="${DATASETS_DIR:-$PROJECT_ROOT/datasets}" \
             DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}" \
             RUN_PROFILING="${RUN_PROFILING:-true}" \
             RUN_ILP="${RUN_ILP:-true}" \
             RUN_HYBRID="${RUN_HYBRID:-true}" \
             RUN_REPORTS="${RUN_REPORTS:-true}" \
-            FAIL_FAST="${FAIL_FAST:-true}" \
+            FAIL_FAST="${FAIL_FAST:-false}" \
             DRY_RUN="${DRY_RUN:-false}" \
             bash "scripts/run_thesis_mode.sh"
         ) | tee -a "$LOG_FILE"
@@ -233,6 +236,10 @@ run_campaign() {
         if ! [[ "$repeats_for_run" =~ ^[0-9]+$ ]] || [ "$repeats_for_run" -le 0 ]; then
             log_msg "ERROR: FULL_REPEATS_PER_SEED must be a positive integer"
             exit 1
+        fi
+        if [ "$repeats_for_run" -lt 2 ]; then
+            log_msg "WARNING: FULL_REPEATS_PER_SEED=$repeats_for_run is too low for strict official mode; using 2"
+            repeats_for_run=2
         fi
 
         for seed in "${full_seeds[@]}"; do
@@ -248,6 +255,10 @@ run_campaign() {
         if ! [[ "$repeats_for_run" =~ ^[0-9]+$ ]] || [ "$repeats_for_run" -le 0 ]; then
             log_msg "ERROR: NON_FULL_REPEATS must be a positive integer"
             exit 1
+        fi
+        if [ "$CAMPAIGN_PROFILE" = "doctoral_minimal" ] && [ "$repeats_for_run" -lt 2 ]; then
+            log_msg "WARNING: NON_FULL_REPEATS=$repeats_for_run is too low for strict official mode; using 2"
+            repeats_for_run=2
         fi
         if ! [[ "$SINGLE_SEED" =~ ^[0-9]+$ ]]; then
             log_msg "ERROR: SINGLE_SEED must be a non-negative integer"

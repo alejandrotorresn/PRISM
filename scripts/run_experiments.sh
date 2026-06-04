@@ -41,7 +41,8 @@ DATASET_SCRIPT="${DATASET_SCRIPT:-scripts/download_datasets.py}"
 HOST_TAG="${HOST_TAG:-$(hostname)}"
 BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results}"
 DATASETS_DIR="${DATASETS_DIR:-datasets}"
-LOG_DIR="${LOG_DIR:-logs}"
+HOST_TAG="${HOST_TAG:-$(hostname)}"
+LOG_DIR="${LOG_DIR:-logs/${HOST_TAG}/experiments}"
 LOG_FILE="${LOG_DIR}/experiments_$(date +%Y%m%d_%H%M%S).txt"
 
 # Create log directory early; output directory is normalized later before execution.
@@ -52,7 +53,7 @@ mkdir -p "$LOG_DIR"
 # 1) Define campaign axes below (models, batches, precisions, optimizers).
 # 2) Optionally override behavior via environment variables (e.g., SMOKE_MODE=true).
 # 3) Run script; it iterates the cartesian product and writes one artifact set per batch.
-# 4) Inspect the generated timestamped log in logs/ and results tree in data/results/.
+# 4) Inspect the generated timestamped log in logs/experiments/ and results tree in data/results/.
 
 # 1. Models: Vision (ResNet, ViT), NLP (BERT, GPT2), Baseline (MLP)
 MODELS=("resnet50" "resnet152" "vit_b16" "bert_base" "gpt2_small" "distilgpt2" "simple_mlp")
@@ -92,11 +93,13 @@ AUTO_AGGREGATE_STATS="${AUTO_AGGREGATE_STATS:-true}"  # true = create metrics_st
 AGGREGATOR_SCRIPT="${AGGREGATOR_SCRIPT:-validation/aggregate_metrics_stats.py}"
 ENABLE_RAPL="${ENABLE_RAPL:-true}"          # true = pass --rapl when CPU profiling is enabled
 FAIL_FAST="${FAIL_FAST:-false}"             # true = abort the campaign on first profiler/aggregation failure
+ALLOW_PARTIAL_FAILURES="${ALLOW_PARTIAL_FAILURES:-false}"  # true = keep exit code 0 even when some runs fail
 DRY_RUN="${DRY_RUN:-false}"                 # true = print commands and validate preflight without executing runs
 DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}"
 OOM_RETRY_ENABLED="${OOM_RETRY_ENABLED:-true}"
 OOM_RETRY_MIN_BATCH="${OOM_RETRY_MIN_BATCH:-1}"
 OOM_RETRY_BACKOFF="${OOM_RETRY_BACKOFF:-2}"
+OOM_SKIP_CONFIGS="${OOM_SKIP_CONFIGS:-true}"
 
 if [ "$SMOKE_MODE" = true ]; then
     # Smoke mode intentionally shrinks the grid for a fast end-to-end health check.
@@ -286,6 +289,39 @@ handle_failure() {
     fi
 }
 
+is_oom_failure_from_log() {
+    local log_file="$1"
+    if [ ! -f "$log_file" ]; then
+        return 1
+    fi
+
+    tail -n 200 "$log_file" | tr '[:upper:]' '[:lower:]' | grep -E -q \
+        "profiling failed after oom retries were exhausted|oom retries were exhausted|cuda out of memory|out of memory|cuda error: out of memory|hip out of memory|cublas.*alloc"
+}
+
+mark_oom_skipped_config() {
+    local out_dir="$1"
+    local model="$2"
+    local optimizer="$3"
+    local precision="$4"
+    local batch="$5"
+    local run_id="$6"
+    local exit_code="$7"
+
+    cat > "$out_dir/oom_skipped_config.json" <<EOF
+{
+  "status": "oom_skipped",
+  "model": "$model",
+  "optimizer": "$optimizer",
+  "precision": "$precision",
+  "batch_size": $batch,
+  "failed_run_id": "$run_id",
+  "exit_code": $exit_code,
+  "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
 preflight_checks() {
     require_command_or_executable "$PYTHON_CMD" "PYTHON_CMD"
     run_python_help_check "$PROFILER_SCRIPT" "Profiler script"
@@ -341,6 +377,7 @@ print_summary() {
     log_msg "OOM Retry Enabled: $OOM_RETRY_ENABLED"
     log_msg "OOM Retry Min Batch: $OOM_RETRY_MIN_BATCH"
     log_msg "OOM Retry Backoff: $OOM_RETRY_BACKOFF"
+    log_msg "OOM Skip Configs: $OOM_SKIP_CONFIGS"
     log_msg "Dry Run: $DRY_RUN"
     log_msg "MODELS_CSV Override: ${MODELS_CSV:-<none>}"
     log_msg "BATCH_SIZES_CSV Override: ${BATCH_SIZES_CSV:-<none>}"
@@ -389,6 +426,8 @@ ATTEMPTED=0
 SUCCEEDED_RUNS=0
 FAILED_RUNS=0
 FAILED_AGGREGATIONS=0
+OOM_SKIPPED_CONFIGS=0
+OOM_SKIPPED_RUNS=0
 
 # Main Loop: Model -> Optimizer -> Precision -> Batch Size
 # Each loop iteration corresponds to one profiler execution and one output folder.
@@ -406,6 +445,14 @@ for model in "${MODELS[@]}"; do
                 # Keep one isolated output directory per batch to avoid file overwrite.
                 OUT_DIR="$BASE_OUTPUT_DIR/$model/$optimizer/$precision/batch_${batch}"
                 mkdir -p "$OUT_DIR"
+                BATCH_SKIPPED_OOM=false
+                
+                if [ -f "$OUT_DIR/${model}_metrics_stats.csv" ]; then
+                    log_msg "  → SKIPPING BATCH: Batch $batch already profiled and aggregated (resuming)."
+                    ATTEMPTED=$((ATTEMPTED + REPEATS))
+                    SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + REPEATS))
+                    continue
+                fi
 
                 for ((repeat_idx=1; repeat_idx<=REPEATS; repeat_idx++)); do
                     ATTEMPTED=$((ATTEMPTED + 1))
@@ -414,6 +461,12 @@ for model in "${MODELS[@]}"; do
                     RUN_SEED=$((SEED_BASE + repeat_idx - 1))
                     RUN_OUT_DIR="$OUT_DIR/$RUN_ID"
                     mkdir -p "$RUN_OUT_DIR"
+
+                    if [ -f "$RUN_OUT_DIR/${model}_meta.json" ]; then
+                        log_msg "  → SKIPPING RUN: $RUN_ID already exists (resuming)."
+                        SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
+                        continue
+                    fi
 
                     log_msg "$PROGRESS Processing: batch_size=$batch | replicate=$RUN_ID | seed=$RUN_SEED"
 
@@ -439,6 +492,10 @@ for model in "${MODELS[@]}"; do
                     else
                         CMD+=(--no-oom_retry_enabled)
                     fi
+                    
+                    if [ "$FORCE_NO_GPU" = true ]; then
+                        CMD+=(--no_gpu)
+                    fi
                     if [ "$USE_SKIP_CPU" = false ] && [ "$ENABLE_RAPL" = true ]; then
                         # RAPL is only meaningful when CPU profiling is enabled.
                         CMD+=(--rapl)  # Enable CPU RAPL energy measurement
@@ -463,15 +520,31 @@ for model in "${MODELS[@]}"; do
                         log_msg "  ✓ SUCCESS: Batch $batch replicate $RUN_ID complete"
                     else
                         EXIT_CODE=$?
-                        FAILED_RUNS=$((FAILED_RUNS + 1))
-                        log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
-                        log_msg "  Probable causes: Out of Memory (OOM), unsupported precision, or hardware constraint"
-                        handle_failure "$EXIT_CODE" "$model/$optimizer/$precision/batch_${batch}/$RUN_ID"
+                        if is_true "$OOM_SKIP_CONFIGS" && is_oom_failure_from_log "$LOG_FILE"; then
+                            OOM_SKIPPED_CONFIGS=$((OOM_SKIPPED_CONFIGS + 1))
+                            OOM_SKIPPED_RUNS=$((OOM_SKIPPED_RUNS + 1))
+                            BATCH_SKIPPED_OOM=true
+                            mark_oom_skipped_config "$OUT_DIR" "$model" "$optimizer" "$precision" "$batch" "$RUN_ID" "$EXIT_CODE"
+                            log_msg "  ⚠ OOM SKIP: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
+                            log_msg "  Marked as OOM-skipped config -> $OUT_DIR/oom_skipped_config.json"
+                            log_msg "  Continuing campaign without aborting this batch configuration."
+                            break
+                        else
+                            FAILED_RUNS=$((FAILED_RUNS + 1))
+                            log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
+                            log_msg "  Probable causes: Out of Memory (OOM), unsupported precision, or hardware constraint"
+                            handle_failure "$EXIT_CODE" "$model/$optimizer/$precision/batch_${batch}/$RUN_ID"
+                        fi
                     fi
 
                     # Allow GPU memory to cool down
                     sleep 1
                 done
+
+                if [ "$BATCH_SKIPPED_OOM" = true ]; then
+                    log_msg "  ↷ SKIP AGGREGATION: batch_$batch marked as OOM-skipped."
+                    continue
+                fi
 
                 if [ "$AUTO_AGGREGATE_STATS" = true ]; then
                     AGG_OUT="$OUT_DIR/${model}_metrics_stats.csv"
@@ -502,8 +575,11 @@ log_msg "Attempted Runs: $ATTEMPTED"
 log_msg "Successful Runs: $SUCCEEDED_RUNS"
 log_msg "Failed Runs: $FAILED_RUNS"
 log_msg "Failed Aggregations: $FAILED_AGGREGATIONS"
+log_msg "OOM-skipped Configurations: $OOM_SKIPPED_CONFIGS"
+log_msg "OOM-skipped Runs: $OOM_SKIPPED_RUNS"
 log_msg "Output Directory: $BASE_OUTPUT_DIR"
 log_msg "Log File: $LOG_FILE"
+log_msg "Allow Partial Failures: $ALLOW_PARTIAL_FAILURES"
 log_msg ""
 log_msg "Next Steps:"
 log_msg "  1. Check log file for errors: cat $LOG_FILE"
@@ -513,5 +589,9 @@ log_msg "========================================================"
 
 if [ "$FAILED_RUNS" -gt 0 ] || [ "$FAILED_AGGREGATIONS" -gt 0 ]; then
     log_msg "[ERROR] Campaign finished with failures. Review $LOG_FILE before using the collected data."
-    exit 1
+    if [ "$ALLOW_PARTIAL_FAILURES" = true ]; then
+        log_msg "[WARN] ALLOW_PARTIAL_FAILURES=true -> returning success so downstream stages can continue."
+    else
+        exit 1
+    fi
 fi
