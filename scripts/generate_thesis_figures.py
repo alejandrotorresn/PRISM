@@ -84,6 +84,7 @@ def plot_profiling_layer_costs(host_tag: str, config_dir: Path, model: str, opti
         generate_plot(bwd_data, "Backward Pass", "bwd_layer_costs")
     except Exception as e:
         print(f"Error plotting layer costs for {config_dir}: {e}")
+        raise
 
 
 def plot_prediction_vs_observation(host_tag: str, config_dir: Path, model: str, optimizer: str, precision: str, batch: str, output_dir: Path) -> None:
@@ -146,9 +147,9 @@ def plot_prediction_vs_observation(host_tag: str, config_dir: Path, model: str, 
         plt.close(fig)
     except Exception as e:
         print(f"Error plotting prediction vs observation for {config_dir}: {e}")
+        raise
 
-
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Generate thesis figures from profiling data.")
     parser.add_argument(
         "--host_tag", 
@@ -161,7 +162,7 @@ def main() -> None:
     data_dir = ROOT / "data"
     if not data_dir.exists():
         print(f"Error: Data directory not found at {data_dir}")
-        return
+        return 1
 
     if args.host_tag.lower() == "all":
         hosts = [d.name for d in data_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
@@ -177,6 +178,9 @@ def main() -> None:
         output_dir = ROOT / "reports" / host / "doctoral_minimal" / "plots"
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        processed = 0
+        errors = 0
+
         # Discover all configurations
         for batch_dir in sorted(host_results_dir.rglob("batch_*")):
             if not batch_dir.is_dir() or len(batch_dir.parts) < 4:
@@ -187,13 +191,22 @@ def main() -> None:
                 precision = batch_dir.parent.name
                 optimizer = batch_dir.parent.parent.name
                 model = batch_dir.parent.parent.parent.name
+                processed += 1
                 
                 plot_profiling_layer_costs(host, batch_dir, model, optimizer, precision, batch, output_dir)
                 plot_prediction_vs_observation(host, batch_dir, model, optimizer, precision, batch, output_dir)
             except Exception as e:
+                errors += 1
                 print(f"Error processing {batch_dir}: {e}")
-                
-        print(f"Finished generating figures for host: {host}. Output saved to {output_dir}\n")
+        
+        print(
+            f"Finished host {host}: processed={processed}, success={processed - errors}, "
+            f"errors={errors}. Output saved to {output_dir}\n"
+        )
+        if errors > 0:
+            return 1
+
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

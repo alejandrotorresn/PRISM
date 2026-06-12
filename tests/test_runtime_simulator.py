@@ -385,9 +385,9 @@ def test_simulate_plan_sink_nodes_do_not_produce_isolated_warning(tmp_path: Path
     )
 
 
-def test_simulate_plan_combined_gpu_peak_triggers_violation(tmp_path: Path) -> None:
+def test_simulate_plan_combined_gpu_peak_triggers_warning(tmp_path: Path) -> None:
     """Each phase's GPU memory individually fits within budget, but the combined
-    peak (forward activations retained during backward) must trigger a violation."""
+    peak (forward activations retained during backward) must trigger a warning."""
     metrics_csv = tmp_path / "metrics_stats.csv"
     _write_metrics(metrics_csv)  # a: 10 MB GPU peak, b: 12 MB GPU peak
 
@@ -420,6 +420,6 @@ def test_simulate_plan_combined_gpu_peak_triggers_violation(tmp_path: Path) -> N
         cfg=cfg,
     )
 
-    assert result.status == "invalid", "Combined peak exceeds budget; plan should be invalid"
-    assert any("GPU memory violation" in msg for msg in result.violations)
+    assert result.status == "ok", "Combined peak exceeds logical budget; plan should still be valid but emit a warning"
+    assert any("GPU memory budget warning" in msg for msg in result.warnings)
     assert result.gpu_mem_used_mb > cfg.gpu_mem_budget_mb

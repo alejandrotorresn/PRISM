@@ -151,7 +151,7 @@ HW_DISPERSION_K="${HW_DISPERSION_K:-0.0}"
 GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-400,600,800,1000,1200}"
 GPU_MEM_BUDGET_MB="${GPU_MEM_BUDGET_MB:-1e18}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
-MEMORY_MODEL="${MEMORY_MODEL:-peak_approx}"
+MEMORY_MODEL="${MEMORY_MODEL:-topological}"
 PEAK_ACTIVATION_OVERLAP="${PEAK_ACTIVATION_OVERLAP:-0.35}"
 STRICT_GRAPH_MAPPING="${STRICT_GRAPH_MAPPING:-true}"
 STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
@@ -445,6 +445,11 @@ fi
 if is_true "$RUN_ILP"; then
   section "STEP 3/5 - ILP PARTITION + PARETO PER CONFIG"
 
+  if [[ "$MEMORY_MODEL" != "nodal_sum" && "$MEMORY_MODEL" != "peak_approx" && "$MEMORY_MODEL" != "topological" ]]; then
+    log_msg "ERROR: MEMORY_MODEL='$MEMORY_MODEL' is invalid. Must be 'nodal_sum', 'peak_approx', or 'topological'."
+    exit 1
+  fi
+
   if is_true "$DRY_RUN"; then
     log_msg "DRY_RUN=true -> skipping ILP and Pareto execution (no real artifacts expected)"
   else
@@ -537,6 +542,8 @@ if is_true "$RUN_HYBRID"; then
     hybrid_plan_source_csv=""
     hybrid_plan_gpu_budget_mb=""
     hybrid_plan_objective=""
+    hybrid_plan_sim_time_ms=""
+    hybrid_plan_sim_energy_j=""
 
     if [ "$HYBRID_PLAN_SELECTION" = "pareto_best" ]; then
       pareto_info="$($PYTHON_CMD - "$cfg" "$model" <<'PY'
@@ -562,6 +569,8 @@ print(
             str(row.get("gpu_budget_mb", "")),
             str(row.get("ilp_objective", "")),
             str(row.get("ilp_status", "")),
+      str(row.get("sim_time_ms", "")),
+      str(row.get("sim_energy_j", "")),
             source_csv,
         ]
     )
@@ -570,7 +579,7 @@ PY
       )" || true
 
       if [ -n "$pareto_info" ]; then
-        IFS='|' read -r hybrid_plan_gpu_budget_mb hybrid_plan_objective hybrid_plan_status hybrid_plan_source_csv <<< "$pareto_info"
+        IFS='|' read -r hybrid_plan_gpu_budget_mb hybrid_plan_objective hybrid_plan_status hybrid_plan_sim_time_ms hybrid_plan_sim_energy_j hybrid_plan_source_csv <<< "$pareto_info"
         budget_slug="$(printf '%s' "$hybrid_plan_gpu_budget_mb" | tr '.' 'p')"
         hybrid_plan_source="$cfg/ilp_solution_pareto_best_budget_${budget_slug}"
         hybrid_assignment_csv="$hybrid_plan_source/ilp_assignment.csv"
@@ -645,6 +654,12 @@ PY
     if [ -n "$hybrid_plan_objective" ]; then
       HYBRID_PLAN_FLAGS+=(--plan_objective "$hybrid_plan_objective")
     fi
+    if [ -n "$hybrid_plan_sim_time_ms" ]; then
+      HYBRID_PLAN_FLAGS+=(--plan_sim_time_ms "$hybrid_plan_sim_time_ms")
+    fi
+    if [ -n "$hybrid_plan_sim_energy_j" ]; then
+      HYBRID_PLAN_FLAGS+=(--plan_sim_energy_j "$hybrid_plan_sim_energy_j")
+    fi
 
     log_msg "Hybrid runtime -> cfg=$cfg plan_mode=$hybrid_plan_mode plan_source=$hybrid_plan_source"
     "$PYTHON_CMD" validation/run_hybrid_execution.py \
@@ -686,6 +701,12 @@ if is_true "$RUN_REPORTS"; then
   OUTPUT_DIR="$REPORTS_DIR" \
   bash scripts/generate_ilp_report_assets.sh >> "$LOG_FILE" 2>&1
 
+  log_msg "Computing Statistical Significance..."
+  PYTHON_CMD="$PYTHON_CMD" \
+  CONSOLIDATED_CSV="$REPORTS_DIR/csv/ilp_pareto_consolidated.csv" \
+  OUTPUT_CSV="$REPORTS_DIR/csv/ilp_statistical_significance.csv" \
+  bash scripts/run_statistical_significance.sh >> "$LOG_FILE" 2>&1
+
   PYTHON_CMD="$PYTHON_CMD" \
   BEST_CSV="$REPORTS_DIR/csv/ilp_best_per_model.csv" \
   CONSOLIDATED_CSV="$REPORTS_DIR/csv/ilp_pareto_consolidated.csv" \
@@ -697,7 +718,6 @@ if is_true "$RUN_REPORTS"; then
   "$PYTHON_CMD" validation/generate_advanced_thesis_plots.py \
     --input_root "$REPORT_INPUT_ROOT" \
     --output_dir "$REPORTS_DIR/plots" \
-    --ilp_pareto_csv "$REPORTS_DIR/csv/ilp_pareto_consolidated.csv" \
     --hybrid_csv "$REPORTS_DIR/csv/hybrid_execution_best_per_model.csv" >> "$LOG_FILE" 2>&1
 
   PYTHON_CMD="$PYTHON_CMD" \

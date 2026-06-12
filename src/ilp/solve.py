@@ -41,20 +41,12 @@ class ILPSolution:
 
 
 def _build_cbc_solver(pulp):
-    """Create a CBC solver with an explicit binary path when discoverable.
-
-    Some environments install `cbc` outside PuLP's bundled solverdir, so
-    delegating discovery to PATH/sys.executable keeps MILP solving operational.
+    """Create a CBC solver using the reliable bundled PULP_CBC_CMD.
+    
+    Bypassing system 'cbc' since the conda coin-or-cbc binary frequently crashes 
+    or segfaults on large graphs.
     """
-    cbc_path = shutil.which("cbc")
-    if cbc_path and os.access(cbc_path, os.X_OK):
-        return pulp.COIN_CMD(msg=False, path=cbc_path)
-
-    candidate = os.path.join(os.path.dirname(sys.executable), "cbc")
-    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-        return pulp.COIN_CMD(msg=False, path=candidate)
-
-    return pulp.PULP_CBC_CMD(msg=False)
+    return pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.01)
 
 
 def _eval_assignment(
@@ -135,7 +127,16 @@ def _solve_exhaustive(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
 
 
 def _solve_with_pulp(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
+    """
+    DEPRECATED: Single-phase (inference-style) ILP solver.
+
+    This solver treats the model as a single pass and does not distinguish between
+    forward and backward phases. It is NOT correct for training workloads.
+    No active call path invokes this function; all training paths use
+    _solve_with_pulp_dual() which models both phases (xf, xb) correctly.
+    """
     pulp = importlib.import_module("pulp")
+
 
     problem_data = build_problem_data(data, cfg)
     prob = pulp.LpProblem("cpu_gpu_partition", pulp.LpMinimize)
@@ -220,15 +221,19 @@ def _eval_assignment_dual(
     cpu_mem_fwd = sum(problem.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0)
     gpu_mem_bwd = sum(problem.gpu_mem[n] for n in data.nodes if bwd_bits[n] == 1)
     cpu_mem_bwd = sum(problem.cpu_mem[n] for n in data.nodes if bwd_bits[n] == 0)
-    # During backward pass, forward activations must remain resident alongside the
-    # backward computation tensors, so the combined memory of both phases must fit.
+    # Base memory (weights, gradients, optimizer states) must reside in GPU whenever
+    # a layer runs on GPU in EITHER phase — use OR.
+    # Activation memory is retained on GPU only when BOTH fwd AND bwd run on GPU — use AND.
+    # This matches the ILP solver's x_kept_gpu = xf AND xb constraint exactly.
+    combined_gpu_base = sum(problem.gpu_base_mem[n] for n in data.nodes if fwd_bits[n] == 1 or bwd_bits[n] == 1)
+    combined_gpu_act  = sum(problem.gpu_act_mem[n]  for n in data.nodes if fwd_bits[n] == 1 and bwd_bits[n] == 1)
+    combined_cpu_base = sum(problem.cpu_base_mem[n] for n in data.nodes if fwd_bits[n] == 0 or bwd_bits[n] == 0)
+    combined_cpu_act  = sum(problem.cpu_act_mem[n]  for n in data.nodes if not (fwd_bits[n] == 1 and bwd_bits[n] == 1))
+    combined_gpu_mem = combined_gpu_base + combined_gpu_act
+    combined_cpu_mem = combined_cpu_base + combined_cpu_act
     if (
-        gpu_mem_fwd > cfg.gpu_mem_budget_mb
-        or cpu_mem_fwd > cfg.cpu_mem_budget_mb
-        or gpu_mem_bwd > cfg.gpu_mem_budget_mb
-        or cpu_mem_bwd > cfg.cpu_mem_budget_mb
-        or (gpu_mem_fwd + gpu_mem_bwd) > cfg.gpu_mem_budget_mb
-        or (cpu_mem_fwd + cpu_mem_bwd) > cfg.cpu_mem_budget_mb
+        combined_gpu_mem > cfg.gpu_mem_budget_mb
+        or combined_cpu_mem > cfg.cpu_mem_budget_mb
     ):
         return None
 
@@ -259,7 +264,7 @@ def _eval_assignment_dual(
         obj += cfg.w_congestion * (overflow_fwd + overflow_bwd)
 
     cross_phase_edges = [(n, n) for n in data.nodes if fwd_bits[n] != bwd_bits[n]]
-    return obj, gpu_mem_fwd + gpu_mem_bwd, cpu_mem_fwd + cpu_mem_bwd, cut_edges_fwd, cut_edges_bwd, cross_phase_edges
+    return obj, combined_gpu_mem, combined_cpu_mem, cut_edges_fwd, cut_edges_bwd, cross_phase_edges
 
 
 def _solve_exhaustive_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
@@ -384,23 +389,68 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         prob += z[n] <= xf[n] + xb[n]
         prob += z[n] <= 2 - xf[n] - xb[n]
 
-    prob += pulp.lpSum(problem_data.gpu_mem[n] * xf[n] for n in data.nodes) <= cfg.gpu_mem_budget_mb
-    prob += pulp.lpSum(problem_data.cpu_mem[n] * (1 - xf[n]) for n in data.nodes) <= cfg.cpu_mem_budget_mb
-    prob += pulp.lpSum(problem_data.gpu_mem[n] * xb[n] for n in data.nodes) <= cfg.gpu_mem_budget_mb
-    prob += pulp.lpSum(problem_data.cpu_mem[n] * (1 - xb[n]) for n in data.nodes) <= cfg.cpu_mem_budget_mb
+    z_gpu = {n: pulp.LpVariable(f"z_gpu_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    z_cpu = {n: pulp.LpVariable(f"z_cpu_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
 
-    # Combined peak: during backward pass, forward activations are retained alongside
-    # backward computation tensors; both phases' memory is simultaneously required.
-    prob += (
-        pulp.lpSum(problem_data.gpu_mem[n] * xf[n] for n in data.nodes)
-        + pulp.lpSum(problem_data.gpu_mem[n] * xb[n] for n in data.nodes)
-    ) <= cfg.gpu_mem_budget_mb
-    prob += (
-        pulp.lpSum(problem_data.cpu_mem[n] * (1 - xf[n]) for n in data.nodes)
-        + pulp.lpSum(problem_data.cpu_mem[n] * (1 - xb[n]) for n in data.nodes)
-    ) <= cfg.cpu_mem_budget_mb
+    for n in data.nodes:
+        prob += z_gpu[n] >= xf[n]
+        prob += z_gpu[n] >= xb[n]
+        prob += z_gpu[n] <= xf[n] + xb[n]
+        prob += z_cpu[n] >= (1 - xf[n])
+        prob += z_cpu[n] >= (1 - xb[n])
+        prob += z_cpu[n] <= (1 - xf[n]) + (1 - xb[n])
+
+    if cfg.memory_model == "topological":
+        x_kept_gpu = pulp.LpVariable.dicts("x_kept_gpu", data.nodes, cat=pulp.LpBinary)
+        for n in data.nodes:
+            # x_kept_gpu is 1 iff xf[n] == 1 AND xb[n] == 1
+            prob += x_kept_gpu[n] <= xf[n]
+            prob += x_kept_gpu[n] <= xb[n]
+            prob += x_kept_gpu[n] >= xf[n] + xb[n] - 1
+            
+        total_gpu_base = pulp.lpSum(problem_data.gpu_base_mem[n] * z_gpu[n] for n in data.nodes)
+        total_cpu_base = pulp.lpSum(problem_data.cpu_base_mem[n] * z_cpu[n] for n in data.nodes)
+        total_gpu_act = pulp.lpSum(problem_data.gpu_act_mem[n] * x_kept_gpu[n] for n in data.nodes)
+        total_cpu_act = pulp.lpSum(problem_data.cpu_act_mem[n] * (1 - x_kept_gpu[n]) for n in data.nodes)
+        
+        prob += total_gpu_base + total_gpu_act <= cfg.gpu_mem_budget_mb, "topo_gpu_mem_peak"
+        prob += total_cpu_base + total_cpu_act <= cfg.cpu_mem_budget_mb, "topo_cpu_mem_peak"
+    else:
+        # nodal_sum / peak_approx: use x_kept_gpu_else (AND logic) for activations.
+        # Activations occupy GPU memory only when BOTH forward and backward run on GPU.
+        # This matches training semantics: activations are retained from forward until backward.
+        # The overlap factor (peak_approx only) scales activation memory by a heuristic
+        # to account for non-simultaneous peak within the backward pass.
+        x_kept_gpu_else = pulp.LpVariable.dicts(
+            "x_kept_gpu_e", data.nodes, cat=pulp.LpBinary
+        )
+        for n in data.nodes:
+            prob += x_kept_gpu_else[n] <= xf[n]
+            prob += x_kept_gpu_else[n] <= xb[n]
+            prob += x_kept_gpu_else[n] >= xf[n] + xb[n] - 1
+
+        # Apply overlap factor for peak_approx; nodal_sum uses full activation cost
+        act_overlap = cfg.peak_activation_overlap if cfg.memory_model == "peak_approx" else 1.0
+
+        prob += (
+            pulp.lpSum(problem_data.gpu_base_mem[n] * z_gpu[n] for n in data.nodes)
+            + pulp.lpSum(
+                act_overlap * problem_data.gpu_act_mem[n] * x_kept_gpu_else[n]
+                for n in data.nodes
+            )
+        ) <= cfg.gpu_mem_budget_mb, "else_gpu_mem_peak"
+
+        prob += (
+            pulp.lpSum(problem_data.cpu_base_mem[n] * z_cpu[n] for n in data.nodes)
+            + pulp.lpSum(
+                act_overlap * problem_data.cpu_act_mem[n] * (1 - x_kept_gpu_else[n])
+                for n in data.nodes
+            )
+        ) <= cfg.cpu_mem_budget_mb, "else_cpu_mem_peak"
+
 
     solver = _build_cbc_solver(pulp)
+    solver.msg = True
     prob.solve(solver)
 
     status = pulp.LpStatus.get(prob.status, "unknown")
@@ -426,14 +476,18 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     cut_edges_fwd = [e for e in data.edges if fwd_bits[e[0]] != fwd_bits[e[1]]]
     cut_edges_bwd = [e for e in data.edges if bwd_bits[e[0]] != bwd_bits[e[1]]]
     cross_edges = [(n, n) for n in data.nodes if fwd_bits[n] != bwd_bits[n]]
-    gpu_mem = (
-        sum(problem_data.gpu_mem[n] for n in data.nodes if fwd_bits[n] == 1)
-        + sum(problem_data.gpu_mem[n] for n in data.nodes if bwd_bits[n] == 1)
-    )
-    cpu_mem = (
-        sum(problem_data.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0)
-        + sum(problem_data.cpu_mem[n] for n in data.nodes if bwd_bits[n] == 0)
-    )
+    if cfg.memory_model == "topological":
+        total_base_gpu = sum(problem_data.gpu_base_mem[n] for n in data.nodes if fwd_bits[n] == 1 or bwd_bits[n] == 1)
+        total_base_cpu = sum(problem_data.cpu_base_mem[n] for n in data.nodes if fwd_bits[n] == 0 or bwd_bits[n] == 0)
+        
+        gpu_act_mem = sum(problem_data.gpu_act_mem[n] for n in data.nodes if fwd_bits[n] == 1 and bwd_bits[n] == 1)
+        cpu_act_mem = sum(problem_data.cpu_act_mem[n] for n in data.nodes if not (fwd_bits[n] == 1 and bwd_bits[n] == 1))
+        
+        gpu_mem = total_base_gpu + gpu_act_mem
+        cpu_mem = total_base_cpu + cpu_act_mem
+    else:
+        gpu_mem = sum(problem_data.gpu_mem[n] for n in data.nodes if fwd_bits[n] == 1 or bwd_bits[n] == 1)
+        cpu_mem = sum(problem_data.cpu_mem[n] for n in data.nodes if fwd_bits[n] == 0 or bwd_bits[n] == 0)
 
     return ILPSolution(
         status=status.lower(),
@@ -454,12 +508,12 @@ def solve_partition_ilp(data: ILPInputData, cfg: ILPConfig, backend: str = "auto
     if backend == "auto":
         try:
             importlib.import_module("pulp")
-
             return _solve_with_pulp_dual(data, cfg)
-        except Exception:
+        except Exception as e:
+            print(f"PuLP failed with exception: {repr(e)}", flush=True)
             return _solve_exhaustive_dual(data, cfg)
 
-    if backend == "pulp":
+    if backend in ("pulp", "pulp_cbc_dual"):
         return _solve_with_pulp_dual(data, cfg)
     if backend == "exhaustive":
         return _solve_exhaustive_dual(data, cfg)

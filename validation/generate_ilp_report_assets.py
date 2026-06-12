@@ -11,6 +11,17 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
+
+def _get_column_safe(df: pd.DataFrame, new_name: str, legacy_name: str = None, default = None):
+    """
+    Get column by new name with fallback to legacy name (backward compatibility).
+    """
+    if new_name in df.columns:
+        return df[new_name]
+    elif legacy_name and legacy_name in df.columns:
+        return df[legacy_name]
+    else:
+        return pd.Series([default] * len(df), index=df.index)
 # Set academic theme for ILP plots
 sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
 sns.set_palette("colorblind")
@@ -38,12 +49,42 @@ def _safe_pct_improvement(baseline: float, candidate: float) -> float:
     return ((baseline - candidate) / baseline) * 100.0
 
 
+def _normalize_rescue_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure rescue_influence_* columns are present in consolidated data.
+    Falls back to False if not present (backward compatibility).
+    """
+    for col_type in ["profiling", "ilp", "hybrid"]:
+        col_name = f"rescue_influence_{col_type}"
+        if col_name not in df.columns:
+            df[col_name] = False
+    return df
+
+def _resolve_batch_col(df: pd.DataFrame) -> str:
+    if "config_batch_size" in df.columns:
+        return "config_batch_size"
+    if "batch_size" in df.columns:
+        return "batch_size"
+    if "source_csv" in df.columns:
+        # Fallback for metrics_stats which might not have batch_size explicitly
+        return "batch_size_inferred"
+    return "batch_size"
+
+
 def _best_feasible_rows(df: pd.DataFrame) -> pd.DataFrame:
     feasible = df[df["ilp_status"].isin(["optimal", "feasible"])].copy()
     if feasible.empty:
         return feasible
-    idx = feasible.groupby("model", sort=False)["ilp_objective"].idxmin()
-    return feasible.loc[idx].sort_values(by=["model"], kind="stable")
+    batch_col = _resolve_batch_col(feasible)
+    group_cols = ["model"]
+    if "optimizer" in feasible.columns:
+        group_cols.append("optimizer")
+    if "precision" in feasible.columns:
+        group_cols.append("precision")
+    group_cols.append(batch_col)
+    
+    idx = feasible.groupby(group_cols, sort=False)["ilp_objective"].idxmin()
+    return feasible.loc[idx].sort_values(by=group_cols, kind="stable")
 
 
 def _best_hybrid_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -51,19 +92,34 @@ def _best_hybrid_rows(df: pd.DataFrame) -> pd.DataFrame:
     if runtime_df.empty:
         return runtime_df
 
+    batch_col = _resolve_batch_col(runtime_df)
+    optimizer_col = "config_optimizer" if "config_optimizer" in runtime_df.columns else ("optimizer" if "optimizer" in runtime_df.columns else None)
+    precision_col = "config_precision" if "config_precision" in runtime_df.columns else ("precision" if "precision" in runtime_df.columns else None)
+
+    group_cols = ["model"]
+    if optimizer_col is not None:
+        group_cols.append(optimizer_col)
+    if precision_col is not None:
+        group_cols.append(precision_col)
+    group_cols.append(batch_col)
+
     selected_frames = []
-    for _, model_df in runtime_df.groupby("model", sort=False):
+    for _, model_df in runtime_df.groupby(group_cols, sort=False):
         if "plan_selection_mode" in model_df.columns:
             preferred_df = model_df[model_df["plan_selection_mode"] == "pareto_best"].copy()
             if not preferred_df.empty:
                 model_df = preferred_df
         best_idx = model_df["avg_step_ms"].astype(float).idxmin()
-        selected_frames.append(runtime_df.loc[[best_idx]])
+        row = runtime_df.loc[[best_idx]].copy()
+        # Ensure rescue_influence_hybrid flag is present (defensive for backward compat)
+        if "rescue_influence_hybrid" not in row.columns:
+            row["rescue_influence_hybrid"] = False
+        selected_frames.append(row)
 
-    return pd.concat(selected_frames, ignore_index=True).sort_values(by=["model"], kind="stable")
+    return pd.concat(selected_frames, ignore_index=True).sort_values(by=group_cols, kind="stable")
 
 
-def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, out_dir: Path) -> None:
+def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, optimizer: str, precision: str, batch_size: str, out_dir: Path) -> None:
     model_df = model_df.sort_values(by=["gpu_budget_mb"], kind="stable")
 
     x = model_df["gpu_budget_mb"].astype(float)
@@ -77,9 +133,9 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, out_dir: Pa
     sns.lineplot(x=x, y=y_ilp, marker="o", markersize=8, linewidth=2.5, label="ILP Optimal", ax=ax, color=sns.color_palette()[0], errorbar=None)
     
     if y_greedy is not None:
-        sns.lineplot(x=x, y=y_greedy, linestyle="-.", linewidth=2.0, label="Greedy Heuristic", ax=ax, color=sns.color_palette()[1], errorbar=None)
+        sns.lineplot(x=x, y=y_greedy, linestyle="-.", linewidth=2.0, label="Greedy Heuristic", ax=ax, color=sns.color_palette()[1], errorbar=None, marker='^', markersize=6)
         
-    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label="All CPU", ax=ax, color=sns.color_palette()[2], errorbar=None)
+    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label="All CPU", ax=ax, color=sns.color_palette()[2], errorbar=None, marker='o', markersize=6)
 
     # Plot All GPU only where finite.
     finite_gpu = model_df[pd.to_numeric(model_df["all_gpu_objective"], errors="coerce").replace([float("inf")], pd.NA).notna()]
@@ -92,10 +148,15 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, out_dir: Pa
             label="All GPU",
             ax=ax,
             color=sns.color_palette()[3],
-            errorbar=None
+            errorbar=None,
+            marker="s",
+            markersize=8
         )
+    else:
+        # Invisible line just to force the legend to show OOM
+        ax.plot([], [], linestyle=":", linewidth=2.5, color=sns.color_palette()[3], label="All GPU (OOM)")
 
-    ax.set_title(f"{model}: Execution Latency vs GPU Memory Budget", pad=15, fontweight="bold")
+    ax.set_title(f"{model} (Batch {batch_size}): Execution Latency vs GPU Memory Budget", pad=15, fontweight="bold")
     ax.set_xlabel("GPU Memory Budget (MB)", fontweight="bold")
     ax.set_ylabel("Total Latency (ms)", fontweight="bold")
     ax.legend(title="Execution Strategy", frameon=True, loc="upper right")
@@ -107,9 +168,9 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, out_dir: Pa
                 transform=ax.transAxes, ha='center', va='bottom', fontsize=10, 
                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
 
-    plot_dir = out_dir / "plots" / model / "cost_vs_budget"
+    plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "cost_vs_budget"
     plot_dir.mkdir(parents=True, exist_ok=True)
-    out = plot_dir / f"execution_cost_vs_budget.png"
+    out = plot_dir / f"execution_cost_vs_budget_{optimizer}_{precision}_batch_{batch_size}.png"
     fig.tight_layout()
     fig.savefig(out, dpi=300)
     plt.close(fig)
@@ -121,9 +182,12 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
 
     for _, row in best_df.iterrows():
         model = row["model"]
+        batch_size = str(row.get("batch_size", "unknown"))
+        optimizer = str(row.get("optimizer", "unknown"))
+        precision = str(row.get("precision", "unknown"))
         
         data = []
-        data.append({"Strategy": "All-CPU", "Cost": float(row["all_cpu_objective"])})
+        data.append({"Strategy": "All-CPU", "Cost": float(row["all_cpu_objective"]), "Is_OOM": False})
         
         # Check if All-GPU is feasible
         all_gpu_val = pd.to_numeric(row["all_gpu_objective"], errors="coerce")
@@ -133,50 +197,73 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
             data.append({"Strategy": "All-GPU", "Cost": float(all_gpu_val), "Is_OOM": False})
             
         if "greedy_objective" in row:
-            data.append({"Strategy": "Greedy", "Cost": float(row["greedy_objective"])})
+            greedy_val = pd.to_numeric(row["greedy_objective"], errors="coerce")
+            if pd.isna(greedy_val) or greedy_val == float("inf"):
+                data.append({"Strategy": "Greedy", "Cost": 0, "Is_OOM": True})
+            else:
+                data.append({"Strategy": "Greedy", "Cost": float(greedy_val), "Is_OOM": False})
             
-        data.append({"Strategy": "ILP Optimal", "Cost": float(row["ilp_objective"])})
+        data.append({"Strategy": "ILP Optimal", "Cost": float(row["ilp_objective"]), "Is_OOM": False})
         
         plot_df = pd.DataFrame(data)
-        
+        if plot_df.empty:
+            continue
+            
         fig, ax = plt.subplots(figsize=(8, 5))
         
-        # Plot standard bars
-        valid_df = plot_df[plot_df.get("Is_OOM", False) != True]
-        sns.barplot(data=valid_df, x="Strategy", y="Cost", ax=ax, palette="viridis")
+        # Plot ALL strategies to ensure x-axis ticks exist
+        sns.barplot(data=plot_df, x="Strategy", y="Cost", ax=ax, palette="viridis")
         
-        # Plot OOM placeholder if needed
-        oom_df = plot_df[plot_df.get("Is_OOM", False) == True]
-        if not oom_df.empty:
-            for idx, strategy in enumerate(plot_df["Strategy"]):
-                if strategy == "All-GPU" and oom_df.iloc[0]["Strategy"] == "All-GPU":
-                    ax.bar(idx, ax.get_ylim()[1] * 0.1, color='lightgray', hatch='//', edgecolor='#666666')
-                    ax.text(idx, ax.get_ylim()[1] * 0.12, "OOM /\nInfeasible", color="#333333", ha="center", va="bottom", fontweight="bold")
+        # Now find the OOM strategies and draw over their bars ONLY IF physical OOM
+        strategies = plot_df["Strategy"].tolist()
+        for i, patch in enumerate(ax.patches):
+            if i < len(strategies):
+                strategy = strategies[i]
+                row_data = plot_df[plot_df["Strategy"] == strategy].iloc[0]
+                
+                if pd.notna(row_data.get("Is_OOM")) and bool(row_data.get("Is_OOM")):
+                    # Replace with physical OOM bar
+                    patch.set_height(ax.get_ylim()[1] * 0.9 if ax.get_ylim()[1] > 1 else 1000)
+                    patch.set_facecolor('white')
+                    patch.set_hatch('//')
+                    patch.set_edgecolor('red')
+                    
+                    oom_text = "OOM Físico (>8GB VRAM)"
+                    ax.text(patch.get_x() + patch.get_width() / 2., patch.get_height() * 0.5, 
+                            oom_text, color="red", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
         
-        ax.set_title(f"Execution Latency Comparison: {model}", pad=15, fontweight="bold")
+        # Add a horizontal line for the Pareto ceiling (ILP Optimal cost)
+        ilp_cost = float(row["ilp_objective"])
+        ax.axhline(y=ilp_cost, color='r', linestyle='--', linewidth=2, label='Límite de Pareto (Techo ILP)')
+        
+        ax.set_title(f"Execution Latency Comparison: {model} (Batch {batch_size})", pad=15, fontweight="bold")
         ax.set_ylabel("Total Latency (ms)", fontweight="bold")
         ax.set_xlabel("Execution Strategy", fontweight="bold")
         
         # Add data labels
         for p in ax.patches:
             height = p.get_height()
-            if height > 0 and p.get_facecolor() != (0.8274509803921568, 0.8274509803921568, 0.8274509803921568, 1.0): # Skip OOM bar
+            if height > 0 and p.get_facecolor() != (1.0, 1.0, 1.0, 1.0): # Skip OOM bar
                 ax.annotate(f"{height:.2f}", 
                             (p.get_x() + p.get_width() / 2., height),
                             ha="center", va="center", xytext=(0, 8), textcoords="offset points",
                             fontsize=10, fontweight="bold")
         
         import matplotlib.patches as mpatches
-        if not oom_df.empty:
-            oom_patch = mpatches.Patch(facecolor='lightgray', hatch='//', edgecolor='#666666', label='OOM / Infeasible')
-            handles, labels = ax.get_legend_handles_labels()
-            ax.legend(handles=[oom_patch], bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        handles, labels = ax.get_legend_handles_labels()
+        if plot_df["Is_OOM"].any():
+            oom_patch = mpatches.Patch(facecolor='white', hatch='//', edgecolor='red', label='OOM Físico')
+            if 'OOM Físico' not in labels:
+                handles.append(oom_patch)
+                labels.append('OOM Físico')
+        
+        ax.legend(handles=handles, labels=labels, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
 
         sns.despine()
 
-        plot_dir = out_dir / "plots" / model / "comparisons"
+        plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "comparisons"
         plot_dir.mkdir(parents=True, exist_ok=True)
-        out = plot_dir / "strategy_comparison.png"
+        out = plot_dir / f"strategy_comparison_{optimizer}_{precision}_batch_{batch_size}.png"
         fig.tight_layout()
         fig.savefig(out, dpi=300)
         plt.close(fig)
@@ -201,6 +288,7 @@ def _write_markdown_summary(
         lines.append("## Best Feasible Row Per Model")
         display_cols = [
             "model",
+            "batch_size",
             "gpu_budget_mb",
             "ilp_objective",
             "greedy_objective",
@@ -208,10 +296,10 @@ def _write_markdown_summary(
             "ilp_cpu_mem_mb",
             "ilp_layers_gpu",
             "ilp_layers_cpu",
-            "ilp_cut_edges",
             "all_cpu_objective",
             "all_gpu_status",
         ]
+        display_cols = [c for c in display_cols if c in best_df.columns]
         table = best_df[display_cols].copy()
         table["improvement_vs_all_cpu_pct"] = table.apply(
             lambda r: _safe_pct_improvement(float(r["all_cpu_objective"]), float(r["ilp_objective"])),
@@ -340,6 +428,185 @@ def _write_sensitivity_markdown_summary(sensitivity_df: pd.DataFrame, out_path: 
     out_path.write_text("\n".join(lines))
 
 
+def _plot_model_energy_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
+    if best_df.empty or "ilp_energy_j" not in best_df.columns:
+        return
+
+    for _, row in best_df.iterrows():
+        model = row["model"]
+        batch_size = str(row.get("batch_size", "unknown"))
+        optimizer = str(row.get("optimizer", "unknown"))
+        precision = str(row.get("precision", "unknown"))
+        
+        data = []
+        if "all_cpu_energy_j" in row and not pd.isna(row["all_cpu_energy_j"]):
+            data.append({"Strategy": "All-CPU", "Energy": float(row["all_cpu_energy_j"]), "Is_OOM": False})
+        
+        all_gpu_val = pd.to_numeric(row.get("all_gpu_energy_j", float("inf")), errors="coerce")
+        if pd.isna(all_gpu_val) or all_gpu_val == float("inf"):
+            data.append({"Strategy": "All-GPU", "Energy": 0, "Is_OOM": True})
+        else:
+            data.append({"Strategy": "All-GPU", "Energy": float(all_gpu_val), "Is_OOM": False})
+            
+        if "greedy_energy_j" in row:
+            greedy_val = pd.to_numeric(row.get("greedy_energy_j", float("inf")), errors="coerce")
+            if pd.isna(greedy_val) or greedy_val == float("inf"):
+                data.append({"Strategy": "Greedy", "Energy": 0, "Is_OOM": True})
+            else:
+                data.append({"Strategy": "Greedy", "Energy": float(greedy_val), "Is_OOM": False})
+            
+        if "ilp_energy_j" in row and not pd.isna(row["ilp_energy_j"]):
+            data.append({"Strategy": "ILP Optimal", "Energy": float(row["ilp_energy_j"]), "Is_OOM": False})
+        
+        plot_df = pd.DataFrame(data)
+        if plot_df.empty:
+            continue
+            
+        fig, ax = plt.subplots(figsize=(8, 5))
+        
+        # Plot ALL strategies to ensure x-axis ticks exist
+        sns.barplot(data=plot_df, x="Strategy", y="Energy", ax=ax, palette="plasma")
+        
+        # Now find the OOM strategies and draw over their bars
+        strategies = plot_df["Strategy"].tolist()
+        for i, patch in enumerate(ax.patches):
+            if i < len(strategies):
+                strategy = strategies[i]
+                row_data = plot_df[plot_df["Strategy"] == strategy].iloc[0]
+                
+                if pd.notna(row_data.get("Is_OOM")) and bool(row_data.get("Is_OOM")):
+                    # Replace with OOM bar
+                    patch.set_height(ax.get_ylim()[1] * 0.9 if ax.get_ylim()[1] > 1 else 1000)
+                    patch.set_facecolor('white')
+                    patch.set_hatch('//')
+                    patch.set_edgecolor('red')
+                    
+                    oom_text = "OOM Físico (>8GB VRAM)"
+                    ax.text(patch.get_x() + patch.get_width() / 2., patch.get_height() * 0.5, 
+                            oom_text, color="red", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
+                else:
+                    height = patch.get_height()
+                    if height > 0:
+                        ax.annotate(f"{height:.2f}", 
+                                    (patch.get_x() + patch.get_width() / 2., height),
+                                    ha="center", va="center", xytext=(0, 8), textcoords="offset points",
+                                    fontsize=10, fontweight="bold")
+                                    
+        # Add a horizontal line for the Pareto ceiling (ILP Optimal cost)
+        ilp_energy = float(row["ilp_energy_j"]) if "ilp_energy_j" in row and not pd.isna(row["ilp_energy_j"]) else 0
+        if ilp_energy > 0:
+            ax.axhline(y=ilp_energy, color='r', linestyle='--', linewidth=2, label='Límite de Pareto (Techo ILP)')
+        
+        ax.set_title(f"Energy Consumption Comparison: {model} (Batch {batch_size})", pad=15, fontweight="bold")
+        ax.set_ylabel("Total Energy (Joules)", fontweight="bold")
+        ax.set_xlabel("Execution Strategy", fontweight="bold")
+        
+        import matplotlib.patches as mpatches
+        handles, labels = ax.get_legend_handles_labels()
+        if plot_df["Is_OOM"].any():
+            oom_patch = mpatches.Patch(facecolor='white', hatch='//', edgecolor='red', label='OOM Físico')
+            if 'OOM Físico' not in labels:
+                handles.append(oom_patch)
+                labels.append('OOM Físico')
+        
+        ax.legend(handles=handles, labels=labels, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+
+        sns.despine()
+
+        plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "comparisons"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        out = plot_dir / f"energy_comparison_{optimizer}_{precision}_batch_{batch_size}.png"
+        fig.tight_layout()
+        fig.savefig(out, dpi=300)
+        plt.close(fig)
+
+
+def _plot_memory_utilization_bar(metrics_csv: Path, model: str, optimizer: str, precision: str, batch_size: str, out_dir: Path) -> None:
+    df = pd.read_csv(metrics_csv)
+    if "layer" not in df.columns or "gpu_mem_peak_mb_mean" not in df.columns:
+        return
+        
+    gpu_total = df["gpu_mem_peak_mb_mean"].sum() if "gpu_mem_peak_mb_mean" in df.columns else 0.0
+    cpu_total = df["cpu_mem_mb_mean"].sum() if "cpu_mem_mb_mean" in df.columns else 0.0
+    
+    if gpu_total == 0 and cpu_total == 0:
+        return
+        
+    data = [
+        {"Memory Domain": "GPU VRAM", "Size (MB)": gpu_total},
+        {"Memory Domain": "CPU DRAM", "Size (MB)": cpu_total}
+    ]
+    plot_df = pd.DataFrame(data)
+    
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sns.barplot(data=plot_df, x="Memory Domain", y="Size (MB)", ax=ax, palette="magma")
+    
+    ax.set_title(f"Total Nodal Memory Demand: {model} (Batch {batch_size})", pad=15, fontweight="bold")
+    ax.set_ylabel("Memory Size (MB)", fontweight="bold")
+    
+    for p in ax.patches:
+        height = p.get_height()
+        ax.annotate(f"{height:.2f} MB", 
+                    (p.get_x() + p.get_width() / 2., height),
+                    ha="center", va="center", xytext=(0, 8), textcoords="offset points",
+                    fontsize=10, fontweight="bold")
+    if gpu_total == 0 and cpu_total > 0:
+        ax.text(0.5, 0.95, "[!] Medido en CPU debido a GPU OOM", 
+                transform=ax.transAxes, ha='center', va='top', fontsize=10, 
+                bbox=dict(facecolor='yellow', alpha=0.5, edgecolor='none'), fontweight="bold")
+                    
+    sns.despine()
+    
+    plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "memory"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    out = plot_dir / f"memory_utilization_{optimizer}_{precision}_batch_{batch_size}.png"
+    fig.tight_layout()
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+
+
+def _plot_top15_memory_layers(metrics_csv: Path, model: str, optimizer: str, precision: str, batch_size: str, out_dir: Path) -> None:
+    df = pd.read_csv(metrics_csv)
+    if "layer" not in df.columns or "gpu_mem_peak_mb_mean" not in df.columns:
+        return
+        
+    gpu_sum = df["gpu_mem_peak_mb_mean"].sum()
+    cpu_sum = df["cpu_mem_mb_mean"].sum() if "cpu_mem_mb_mean" in df.columns else 0.0
+    
+    use_cpu = False
+    metric_col = "gpu_mem_peak_mb_mean"
+    x_label = "GPU Memory Peak (MB)"
+    if gpu_sum == 0 and cpu_sum > 0:
+        use_cpu = True
+        metric_col = "cpu_mem_mb_mean"
+        x_label = "CPU Memory Peak (MB)"
+        
+    top_layers = df.sort_values(by=metric_col, ascending=False).head(15).copy()
+    if top_layers.empty or top_layers[metric_col].sum() == 0:
+        return
+        
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.barplot(data=top_layers, x=metric_col, y="layer", ax=ax, palette="crest")
+    
+    ax.set_title(f"Top 15 Memory-Intensive Layers: {model} (Batch {batch_size})", pad=15, fontweight="bold")
+    ax.set_xlabel(x_label, fontweight="bold")
+    ax.set_ylabel("Layer", fontweight="bold")
+    
+    if use_cpu:
+        ax.text(0.5, 0.05, "[!] Medido en CPU debido a GPU OOM", 
+                transform=ax.transAxes, ha='center', va='bottom', fontsize=10, 
+                bbox=dict(facecolor='yellow', alpha=0.5, edgecolor='none'), fontweight="bold")
+    
+    sns.despine()
+    
+    plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "memory"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    out = plot_dir / f"top15_memory_layers_{optimizer}_{precision}_batch_{batch_size}.png"
+    fig.tight_layout()
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate consolidated ILP report assets from Pareto sweep CSV files")
     parser.add_argument("--input_root", default="data/test-m4", help="Root folder to scan for *_pareto_sweep.csv")
@@ -361,6 +628,22 @@ def main() -> int:
         frames.append(df)
 
     full_df = pd.concat(frames, ignore_index=True)
+
+    # Normalize rescue_influence columns (backward compatibility)
+    full_df = _normalize_rescue_columns(full_df)
+
+    # Extract info from source_csv: e.g. .../resnet50/AdamW/fp32/batch_32/...
+    full_df["batch_size"] = full_df["source_csv"].str.extract(r'(batch_\d+)')
+    # If regex captures 'batch_32', map to just '32'
+    full_df["batch_size"] = full_df["batch_size"].str.replace("batch_", "")
+    
+    full_df["precision"] = full_df["source_csv"].str.extract(r'/(fp16|fp32|bf16|int8)/')
+    full_df["optimizer"] = full_df["source_csv"].str.extract(r'/([^/]+)/(?:fp16|fp32|bf16|int8)/')
+
+    # Fill NaNs with 'unknown' to avoid groupby dropping rows
+    full_df["precision"] = full_df["precision"].fillna("unknown")
+    full_df["optimizer"] = full_df["optimizer"].fillna("unknown")
+    full_df["batch_size"] = full_df["batch_size"].fillna("unknown")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -384,16 +667,38 @@ def main() -> int:
             hdf["source_csv"] = str(p)
             hybrid_frames.append(hdf)
         hybrid_df = pd.concat(hybrid_frames, ignore_index=True)
+        # Normalize rescue_influence columns in hybrid data
+        hybrid_df = _normalize_rescue_columns(hybrid_df)
         hybrid_csv = csv_dir / "hybrid_execution_consolidated.csv"
         hybrid_df.to_csv(hybrid_csv, index=False)
         hybrid_best_df = _best_hybrid_rows(hybrid_df)
         hybrid_best_csv = csv_dir / "hybrid_execution_best_per_model.csv"
         hybrid_best_df.to_csv(hybrid_best_csv, index=False)
 
+    
     for model in sorted(full_df["model"].astype(str).unique().tolist()):
-        _plot_model_objective_curves(full_df[full_df["model"] == model], model, out_dir)
+        model_data = full_df[full_df["model"] == model]
+        for optimizer in sorted(model_data["optimizer"].astype(str).unique().tolist()):
+            opt_data = model_data[model_data["optimizer"] == optimizer]
+            for precision in sorted(opt_data["precision"].astype(str).unique().tolist()):
+                prec_data = opt_data[opt_data["precision"] == precision]
+                for batch_size in sorted(prec_data["batch_size"].astype(str).unique().tolist()):
+                    batch_data = prec_data[prec_data["batch_size"] == batch_size]
+                    if not batch_data.empty:
+                        _plot_model_objective_curves(batch_data, model, optimizer, precision, batch_size, out_dir)
+                        _plot_model_energy_curves(batch_data, model, optimizer, precision, batch_size, out_dir)
+                        
+                        source_csv = Path(batch_data.iloc[0]["source_csv"])
+                        config_dir = source_csv.parent
+                        metrics_stats_csv = config_dir / f"{model}_metrics_stats.csv"
+                        if metrics_stats_csv.exists():
+                            _plot_memory_utilization_bar(metrics_stats_csv, model, optimizer, precision, batch_size, out_dir)
+                            _plot_top15_memory_layers(metrics_stats_csv, model, optimizer, precision, batch_size, out_dir)
 
+    # Note: best_df now groups by (model, optimizer, precision, batch_size), 
+    # so these plot functions will naturally loop over all combinations.
     _plot_model_comparisons(best_df, out_dir)
+    _plot_model_energy_comparisons(best_df, out_dir)
 
     md_dir = out_dir / "summary_docs"
     md_dir.mkdir(parents=True, exist_ok=True)
@@ -455,5 +760,57 @@ def main() -> int:
     return 0
 
 
+
+def _plot_model_energy_curves(model_df: pd.DataFrame, model: str, optimizer: str, precision: str, batch_size: str, out_dir: Path) -> None:
+    model_df = model_df.sort_values(by=["gpu_budget_mb"], kind="stable")
+
+    if "ilp_energy_j" not in model_df.columns:
+        return
+
+    x = model_df["gpu_budget_mb"].astype(float)
+    y_ilp = model_df["ilp_energy_j"].astype(float)
+    y_cpu = model_df["all_cpu_energy_j"].astype(float)
+    y_greedy = model_df["greedy_energy_j"].astype(float) if "greedy_energy_j" in model_df.columns else None
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+
+    sns.lineplot(x=x, y=y_ilp, marker="o", markersize=8, linewidth=2.5, label="ILP Optimal", ax=ax, color=sns.color_palette()[0], errorbar=None)
+
+    if y_greedy is not None:
+        sns.lineplot(x=x, y=y_greedy, linestyle="-.", linewidth=2.0, label="Greedy Heuristic", ax=ax, color=sns.color_palette()[1], errorbar=None, marker='^', markersize=6)
+
+    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label="All CPU", ax=ax, color=sns.color_palette()[2], errorbar=None, marker='o', markersize=6)
+
+    # Plot All GPU only where objective was feasible
+    finite_gpu = model_df[pd.to_numeric(model_df["all_gpu_objective"], errors="coerce").replace([float("inf")], pd.NA).notna()]
+    if len(finite_gpu) > 0:
+        sns.lineplot(
+            x=finite_gpu["gpu_budget_mb"].astype(float),
+            y=finite_gpu["all_gpu_energy_j"].astype(float),
+            linestyle=":",
+            linewidth=2.5,
+            label="All GPU",
+            ax=ax,
+            color=sns.color_palette()[3],
+            errorbar=None,
+            marker="s",
+            markersize=8
+        )
+    else:
+        # Invisible line just to force the legend to show OOM
+        ax.plot([], [], linestyle=":", linewidth=2.5, color=sns.color_palette()[3], label="All GPU (OOM)")
+
+    ax.set_title(f"{model} (Batch {batch_size}): Energy Consumption vs GPU Memory Budget", pad=15, fontweight="bold")
+    ax.set_xlabel("GPU Memory Budget (MB)", fontweight="bold")
+    ax.set_ylabel("Total Energy (Joules)", fontweight="bold")
+    ax.legend(title="Execution Strategy", frameon=True, loc="upper right")
+    sns.despine(left=True, bottom=True)
+
+    plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "energy_vs_budget"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    out = plot_dir / f"execution_energy_vs_budget_{optimizer}_{precision}_batch_{batch_size}.png"
+    fig.tight_layout()
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
 if __name__ == "__main__":
     raise SystemExit(main())

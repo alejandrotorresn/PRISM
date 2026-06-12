@@ -54,6 +54,24 @@ def infer_ilp_input_paths(config_dir: Path, model_name: str) -> ILPInputPaths:
         for p in (stats, graph_edges, transfer_edges)
         if not p.exists()
     ]
+    
+    if missing and (not graph_edges.exists() or not transfer_edges.exists()):
+        sibling_dirs = [d for d in config_dir.parent.iterdir() if d.is_dir() and d.name.startswith("batch_") and d != config_dir]
+        for sib in sibling_dirs:
+            sib_graph = sib / f"{model_name}_graph_edges.csv"
+            sib_transfer = sib / f"{model_name}_transfer_edges.csv"
+            if not sib_graph.exists() and not sib_transfer.exists():
+                # Maybe they are in a run_001 subdirectory
+                sib_runs = sorted([p for p in sib.glob("run_*") if p.is_dir()])
+                if sib_runs:
+                    sib_graph = sib_runs[0] / f"{model_name}_graph_edges.csv"
+                    sib_transfer = sib_runs[0] / f"{model_name}_transfer_edges.csv"
+            if sib_graph.exists() and sib_transfer.exists():
+                graph_edges = sib_graph
+                transfer_edges = sib_transfer
+                missing = [str(p) for p in (stats, graph_edges, transfer_edges) if not p.exists()]
+                break
+
     if missing:
         raise FileNotFoundError(
             "Could not resolve required ILP input files: " + ", ".join(missing)

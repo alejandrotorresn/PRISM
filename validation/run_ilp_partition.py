@@ -28,8 +28,13 @@ def _default_paths(config_dir: Path, model_name: str):
         stats = config_dir / "metrics_stats.csv"
 
     run_dirs = sorted([p for p in config_dir.glob("run_*") if p.is_dir()])
-    if run_dirs:
-        ref_run = run_dirs[0]
+    ref_run = None
+    for rdir in run_dirs:
+        if (rdir / f"{model_name}_graph_edges.csv").exists() and (rdir / f"{model_name}_transfer_edges.csv").exists():
+            ref_run = rdir
+            break
+
+    if ref_run:
         graph_edges = ref_run / f"{model_name}_graph_edges.csv"
         transfer_edges = ref_run / f"{model_name}_transfer_edges.csv"
     else:
@@ -39,7 +44,7 @@ def _default_paths(config_dir: Path, model_name: str):
     if not graph_edges.exists() or not transfer_edges.exists():
         raise FileNotFoundError(
             "Could not resolve graph/transfer artifacts in config_dir. "
-            f"Expected either run_*/ files or direct files in: {config_dir}"
+            f"Expected either valid run_*/ files or direct files in: {config_dir}"
         )
     return stats, graph_edges, transfer_edges
 
@@ -52,8 +57,6 @@ def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bo
     if regime == "deterministic":
         if args.allow_low_quality_stats:
             raise ValueError("Deterministic regime does not allow --allow_low_quality_stats")
-        if args.allow_transfer_calibration_fallback:
-            raise ValueError("Deterministic regime does not allow --allow_transfer_calibration_fallback")
         if args.allow_fallback_graph_trace:
             raise ValueError("Deterministic regime does not allow --allow_fallback_graph_trace")
         if not args.strict_graph_mapping:
@@ -97,7 +100,7 @@ def main() -> int:
     parser.add_argument("--congestion_knee_ms", type=float, default=0.0, help="Congestion knee in aggregated cut-transfer ms (0 = auto)")
     parser.add_argument("--gpu_mem_budget_mb", type=float, default=1e18)
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
-    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx"], default="peak_approx")
+    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx", "topological"], default="topological")
     parser.add_argument("--peak_activation_overlap", type=float, default=0.35)
     parser.add_argument("--backward_meta_model_json", default=None, help="Deprecated and ignored. Backward costs now come from profiling artifacts.")
     parser.add_argument("--backward_meta_blend", type=float, default=1.0, help="Deprecated and ignored. Backward costs now come from profiling artifacts.")

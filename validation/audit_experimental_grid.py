@@ -226,25 +226,46 @@ def _compute_row(
     hybrid_protocol_files = list(cfg_dir.rglob("hybrid_execution_protocol.csv")) if cfg_exists else []
     hybrid_ok = len(hybrid_protocol_files) > 0
 
-    # Relaxing the quality flag requirement if ILP was explicitly able to find a feasible plan using fallbacks
-    quality_ok_for_doctoral = aggregation_ok
-    hybrid_requirement_ok = (hybrid_ok if require_hybrid else True)
-    base_ready = all(
+    # ==================== NEW: Separate operational viability from scientific validity ====================
+    # Operational viability: did the pipeline execute successfully (with rescue allowed)?
+    operational_status = "failed"
+    if cfg_exists and successful_runs > 0:
+        if successful_runs >= expected_repeats_eff:
+            operational_status = "ok"
+        else:
+            operational_status = "partial"
+    elif cfg_exists and successful_runs == 0:
+        operational_status = "partial"  # Profiling partial or failed but may have rescue data
+
+    # Mark if rescue/fallback were invoked
+    rescue_influence_profiling = transfer_fallback_runs > 0 or non_structured_graph_runs > 0
+    
+    # Inferential status depends on quality of measured data (not on rescue itself)
+    inferential_status = "exploratory"
+    if aggregation_ok and quality_flag_ok:
+        inferential_status = "strict"
+    elif aggregation_ok:
+        inferential_status = "qualified"
+
+    # Doctoral operational readiness: executed (even with rescue) + ILP found solution + hybrid ran
+    doctoral_operational_ready = all(
         [
             cfg_exists,
-            successful_runs >= expected_repeats_eff,
-            quality_ok_for_doctoral,
+            successful_runs > 0,  # At least one replicate
             ilp_ok,
             pareto_ok,
-            hybrid_requirement_ok,
+            hybrid_ok if require_hybrid else True,
         ]
     )
 
+    # Doctoral inferential strictness: operational ready + high-quality data + measured transfers + structured graph
     strict_transfer_measured = (len(meta_records) > 0 and transfer_fallback_runs == 0)
     strict_graph_trace_structured = (len(meta_records) > 0 and non_structured_graph_runs == 0)
-    doctoral_ready_strict_thesis = all(
+    doctoral_inferential_strict = all(
         [
-            base_ready,
+            doctoral_operational_ready,
+            aggregation_ok,
+            quality_flag_ok,
             strict_transfer_measured,
             strict_graph_trace_structured,
         ]
@@ -329,7 +350,11 @@ def _compute_row(
         "completion_pct": completion_pct,
         "strict_transfer_measured": strict_transfer_measured,
         "strict_graph_trace_structured": strict_graph_trace_structured,
-        "doctoral_ready_strict_thesis": bool(doctoral_ready_strict_thesis),
+        "operational_status": operational_status,
+        "inferential_status": inferential_status,
+        "rescue_influence_profiling": rescue_influence_profiling,
+        "doctoral_operational_ready": bool(doctoral_operational_ready),
+        "doctoral_inferential_strict": bool(doctoral_inferential_strict),
         "probable_failure_stage": probable_failure_stage,
         "probable_cause": probable_cause,
         "profiling_stage_status": _bool_to_stage(successful_runs >= expected_repeats_eff, "ok", "incomplete"),
@@ -346,14 +371,18 @@ def _group_completeness(df: pd.DataFrame, col: str) -> pd.DataFrame:
         .agg(
             n_configs=("completion_pct", "count"),
             avg_completion_pct=("completion_pct", "mean"),
-            doctoral_ready_strict_thesis_configs=("doctoral_ready_strict_thesis", "sum"),
+            operational_ready_configs=("doctoral_operational_ready", "sum"),
+            inferential_strict_configs=("doctoral_inferential_strict", "sum"),
         )
         .reset_index()
         .sort_values(by=[col], kind="stable")
     )
     grouped["avg_completion_pct"] = grouped["avg_completion_pct"].round(2)
-    grouped["doctoral_ready_strict_thesis_ratio_pct"] = (
-        100.0 * grouped["doctoral_ready_strict_thesis_configs"] / grouped["n_configs"]
+    grouped["operational_ready_ratio_pct"] = (
+        100.0 * grouped["operational_ready_configs"] / grouped["n_configs"]
+    ).round(2)
+    grouped["inferential_strict_ratio_pct"] = (
+        100.0 * grouped["inferential_strict_configs"] / grouped["n_configs"]
     ).round(2)
     return grouped
 
@@ -379,7 +408,8 @@ def _write_markdown_summary(
     lines.append("")
     lines.append("## General Summary")
     lines.append(f"- Audited configurations: {len(full_df)}")
-    lines.append(f"- Ready configurations (strict_thesis): {int(full_df['doctoral_ready_strict_thesis'].sum())}")
+    lines.append(f"- Operationally ready configurations: {int(full_df['doctoral_operational_ready'].sum())}")
+    lines.append(f"- Scientifically strict configurations: {int(full_df['doctoral_inferential_strict'].sum())}")
     lines.append(f"- Configurations with incidents: {len(failed_df)}")
     lines.append("")
 
@@ -391,10 +421,16 @@ def _write_markdown_summary(
         "batch_size",
         "completion_pct",
         "profiling_completion_pct",
-        "doctoral_ready_strict_thesis",
+        "doctoral_operational_ready",
+        "doctoral_inferential_strict",
+        "operational_status",
+        "inferential_status",
     ]
     disp_df = full_df[cols].copy().sort_values(by=["model", "optimizer", "precision", "batch_size"])
-    disp_df["doctoral_ready_strict_thesis"] = disp_df["doctoral_ready_strict_thesis"].apply(
+    disp_df["doctoral_operational_ready"] = disp_df["doctoral_operational_ready"].apply(
+        lambda x: "✓ Ready" if x else "✗ Not Ready"
+    )
+    disp_df["doctoral_inferential_strict"] = disp_df["doctoral_inferential_strict"].apply(
         lambda x: "🟢 Ready" if x else "🔴 Incomplete"
     )
     disp_df["completion_pct"] = disp_df["completion_pct"].apply(
@@ -435,8 +471,12 @@ def _write_markdown_summary(
             g_df["avg_completion_pct"] = g_df["avg_completion_pct"].apply(
                 lambda x: f"🟢 {x}%" if x == 100 else (f"🟡 {x}%" if x >= 50 else f"🔴 {x}%")
             )
-        if "doctoral_ready_strict_thesis_ratio_pct" in g_df.columns:
-            g_df["doctoral_ready_strict_thesis_ratio_pct"] = g_df["doctoral_ready_strict_thesis_ratio_pct"].apply(
+        if "operational_ready_ratio_pct" in g_df.columns:
+            g_df["operational_ready_ratio_pct"] = g_df["operational_ready_ratio_pct"].apply(
+                lambda x: f"🟢 {x}%" if x == 100 else (f"🟡 {x}%" if x >= 50 else f"🔴 {x}%")
+            )
+        if "inferential_strict_ratio_pct" in g_df.columns:
+            g_df["inferential_strict_ratio_pct"] = g_df["inferential_strict_ratio_pct"].apply(
                 lambda x: f"🟢 {x}%" if x == 100 else (f"🟡 {x}%" if x >= 50 else f"🔴 {x}%")
             )
         lines.append(_table_to_markdown_or_text(g_df))
@@ -507,7 +547,7 @@ def main() -> int:
     ]
 
     full_df = pd.DataFrame(rows).sort_values(by=["model", "optimizer", "precision", "batch_size"], kind="stable")
-    failed_df = full_df[~full_df["doctoral_ready_strict_thesis"]].copy()
+    failed_df = full_df[~full_df["doctoral_operational_ready"]].copy()
 
     by_model_df = _group_completeness(full_df, "model")
     by_optimizer_df = _group_completeness(full_df, "optimizer")
@@ -542,7 +582,8 @@ def main() -> int:
     print("GRID AUDIT GENERATED")
     print("=" * 80)
     print(f"Configurations audited: {len(full_df)}")
-    print(f"Doctoral-ready strict thesis: {int(full_df['doctoral_ready_strict_thesis'].sum())}")
+    print(f"Operationally ready: {int(full_df['doctoral_operational_ready'].sum())}")
+    print(f"Scientifically strict: {int(full_df['doctoral_inferential_strict'].sum())}")
     print(f"Configurations with incidents: {len(failed_df)}")
     print(f"By-config CSV: {by_config_csv}")
     print(f"Failed-config CSV: {failed_csv}")

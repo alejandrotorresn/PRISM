@@ -82,6 +82,18 @@ Example:
 PROFILE=doctoral_diagnostic RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```
 
+### Simulation-to-runtime divergence tracking
+
+The campaign pipeline now propagates simulator outputs from the Pareto sweep
+(`sim_time_ms`, `sim_energy_j`) into the hybrid runtime protocol, enabling direct
+reporting of:
+
+- `delta_time_sim_vs_real_pct`
+- `delta_energy_sim_vs_real_pct`
+
+Operationally, this linkage is automatic when `HYBRID_PLAN_SELECTION=pareto_best`
+and the selected Pareto source CSV is available.
+
 ### Fast script preflight
 ```bash
 conda activate prism_env
@@ -161,4 +173,4 @@ If you only need commands, use [operations/QUICK_START.sh](operations/QUICK_STAR
 
 ---
 
-*Last Updated*: June 1, 2026
+*Last Updated*: June 11, 2026

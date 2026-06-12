@@ -443,12 +443,19 @@ def load_ilp_inputs(
     if meta is not None:
         analytical_fallback = bool(meta.get("analytical_fallback_gpu", False))
 
-    if all_cpu_zero or (all_gpu_zero and not analytical_fallback):
-        bad = "CPU" if all_cpu_zero else "GPU"
+    # For AdamW degeneration or complete GPU absence, force analytical fallback
+    if all_gpu_zero and not analytical_fallback:
+        logger.warning(
+            f"Degenerate GPU telemetry detected in {stats_path} (all times are zero). "
+            "Forcing analytical fallback regime to rescue partitioning."
+        )
+        analytical_fallback = True
+
+    if all_cpu_zero:
         raise ValueError(
             "Invalid profiling data for ILP: "
-            f"all {bad} mean times are zero across layers in {stats_path}. "
-            "This dataset is degenerate for comparative partitioning."
+            f"all CPU mean times are zero across layers in {stats_path}. "
+            "This dataset is degenerate and cannot be partitioned even analytically."
         )
 
     zero_gpu_mask = gpu_time_mean <= 0
@@ -569,19 +576,41 @@ def load_ilp_inputs(
         row["layer"]: _safe_num(row.get("cpu_bwd_energy_j_mean", 0.0)) + (k_sigma_energy_eff * _safe_num(row.get("cpu_bwd_energy_j_std", 0.0)))
         for _, row in stats.iterrows()
     }
-    node_mem_gpu_mb = {row["layer"]: _safe_num(row.get("gpu_mem_peak_mb_mean", 0.0)) for _, row in stats.iterrows()}
-    node_mem_cpu_mb = {row["layer"]: _safe_num(row.get("cpu_mem_mb_mean", 0.0)) for _, row in stats.iterrows()}
+    node_mem_gpu_mb = {}
+    node_mem_cpu_mb = {}
+    for _, row in stats.iterrows():
+        layer = row["layer"]
+        isolated_mem = (
+            _safe_num(row.get("params_mb_mean", 0.0)) +
+            _safe_num(row.get("activations_mb_mean", 0.0)) +
+            _safe_num(row.get("grads_mb_mean", 0.0)) +
+            _safe_num(row.get("optimizer_states_mb_mean", 0.0))
+        )
+        if isolated_mem <= 0.0:
+            isolated_mem = _safe_num(row.get("cpu_mem_mb_mean", 0.0))
+        node_mem_gpu_mb[layer] = isolated_mem
+        node_mem_cpu_mb[layer] = _safe_num(row.get("cpu_mem_mb_mean", 0.0))
+
     node_mem_activation_mb = {}
     node_time_io_ms = {}
     node_energy_io_j = {}
 
     for _, row in stats.iterrows():
         layer = row["layer"]
-        gpu_base = max(_safe_num(row.get("gpu_mem_peak_mb_mean", 0.0)), 0.0)
+        gpu_base = max(node_mem_gpu_mb.get(layer, 0.0), 0.0)
         activation_mb = _safe_num(row.get("activations_mb_effective", row.get("activations_mb_mean", 0.0)))
         if activation_mb <= 0.0:
-            activation_mb = gpu_base * 0.70
-        node_mem_activation_mb[layer] = min(max(activation_mb, 0.0), gpu_base if gpu_base > 0 else activation_mb)
+            activation_mb = gpu_base * 0.70  # Heuristic fallback: ~70% of total is activation
+        gpu_base_for_clip = gpu_base if gpu_base > 1e-12 else activation_mb
+        if activation_mb > gpu_base_for_clip + 1e-6 and gpu_base_for_clip > 1e-12:
+            logger.warning(
+                "Layer '%s': measured activations_mb=%.2f MB > gpu_total_mb=%.2f MB. "
+                "This indicates inconsistent profiling data (likely global GPU snapshot vs. per-layer delta mismatch). "
+                "Clipping to gpu_total. Re-run profiler with per-layer delta measurement to fix.",
+                layer, activation_mb, gpu_base_for_clip,
+            )
+        node_mem_activation_mb[layer] = min(max(activation_mb, 0.0), gpu_base_for_clip)
+
 
         io_ms = _safe_num(row.get("transfer_d2h_ms_effective", row.get("transfer_d2h_ms_mean", 0.0)))
         if io_ms <= 0.0:

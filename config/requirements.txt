@@ -28,6 +28,10 @@ pulp>=2.7
 
 # Plotting / report generation
 matplotlib>=3.7
+seaborn>=0.13.0
+
+# Statistical Analysis
+scipy>=1.10.0
 
 # Test runner
 pytest>=8.0

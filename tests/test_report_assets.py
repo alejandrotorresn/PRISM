@@ -10,10 +10,10 @@ from validation import generate_ilp_report_assets
 def test_best_hybrid_rows_prefers_fastest_ilp_plan() -> None:
     df = pd.DataFrame(
         [
-            {"model": "simple_mlp", "run_label": "all_cpu", "status": "ok", "avg_step_ms": 2.0},
-            {"model": "simple_mlp", "run_label": "ilp_plan", "status": "ok", "avg_step_ms": 1.5},
-            {"model": "simple_mlp", "run_label": "ilp_plan", "status": "ok", "avg_step_ms": 1.2},
-            {"model": "resnet50", "run_label": "ilp_plan", "status": "ok", "avg_step_ms": 3.1},
+            {"model": "simple_mlp", "config_batch_size": 8, "run_label": "all_cpu", "status": "ok", "avg_step_ms": 2.0},
+            {"model": "simple_mlp", "config_batch_size": 8, "run_label": "ilp_plan", "status": "ok", "avg_step_ms": 1.5},
+            {"model": "simple_mlp", "config_batch_size": 8, "run_label": "ilp_plan", "status": "ok", "avg_step_ms": 1.2},
+            {"model": "resnet50", "config_batch_size": 8, "run_label": "ilp_plan", "status": "ok", "avg_step_ms": 3.1},
         ]
     )
 
@@ -66,3 +66,33 @@ def test_markdown_summary_includes_hybrid_section(tmp_path: Path) -> None:
     assert "Best Observed Hybrid Runtime Per Model" in content
     assert "accuracy" in content
     assert "mnist" in content
+
+
+def test_best_hybrid_rows_keeps_distinct_optimizer_precision_configs() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "model": "resnet50",
+                "config_batch_size": 32,
+                "config_optimizer": "SGD",
+                "config_precision": "fp32",
+                "run_label": "ilp_plan",
+                "status": "ok",
+                "avg_step_ms": 10.0,
+            },
+            {
+                "model": "resnet50",
+                "config_batch_size": 32,
+                "config_optimizer": "AdamW",
+                "config_precision": "fp16",
+                "run_label": "ilp_plan",
+                "status": "ok",
+                "avg_step_ms": 8.0,
+            },
+        ]
+    )
+
+    best = generate_ilp_report_assets._best_hybrid_rows(df)
+    assert len(best) == 2
+    assert set(best["config_optimizer"].tolist()) == {"SGD", "AdamW"}
+    assert set(best["config_precision"].tolist()) == {"fp32", "fp16"}

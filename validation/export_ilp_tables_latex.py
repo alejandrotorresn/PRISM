@@ -240,6 +240,32 @@ def main() -> int:
     best_tbl = _prepare_best_table(best_df)
     budget_tbl = _prepare_budget_table(cons_df)
 
+    if hybrid_path.exists():
+        hybrid_df = pd.read_csv(hybrid_path)
+        hybrid_tbl = _prepare_hybrid_table(hybrid_df)
+        hybrid_tex = _latex_table(
+            hybrid_tbl,
+            caption="Comparison of empirical execution times for Hybrid ILP vs All-CPU and All-GPU baselines.",
+            label="tab:hybrid-execution-best",
+        )
+    else:
+        hybrid_tex = "% [WARNING] Hybrid execution CSV not found. Table omitted.\n"
+
+    sig_path = Path("reports/ilp_results/latex").parent / "csv" / "ilp_statistical_significance.csv"
+    if sig_path.exists():
+        sig_df = pd.read_csv(sig_path)
+        # Prepare significance table
+        sig_tbl = sig_df.copy()
+        sig_tbl = sig_tbl[["model", "gpu_budget_mb", "p_value_vs_gpu", "cohens_d_vs_gpu", "significant_vs_gpu"]]
+        sig_tbl.columns = ["Model", "Budget (MB)", "p-value (vs GPU)", "Cohen's d (vs GPU)", "Significant"]
+        sig_tex = _latex_table(
+            sig_tbl,
+            caption="Statistical significance and effect size (Cohen's d) of ILP partition versus GPU baseline.",
+            label="tab:statistical-significance",
+        )
+    else:
+        sig_tex = "% [WARNING] Statistical significance CSV not found. Table omitted.\n"
+
     best_tex = _latex_table(
         best_tbl,
         caption="Best feasible ILP result per model under evaluated GPU memory budgets.",
@@ -248,18 +274,21 @@ def main() -> int:
     budget_tex = _latex_table(
         budget_tbl,
         caption="ILP Pareto sweep with baseline comparison across GPU memory budgets.",
-        label="tab:ilp-budget-sweep",
+        label="tab:ilp-pareto-sweep",
     )
 
-    best_path_tex = out_dir / "ilp_best_per_model.tex"
+    out_best = out_dir / "ilp_best_per_model.tex"
     budget_path_tex = out_dir / "ilp_budget_sweep.tex"
     ablation_path_tex = out_dir / "ilp_ablation_best_per_variant.tex"
     hybrid_path_tex = out_dir / "ilp_hybrid_best_per_model.tex"
+    sig_path_tex = out_dir / "ilp_statistical_significance.tex"
     all_path_tex = out_dir / "ilp_tables.tex"
 
-    best_path_tex.write_text(best_tex)
+    out_best.write_text(best_tex)
     budget_path_tex.write_text(budget_tex)
-    combined_tex = best_tex + "\n" + budget_tex
+    hybrid_path_tex.write_text(hybrid_tex)
+    sig_path_tex.write_text(sig_tex)
+    combined_tex = best_tex + "\n" + budget_tex + "\n" + hybrid_tex + "\n" + sig_tex
 
     if abl_path.exists():
         abl_df = pd.read_csv(abl_path)
@@ -290,7 +319,7 @@ def main() -> int:
     print("=" * 80)
     print("ILP LATEX TABLES EXPORTED")
     print("=" * 80)
-    print(f"Best table: {best_path_tex}")
+    print(f"Best table: {out_best}")
     print(f"Budget sweep table: {budget_path_tex}")
     if ablation_path_tex.exists():
         print(f"Ablation table: {ablation_path_tex}")

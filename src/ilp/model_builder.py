@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
 from .data_loader import ILPInputData
 from .advanced_terms import ActivationMetadata
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,7 +22,7 @@ class ILPConfig:
     congestion_knee_ms: float = 0.0
     gpu_mem_budget_mb: float = 1e18
     cpu_mem_budget_mb: float = 1e18
-    memory_model: str = "peak_approx"
+    memory_model: str = "topological"
     peak_activation_overlap: float = 0.35
 
 
@@ -40,6 +43,10 @@ class ILPProblemData:
     objective_edge_cut: Dict[Tuple[str, str], float]
     gpu_mem: Dict[str, float]
     cpu_mem: Dict[str, float]
+    gpu_base_mem: Dict[str, float] = None
+    gpu_act_mem: Dict[str, float] = None
+    cpu_base_mem: Dict[str, float] = None
+    cpu_act_mem: Dict[str, float] = None
 
 
 @dataclass
@@ -53,6 +60,10 @@ class ILPProblemDataDual:
     objective_cross_phase: Dict[str, float]
     gpu_mem: Dict[str, float]
     cpu_mem: Dict[str, float]
+    gpu_base_mem: Dict[str, float] = None
+    gpu_act_mem: Dict[str, float] = None
+    cpu_base_mem: Dict[str, float] = None
+    cpu_act_mem: Dict[str, float] = None
 
 
 def validate_ilp_config(cfg: ILPConfig) -> None:
@@ -79,39 +90,61 @@ def validate_ilp_config(cfg: ILPConfig) -> None:
         raise ValueError(f"gpu_mem_budget_mb must be >= 0, got {cfg.gpu_mem_budget_mb}")
     if cfg.cpu_mem_budget_mb < 0:
         raise ValueError(f"cpu_mem_budget_mb must be >= 0, got {cfg.cpu_mem_budget_mb}")
-    if cfg.memory_model not in {"nodal_sum", "peak_approx"}:
-        raise ValueError(f"memory_model must be 'nodal_sum' or 'peak_approx', got {cfg.memory_model}")
+    if cfg.memory_model not in {"nodal_sum", "peak_approx", "topological"}:
+        raise ValueError(f"memory_model must be 'nodal_sum', 'peak_approx', or 'topological', got {cfg.memory_model}")
     if not (0.0 <= cfg.peak_activation_overlap <= 1.0):
         raise ValueError(
             f"peak_activation_overlap must be in [0,1], got {cfg.peak_activation_overlap}"
         )
 
 
-def _build_effective_memory(data: ILPInputData, cfg: ILPConfig) -> tuple[Dict[str, float], Dict[str, float]]:
-    if cfg.memory_model == "nodal_sum":
-        return dict(data.node_mem_gpu_mb), dict(data.node_mem_cpu_mb)
-
-    # peak_approx: approximate only the activation component as temporally overlapping.
-    overlap = float(cfg.peak_activation_overlap)
+def _build_effective_memory(data: ILPInputData, cfg: ILPConfig) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, float], Dict[str, float], Dict[str, float], Dict[str, float]]:
     gpu_mem: Dict[str, float] = {}
     cpu_mem: Dict[str, float] = {}
+    gpu_base_mem: Dict[str, float] = {}
+    gpu_act_mem: Dict[str, float] = {}
+    cpu_base_mem: Dict[str, float] = {}
+    cpu_act_mem: Dict[str, float] = {}
+
+    overlap = float(cfg.peak_activation_overlap) if cfg.memory_model == "peak_approx" else 1.0
 
     for n in data.nodes:
         gpu_base = float(data.node_mem_gpu_mb.get(n, 0.0))
         cpu_base = float(data.node_mem_cpu_mb.get(n, 0.0))
 
         act_gpu = float(data.node_mem_activation_mb.get(n, gpu_base * 0.70))
-        act_gpu = min(max(act_gpu, 0.0), max(gpu_base, 0.0))
+        act_gpu = max(act_gpu, 0.0)
+        if act_gpu > gpu_base + 1e-6 and gpu_base > 1e-12:
+            logger.warning(
+                "Node '%s': activation_mb=%.2f MB > gpu_total_mb=%.2f MB — "
+                "inconsistent profiling data detected. Clipping activation to gpu_total. "
+                "Re-run profiler to obtain consistent measurements.",
+                n, act_gpu, gpu_base,
+            )
+            act_gpu = gpu_base
 
         non_act_gpu = max(0.0, gpu_base - act_gpu)
         act_ratio = (act_gpu / gpu_base) if gpu_base > 1e-12 else 0.0
         act_cpu = min(max(cpu_base * act_ratio, 0.0), max(cpu_base, 0.0))
         non_act_cpu = max(0.0, cpu_base - act_cpu)
 
-        gpu_mem[n] = non_act_gpu + (overlap * act_gpu)
-        cpu_mem[n] = non_act_cpu + (overlap * act_cpu)
+        gpu_base_mem[n] = non_act_gpu
+        gpu_act_mem[n] = act_gpu
+        cpu_base_mem[n] = non_act_cpu
+        cpu_act_mem[n] = act_cpu
 
-    return gpu_mem, cpu_mem
+        if cfg.memory_model == "nodal_sum":
+            gpu_mem[n] = gpu_base
+            cpu_mem[n] = cpu_base
+        elif cfg.memory_model == "peak_approx":
+            gpu_mem[n] = non_act_gpu + (overlap * act_gpu)
+            cpu_mem[n] = non_act_cpu + (overlap * act_cpu)
+        elif cfg.memory_model == "topological":
+            # In topological mode, gpu_mem represents the raw peak without heuristic overlap
+            gpu_mem[n] = gpu_base
+            cpu_mem[n] = cpu_base
+
+    return gpu_mem, cpu_mem, gpu_base_mem, gpu_act_mem, cpu_base_mem, cpu_act_mem
 
 
 def build_problem_data(data: ILPInputData, cfg: ILPConfig) -> ILPProblemData:
@@ -127,7 +160,7 @@ def build_problem_data(data: ILPInputData, cfg: ILPConfig) -> ILPProblemData:
         e: (cfg.w_transfer * data.edge_transfer_ms[e]) + cfg.w_fragmentation
         for e in data.edges
     }
-    gpu_mem, cpu_mem = _build_effective_memory(data, cfg)
+    gpu_mem, cpu_mem, gpu_base, gpu_act, cpu_base, cpu_act = _build_effective_memory(data, cfg)
 
     return ILPProblemData(
         objective_node_gpu=node_gpu,
@@ -135,6 +168,10 @@ def build_problem_data(data: ILPInputData, cfg: ILPConfig) -> ILPProblemData:
         objective_edge_cut=edge_cut,
         gpu_mem=gpu_mem,
         cpu_mem=cpu_mem,
+        gpu_base_mem=gpu_base,
+        gpu_act_mem=gpu_act,
+        cpu_base_mem=cpu_base,
+        cpu_act_mem=cpu_act,
     )
 
 
@@ -169,7 +206,7 @@ def build_problem_data_dual(data: ILPInputData, cfg: ILPConfig) -> ILPProblemDat
         n: (cfg.w_transfer * data.node_time_io_ms[n]) + cfg.w_fragmentation
         for n in data.nodes
     }
-    gpu_mem, cpu_mem = _build_effective_memory(data, cfg)
+    gpu_mem, cpu_mem, gpu_base, gpu_act, cpu_base, cpu_act = _build_effective_memory(data, cfg)
 
     return ILPProblemDataDual(
         objective_fwd_gpu=objective_fwd_gpu,
@@ -181,6 +218,10 @@ def build_problem_data_dual(data: ILPInputData, cfg: ILPConfig) -> ILPProblemDat
         objective_cross_phase=cross_phase,
         gpu_mem=gpu_mem,
         cpu_mem=cpu_mem,
+        gpu_base_mem=gpu_base,
+        gpu_act_mem=gpu_act,
+        cpu_base_mem=cpu_base,
+        cpu_act_mem=cpu_act,
     )
 
 
@@ -211,20 +252,27 @@ def build_problem_data_phase4(data: ILPInputData, cfg: ILPConfig4) -> ILPProblem
     activation_meta = ActivationMetadata(
         node_mem_activation_mb=dict(data.node_mem_activation_mb),
         node_time_recompute_ms={
-            n: cfg.w_recompute_penalty * data.node_cost_gpu_ms.get(n, 0.0) * 0.5
+            # Recompute = forward pass only. Use fwd_ms if available; else estimate
+            # as 1/(1+BACKWARD_FACTOR) fraction of total (e.g., 1/3 when factor=2.0).
+            n: cfg.w_recompute_penalty * (
+                data.node_cost_gpu_fwd_ms.get(n, 0.0)
+                if data.node_cost_gpu_fwd_ms.get(n, 0.0) > 0
+                else data.node_cost_gpu_ms.get(n, 0.0) / 3.0
+            )
             for n in data.nodes
         },
         node_time_checkpoint_ms=dict(data.node_time_io_ms),
         node_energy_io_j=dict(data.node_energy_io_j),
     )
 
-    # Compute recompute cost (additional forward pass time)
+    # Compute recompute cost = cost of re-running the forward pass of this layer.
+    # Use measured forward time directly; do NOT use total * 0.5 (incorrect when bwd != fwd).
     recompute_cost_gpu = {
-        n: cfg.w_recompute_penalty * data.node_cost_gpu_ms.get(n, 0.0) * 0.5
+        n: cfg.w_recompute_penalty * data.node_cost_gpu_fwd_ms.get(n, 0.0)
         for n in data.nodes
     }
     recompute_cost_cpu = {
-        n: cfg.w_recompute_penalty * data.node_cost_cpu_ms.get(n, 0.0) * 0.5
+        n: cfg.w_recompute_penalty * data.node_cost_cpu_fwd_ms.get(n, 0.0)
         for n in data.nodes
     }
     

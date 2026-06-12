@@ -361,9 +361,11 @@ def _run_layer_with_dual_placement(
                 if grad is None:
                     continue
                 if param.grad is None:
-                    param.grad = grad.detach()
+                    param.grad = grad.detach().clone()
                 else:
-                    param.grad = param.grad + grad.detach()
+                    # In-place accumulation avoids creating an ephemeral full-size
+                    # tensor copy that would spike peak memory during backward.
+                    param.grad.add_(grad.detach())
 
             if grad_input is None:
                 grad_input = torch.zeros_like(saved_input_cpu, device=ctx.input_device)
@@ -644,6 +646,16 @@ class _DeviceAwareFXInterpreter(fx.Interpreter):
         if can_materialize_dual:
             self._runtime_features["backward_relocation_layers"].add(layer_name)
             self._runtime_features["backward_relocation_count"] += 1
+            if strategy_name in {"checkpoint", "recompute"}:
+                # Dual Placement (fwd/bwd on different devices) and activation strategies
+                # (checkpoint/recompute) are mutually exclusive at this time: the dual
+                # placement function performs its own recompute of the forward pass during
+                # backward, making an outer checkpoint redundant.  Log explicitly so the
+                # combination is never silently dropped.
+                self._warnings.append(
+                    f"Layer '{layer_name}': Dual Placement overrides '{strategy_name}' strategy "
+                    f"because dual-device recompute already handles activation retention."
+                )
             return _run_layer_with_dual_placement(
                 layer=submod,
                 layer_name=layer_name,

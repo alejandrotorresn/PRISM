@@ -24,26 +24,17 @@ build_problem_data_dual = importlib.import_module("ilp.model_builder").build_pro
 solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
 
 
+infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
+load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
+load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
+ExecutionPlan = importlib.import_module("runtime.plan_representation").ExecutionPlan
+SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
+simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
+simulate_plan_phase4 = importlib.import_module("runtime.simulator").simulate_plan_phase4
+
 def _default_paths(config_dir: Path, model_name: str):
-    stats = config_dir / f"{model_name}_metrics_stats.csv"
-    if not stats.exists():
-        stats = config_dir / "metrics_stats.csv"
-
-    run_dirs = sorted([p for p in config_dir.glob("run_*") if p.is_dir()])
-    if run_dirs:
-        ref_run = run_dirs[0]
-        graph_edges = ref_run / f"{model_name}_graph_edges.csv"
-        transfer_edges = ref_run / f"{model_name}_transfer_edges.csv"
-    else:
-        graph_edges = config_dir / f"{model_name}_graph_edges.csv"
-        transfer_edges = config_dir / f"{model_name}_transfer_edges.csv"
-
-    if not graph_edges.exists() or not transfer_edges.exists():
-        raise FileNotFoundError(
-            "Could not resolve graph/transfer artifacts in config_dir. "
-            f"Expected either run_*/ files or direct files in: {config_dir}"
-        )
-    return stats, graph_edges, transfer_edges
+    inferred = infer_ilp_input_paths(config_dir, model_name)
+    return inferred.metrics_stats_csv, inferred.graph_edges_csv, inferred.transfer_edges_csv
 
 
 def _build_effective_from_dual(data, cfg) -> Any:
@@ -142,6 +133,7 @@ def _eval_fixed_policy(policy: str, data, cfg: Any) -> Dict[str, float | str | i
         "layers_gpu": int(sum(1 for v in bits.values() if v == 1)),
         "layers_cpu": int(sum(1 for v in bits.values() if v == 0)),
         "cut_edges": cut_edges,
+        "energy_j": float(sum(data.node_energy_gpu_fwd_j.get(n, 0.0) + data.node_energy_gpu_bwd_j.get(n, 0.0) if bits[n] == 1 else data.node_energy_cpu_fwd_j.get(n, 0.0) + data.node_energy_cpu_bwd_j.get(n, 0.0) for n in data.nodes)),
     }
 
 
@@ -171,6 +163,7 @@ def _eval_bits_policy(bits: Dict[str, int], data, cfg: Any) -> Dict[str, float |
         "layers_gpu": int(sum(1 for v in bits.values() if v == 1)),
         "layers_cpu": int(sum(1 for v in bits.values() if v == 0)),
         "cut_edges": cut_edges,
+        "energy_j": float(sum(data.node_energy_gpu_fwd_j.get(n, 0.0) + data.node_energy_gpu_bwd_j.get(n, 0.0) if bits[n] == 1 else data.node_energy_cpu_fwd_j.get(n, 0.0) + data.node_energy_cpu_bwd_j.get(n, 0.0) for n in data.nodes)),
     }
 
 
@@ -245,6 +238,7 @@ def _eval_greedy_policy(data, cfg: Any) -> Dict[str, float | str | int]:
             "layers_gpu": 0,
             "layers_cpu": 0,
             "cut_edges": 0,
+            "energy_j": float("nan"),
         }
     return _eval_bits_policy(bits, data, cfg)
 
@@ -274,8 +268,6 @@ def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bo
     if regime == "deterministic":
         if args.allow_low_quality_stats:
             raise ValueError("Deterministic regime does not allow --allow_low_quality_stats")
-        if args.allow_transfer_calibration_fallback:
-            raise ValueError("Deterministic regime does not allow --allow_transfer_calibration_fallback")
         if args.allow_fallback_graph_trace:
             raise ValueError("Deterministic regime does not allow --allow_fallback_graph_trace")
         if not args.strict_graph_mapping:
@@ -295,6 +287,23 @@ def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bo
     return regime, enforce_convex
 
 
+def _to_execution_plan_from_ilp(ilp) -> ExecutionPlan:
+    forward_assignment = getattr(ilp, "forward_assignment", None) or ilp.assignment
+    backward_assignment = getattr(ilp, "backward_assignment", None) or ilp.assignment
+    cut_edges_forward = list(getattr(ilp, "cut_edges", []) or [])
+    cut_edges_backward = list(getattr(ilp, "backward_cut_edges", None) or cut_edges_forward)
+    cross_phase_edges = list(getattr(ilp, "cross_phase_edges", None) or [])
+    activation_strategies = dict(getattr(ilp, "activation_strategies", None) or {})
+    return ExecutionPlan(
+        assignment_forward=dict(forward_assignment),
+        assignment_backward=dict(backward_assignment),
+        cut_edges_forward=cut_edges_forward,
+        cut_edges_backward=cut_edges_backward,
+        cross_phase_edges=cross_phase_edges,
+        activation_strategies=activation_strategies,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep ILP over GPU memory budgets and compare baselines")
     parser.add_argument("--config_dir", default=None)
@@ -302,7 +311,9 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--gpu_budgets_mb", required=True, help="Comma-separated budgets, e.g. 400,600,800,1000")
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
-    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx"], default="peak_approx")
+    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx", "topological"], default="topological",
+                        help="Memory constraint model. 'topological' (default) is the only correct model for training: "
+                             "activations are counted in GPU only when BOTH forward and backward are on GPU (AND logic).")
     parser.add_argument("--peak_activation_overlap", type=float, default=0.35)
     parser.add_argument("--k_sigma", type=float, default=1.0)
     parser.add_argument("--k_sigma_time", type=float, default=None)
@@ -316,7 +327,7 @@ def main() -> int:
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
     parser.add_argument("--w_fragmentation", type=float, default=0.0)
-    parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive"], default="auto")
+    parser.add_argument("--backend", choices=["auto", "pulp", "exhaustive", "pulp_cbc_dual"], default="auto")
     parser.add_argument("--hw_aggregate", choices=["max", "mean"], default="max", help="How to aggregate costs across hardware profiles")
     parser.add_argument("--hw_dispersion_k", type=float, default=0.0, help="If hw_aggregate=mean, use mean + k*std across hardware profiles")
     parser.add_argument("--output_csv", default=None)
@@ -373,6 +384,19 @@ def main() -> int:
     budgets = _parse_budget_list(args.gpu_budgets_mb)
     rows = []
 
+    inferred_inputs = infer_ilp_input_paths(config_dir=config_dirs[0], model_name=args.model)
+    measured_layers = set(data.nodes)
+    graph_edges = load_graph_edges(
+        inferred_inputs.graph_edges_csv,
+        transfer_edges_csv=inferred_inputs.transfer_edges_csv,
+        measured_layers=measured_layers,
+    )
+    transfer_costs = load_transfer_costs(
+        inferred_inputs.transfer_edges_csv,
+        graph_edges_csv=inferred_inputs.graph_edges_csv,
+        measured_layers=measured_layers,
+    )
+
     for b in budgets:
         cfg = ILPConfig(
             w_time=args.w_time,
@@ -392,6 +416,44 @@ def main() -> int:
         greedy = _eval_greedy_policy(data, cfg)
         phase_counts = _phase_assignment_counts(ilp)
 
+        sim_result = None
+        sim_error = None
+        if str(ilp.status).lower() in {"optimal", "feasible"} and len(getattr(ilp, "assignment", {})) > 0:
+            try:
+                sim_cfg = SimulationConfig(
+                    mode="robust",
+                    k_sigma=args.k_sigma,
+                    k_sigma_time=args.k_sigma_time,
+                    k_sigma_energy=args.k_sigma_energy,
+                    w_time=args.w_time,
+                    w_energy=args.w_energy,
+                    w_transfer=args.w_transfer,
+                    gpu_mem_budget_mb=b,
+                    cpu_mem_budget_mb=args.cpu_mem_budget_mb,
+                    memory_model=args.memory_model,
+                    peak_activation_overlap=args.peak_activation_overlap,
+                )
+                sim_plan = _to_execution_plan_from_ilp(ilp)
+                if sim_plan.activation_strategies:
+                    sim_result = simulate_plan_phase4(
+                        plan=sim_plan,
+                        metrics_stats_csv=inferred_inputs.metrics_stats_csv,
+                        graph_edges=graph_edges,
+                        transfer_costs=transfer_costs,
+                        cfg=sim_cfg,
+                        activation_strategies=sim_plan.activation_strategies,
+                    )
+                else:
+                    sim_result = simulate_plan(
+                        plan=sim_plan,
+                        metrics_stats_csv=inferred_inputs.metrics_stats_csv,
+                        graph_edges=graph_edges,
+                        transfer_costs=transfer_costs,
+                        cfg=sim_cfg,
+                    )
+            except Exception as exc:
+                sim_error = f"{type(exc).__name__}: {exc}"
+
         rows.append({
             "model": args.model,
             "gpu_budget_mb": b,
@@ -404,15 +466,22 @@ def main() -> int:
             "ilp_layers_gpu": sum(1 for _, d in ilp.assignment.items() if d == "GPU"),
             "ilp_layers_cpu": sum(1 for _, d in ilp.assignment.items() if d == "CPU"),
             "ilp_cut_edges": len(ilp.cut_edges),
+            "ilp_energy_j": float(sum(
+                (data.node_energy_gpu_fwd_j.get(n, 0.0) if (getattr(ilp, "forward_assignment", None) or ilp.assignment).get(n, "CPU") == "GPU" else data.node_energy_cpu_fwd_j.get(n, 0.0)) +
+                (data.node_energy_gpu_bwd_j.get(n, 0.0) if (getattr(ilp, "backward_assignment", None) or ilp.assignment).get(n, "CPU") == "GPU" else data.node_energy_cpu_bwd_j.get(n, 0.0))
+                for n in data.nodes
+            )),
             **phase_counts,
             "all_cpu_status": all_cpu["status"],
             "all_cpu_objective": all_cpu["objective_value"],
             "all_cpu_gpu_mem_mb": all_cpu["gpu_mem_used_mb"],
             "all_cpu_cpu_mem_mb": all_cpu["cpu_mem_used_mb"],
+            "all_cpu_energy_j": all_cpu["energy_j"],
             "all_gpu_status": all_gpu["status"],
             "all_gpu_objective": all_gpu["objective_value"],
             "all_gpu_gpu_mem_mb": all_gpu["gpu_mem_used_mb"],
             "all_gpu_cpu_mem_mb": all_gpu["cpu_mem_used_mb"],
+            "all_gpu_energy_j": all_gpu["energy_j"],
             "greedy_status": greedy["status"],
             "greedy_objective": greedy["objective_value"],
             "greedy_gpu_mem_mb": greedy["gpu_mem_used_mb"],
@@ -420,6 +489,17 @@ def main() -> int:
             "greedy_layers_gpu": greedy["layers_gpu"],
             "greedy_layers_cpu": greedy["layers_cpu"],
             "greedy_cut_edges": greedy["cut_edges"],
+            "greedy_energy_j": greedy["energy_j"],
+            "sim_status": sim_result.status if sim_result is not None else ("error" if sim_error else "skipped"),
+            "sim_objective": sim_result.objective_value if sim_result is not None else None,
+            "sim_time_ms": sim_result.total_time_ms if sim_result is not None else None,
+            "sim_energy_j": sim_result.total_energy_j if sim_result is not None else None,
+            "sim_transfer_ms": sim_result.total_transfer_ms if sim_result is not None else None,
+            "sim_gpu_mem_mb": sim_result.gpu_mem_used_mb if sim_result is not None else None,
+            "sim_cpu_mem_mb": sim_result.cpu_mem_used_mb if sim_result is not None else None,
+            "sim_warnings": len(sim_result.warnings) if sim_result is not None else 0,
+            "sim_violations": len(sim_result.violations) if sim_result is not None else 0,
+            "sim_error": sim_error,
         })
 
     out_df = pd.DataFrame(rows).sort_values(by=["gpu_budget_mb"], kind="stable")

@@ -72,6 +72,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan_source_csv", default=None)
     parser.add_argument("--plan_gpu_budget_mb", type=float, default=None)
     parser.add_argument("--plan_objective", type=float, default=None)
+    parser.add_argument("--plan_sim_time_ms", type=float, default=None)
+    parser.add_argument("--plan_sim_energy_j", type=float, default=None)
     parser.add_argument(
         "--allow_cpu_fallback",
         action="store_true",
@@ -114,6 +116,111 @@ def _config_identity(config_dir: Path) -> dict[str, Any]:
             except ValueError:
                 identity["config_batch_size"] = None
     return identity
+
+
+def _safe_pct_delta(sim_value: float | None, real_value: float | None) -> float | None:
+    if sim_value is None or real_value is None:
+        return None
+    if float(real_value) == 0.0:
+        return None
+    return 100.0 * (float(sim_value) - float(real_value)) / float(real_value)
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(f):
+        return None
+    return f
+
+
+def _resolve_sim_reference_values(args: argparse.Namespace, config_dir: Path) -> Dict[str, Any]:
+    """
+    Resolve simulated reference metrics from explicit args or plan_source_csv.
+
+    Priority:
+    1) explicit CLI values (when provided)
+    2) row lookup in plan_source_csv (Pareto sweep)
+    3) fallback to plan_objective as simulated time
+    """
+    sim_time_ms = _to_float_or_none(getattr(args, "plan_sim_time_ms", None))
+    sim_energy_j = _to_float_or_none(getattr(args, "plan_sim_energy_j", None))
+    source = "unresolved"
+    warning: str | None = None
+
+    if sim_time_ms is not None or sim_energy_j is not None:
+        source = "cli"
+
+    if (sim_time_ms is None or sim_energy_j is None) and args.plan_source_csv:
+        csv_path = Path(args.plan_source_csv)
+        if csv_path.exists():
+            try:
+                ref_df = pd.read_csv(csv_path)
+                identity = _config_identity(config_dir)
+                cand = ref_df.copy()
+
+                def _filter_if_col(df: pd.DataFrame, col: str, value: Any) -> pd.DataFrame:
+                    if col in df.columns and value is not None:
+                        return df[df[col].astype(str) == str(value)]
+                    return df
+
+                cand = _filter_if_col(cand, "model", identity.get("config_model") or args.model)
+                cand = _filter_if_col(cand, "optimizer", identity.get("config_optimizer"))
+                cand = _filter_if_col(cand, "precision", identity.get("config_precision") or args.precision)
+                cand = _filter_if_col(cand, "batch_size", identity.get("config_batch_size") or args.batch_size)
+
+                budget = _to_float_or_none(args.plan_gpu_budget_mb)
+                if budget is not None and "gpu_budget_mb" in cand.columns and len(cand) > 0:
+                    budget_vals = pd.to_numeric(cand["gpu_budget_mb"], errors="coerce")
+                    cand = cand.assign(_budget_abs_delta=(budget_vals - budget).abs())
+                    cand = cand.sort_values(by="_budget_abs_delta", kind="stable")
+
+                if "ilp_status" in cand.columns and len(cand) > 0:
+                    feasible = cand[cand["ilp_status"].astype(str).str.lower().isin(["optimal", "feasible"])].copy()
+                    if not feasible.empty:
+                        cand = feasible
+
+                if len(cand) > 0:
+                    if "ilp_objective" in cand.columns:
+                        cand = cand.assign(_ilp_obj_num=pd.to_numeric(cand["ilp_objective"], errors="coerce"))
+                        cand = cand.sort_values(by="_ilp_obj_num", kind="stable")
+                    row = cand.iloc[0]
+
+                    if sim_time_ms is None:
+                        sim_time_ms = _to_float_or_none(row.get("sim_time_ms"))
+                        if sim_time_ms is None:
+                            sim_time_ms = _to_float_or_none(row.get("ilp_objective"))
+
+                    if sim_energy_j is None:
+                        sim_energy_j = _to_float_or_none(row.get("sim_energy_j"))
+                        if sim_energy_j is None:
+                            sim_energy_j = _to_float_or_none(row.get("ilp_energy_j"))
+
+                    source = f"plan_source_csv:{csv_path}"
+            except Exception as exc:
+                warning = f"Failed to resolve simulated references from plan_source_csv '{csv_path}': {type(exc).__name__}: {exc}"
+
+    if sim_time_ms is None:
+        sim_time_ms = _to_float_or_none(args.plan_objective)
+        if sim_time_ms is not None:
+            source = "plan_objective"
+
+    return {
+        "sim_time_ms": sim_time_ms,
+        "sim_energy_j": sim_energy_j,
+        "source": source,
+        "warning": warning,
+    }
+
+
+def _rescue_influence_from_run(run_dict: Dict[str, Any]) -> bool:
+    warnings = run_dict.get("warnings", []) or []
+    warning_text = " ".join(str(w) for w in warnings).lower()
+    return ("oom" in warning_text) or ("fallback" in warning_text) or bool(run_dict.get("analytical_fallback_gpu", False))
 
 
 def _build_model_input(args: argparse.Namespace) -> tuple[nn.Module, Any, torch.Tensor | None, str | None, dict[str, Any]]:
@@ -312,6 +419,8 @@ def main() -> int:
 
     runs: Dict[str, Dict[str, Any]] = {}
 
+    sim_ref = _resolve_sim_reference_values(args, config_dir)
+
     if args.compare_baselines:
         runs["all_cpu"] = _run_single_safe(args, _make_uniform_plan(device_plan, "CPU"), "all_cpu")
         runs["all_gpu"] = _run_single_safe(args, _make_uniform_plan(device_plan, "GPU"), "all_gpu")
@@ -344,6 +453,10 @@ def main() -> int:
             "plan_source_csv": args.plan_source_csv,
             "plan_gpu_budget_mb": args.plan_gpu_budget_mb,
             "plan_objective": args.plan_objective,
+            "plan_sim_time_ms": sim_ref["sim_time_ms"],
+            "plan_sim_energy_j": sim_ref["sim_energy_j"],
+            "plan_sim_reference_source": sim_ref["source"],
+            "plan_sim_reference_warning": sim_ref.get("warning"),
         },
         "runs": {},
     }
@@ -378,6 +491,12 @@ def main() -> int:
                 "plan_source_csv": args.plan_source_csv,
                 "plan_gpu_budget_mb": args.plan_gpu_budget_mb,
                 "plan_objective": args.plan_objective,
+                "sim_time_ms": sim_ref["sim_time_ms"] if key == "ilp_plan" else None,
+                "sim_energy_j": sim_ref["sim_energy_j"] if key == "ilp_plan" else None,
+                "delta_time_sim_vs_real_pct": _safe_pct_delta(sim_ref["sim_time_ms"], result.avg_step_ms) if key == "ilp_plan" else None,
+                "delta_energy_sim_vs_real_pct": _safe_pct_delta(sim_ref["sim_energy_j"], result.total_energy_j) if key == "ilp_plan" else None,
+                "rescue_influence_hybrid": _rescue_influence_from_run(run_dict),
+                "divergence_explained_by_rescue": False,
                 "transfer_events": result.total_transfer_events,
                 "final_loss": result.final_loss,
                 "loss_delta": result.loss_delta,
@@ -404,6 +523,13 @@ def main() -> int:
                 row["delta_avg_step_ms_vs_baseline"] = float(row["avg_step_ms"] - baseline_time)
                 if baseline_metric is not None and row["final_quality_metric"] is not None:
                     row["delta_final_quality_metric_vs_baseline"] = float(row["final_quality_metric"] - baseline_metric)
+
+            baseline_rescue = _rescue_influence_from_run(baseline)
+            for row in rows:
+                row["divergence_explained_by_rescue"] = bool(
+                    (baseline_rescue or bool(row.get("rescue_influence_hybrid", False)))
+                    and (row.get("delta_time_sim_vs_real_pct") is not None)
+                )
             summary_payload["protocol"] = {
                 "baseline": baseline_label,
                 "note": "Negative delta_final_loss_vs_baseline indicates lower final training loss than baseline.",
@@ -432,6 +558,12 @@ def main() -> int:
     print(f"Model: {args.model} | Precision: {args.precision}")
     print(f"ILP status: {ilp_result.status}")
     print(f"ILP avg step (ms): {ilp_result.avg_step_ms:.6f}")
+    if sim_ref.get("warning"):
+        print(f"[WARN] {sim_ref['warning']}")
+    if sim_ref["sim_time_ms"] is not None:
+        print(f"ILP simulated step (ms): {float(sim_ref['sim_time_ms']):.6f} [{sim_ref['source']}]")
+    if sim_ref["sim_energy_j"] is not None:
+        print(f"ILP simulated energy (J): {float(sim_ref['sim_energy_j']):.6f} [{sim_ref['source']}]")
     print(f"ILP final loss: {ilp_result.final_loss:.6f} (delta={ilp_result.loss_delta:.6f})")
     if ilp_result.quality_metric_name and ilp_result.final_quality_metric is not None:
         print(

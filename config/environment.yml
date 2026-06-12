@@ -27,6 +27,9 @@ dependencies:
   - coin-or-cbc>=2.10
   # Plotting / report generation
   - matplotlib>=3.7
+  - seaborn>=0.13
+  # Statistical Analysis
+  - scipy>=1.10
   # Test runner
   - pytest>=8.0
   - pip:

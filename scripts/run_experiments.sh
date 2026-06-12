@@ -493,7 +493,7 @@ for model in "${MODELS[@]}"; do
                         CMD+=(--no-oom_retry_enabled)
                     fi
                     
-                    if [ "$FORCE_NO_GPU" = true ]; then
+                    if [ "${FORCE_NO_GPU:-false}" = true ]; then
                         CMD+=(--no_gpu)
                     fi
                     if [ "$USE_SKIP_CPU" = false ] && [ "$ENABLE_RAPL" = true ]; then
@@ -523,12 +523,31 @@ for model in "${MODELS[@]}"; do
                         if is_true "$OOM_SKIP_CONFIGS" && is_oom_failure_from_log "$LOG_FILE"; then
                             OOM_SKIPPED_CONFIGS=$((OOM_SKIPPED_CONFIGS + 1))
                             OOM_SKIPPED_RUNS=$((OOM_SKIPPED_RUNS + 1))
-                            BATCH_SKIPPED_OOM=true
                             mark_oom_skipped_config "$OUT_DIR" "$model" "$optimizer" "$precision" "$batch" "$RUN_ID" "$EXIT_CODE"
                             log_msg "  ⚠ OOM SKIP: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
                             log_msg "  Marked as OOM-skipped config -> $OUT_DIR/oom_skipped_config.json"
-                            log_msg "  Continuing campaign without aborting this batch configuration."
-                            break
+                            
+                            log_msg "  [!] Iniciando Analytical Rescue Regime (--no_gpu) para trazado ILP..."
+                            # Build the rescue command from CMD, removing any gpu-specific flags if necessary, 
+                            # but --no_gpu overrides GPU behavior natively in the python script.
+                            RESCUE_CMD=("${CMD[@]}")
+                            RESCUE_CMD+=("--no_gpu")
+                            
+                            if "${RESCUE_CMD[@]}" >> "$LOG_FILE" 2>&1; then
+                                log_msg "  ✓ RESCUE SUCCESS: El trazado CPU fue exitoso. ILP podrá usar fallback analítico."
+                                SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
+                                BATCH_SKIPPED_OOM=false
+                                # Mark that remaining replicates should run in --no_gpu mode
+                                # so the aggregator receives n=REPEATS analytical traces
+                                # instead of n=1, preventing NaN in statistical significance.
+                                FORCE_NO_GPU=true
+                            else
+                                log_msg "  \u2717 RESCUE FAILURE: El trazado CPU también falló. No habrá datos ILP."
+                                BATCH_SKIPPED_OOM=true
+                                break
+                            fi
+                            
+                            log_msg "  Continuando con la campaña (réplicas restantes en modo --no_gpu)."
                         else
                             FAILED_RUNS=$((FAILED_RUNS + 1))
                             log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"

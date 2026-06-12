@@ -28,7 +28,7 @@ The practical question addressed by PRISM is simple: how to decide which parts o
 2. `validation/aggregate_metrics_stats.py` and `src/core/stats_aggregator.py` convert repeated runs into robust coefficients.
 3. `validation/run_ilp_partition.py` and `validation/sweep_ilp_pareto.py` solve placement and budget trade-off problems.
 4. `src/runtime/` and `validation/run_hybrid_execution.py` validate those plans through simulation or physical hybrid execution.
-5. `validation/generate_ilp_report_assets.py`, `validation/export_ilp_tables_latex.py`, `reports/`, and `thesis/` turn the results into analyzable and publishable evidence.
+5. `validation/generate_ilp_report_assets.py`, `validation/export_ilp_tables_latex.py`, `reports/`, and `final_thesis/` turn the results into analyzable and publishable evidence.
 
 ## Quick Start
 
@@ -121,6 +121,29 @@ python validation/run_ilp_partition.py \
   --model simple_mlp
 ```
 
+### Grid5000 GPU Discovery
+
+For deploying campaigns on Grid5000, PRISM provides a utility to automatically scan available OAR nodes that have free GPUs, matching specific CPU constraints or cluster locations via SSH proxy jumps:
+
+```bash
+python scripts/find_free_gpus.py \
+  --username ltorresnino \
+  --site lille \
+  --cpu-types Intel \
+  --proxy-jump access.grid5000.fr
+```
+
+### Statistical Significance Validation
+
+To validate that ILP-derived optimizations are statistically significant compared to All-GPU or All-CPU baselines, PRISM automatically calculates a Student's t-test (p-value) for small samples ($n=5$) and the Cohen's d effect size using the maximum coefficient of variation:
+
+```bash
+python validation/run_statistical_significance.py \
+  --consolidated_csv reports/ilp_results/csv/ilp_pareto_consolidated.csv \
+  --output_csv reports/ilp_results/csv/ilp_statistical_significance.csv
+```
+*(This is seamlessly executed in Step 5 of `run_thesis_mode.sh` and exported directly to LaTeX).*
+
 ### Pareto sweep over GPU budgets
 
 ```bash
@@ -129,6 +152,25 @@ python validation/sweep_ilp_pareto.py \
   --model simple_mlp \
   --gpu_budgets_mb 400,600,800,1000
 ```
+
+### Simulation-vs-Real coupling in hybrid protocol
+
+The Pareto sweep now exports simulator metrics per budget directly in
+`{model}_pareto_sweep.csv`, including:
+
+- `sim_time_ms`
+- `sim_energy_j`
+- `sim_status`
+
+When `scripts/run_thesis_mode.sh` selects `HYBRID_PLAN_SELECTION=pareto_best`, these
+simulated references are forwarded to `validation/run_hybrid_execution.py` and written
+into `hybrid_execution_protocol.csv` together with:
+
+- `delta_time_sim_vs_real_pct`
+- `delta_energy_sim_vs_real_pct`
+
+This closes the methodological loop between simulated ILP evaluation and physical
+hybrid execution, allowing explicit quantification of temporal and energetic divergence.
 
 ### Grid Audit (Post-Collection)
 
@@ -264,13 +306,13 @@ All production data remains host-scoped under `data/<hostname>/...` so that hete
 ├── config/         # Environment and dependency definitions
 ├── data/           # Host-scoped experiment outputs and validation fixtures
 ├── datasets/       # Persisted datasets used by profiling and runtime
-├── docs/           # Documentation index plus architecture/, operations/, thesis/, archive/
+├── docs/           # Documentation index plus architecture/, operations/, archive/
 ├── logs/           # Execution logs grouped by workflow plus archive/
 ├── reports/        # Canonical ILP outputs, thesis figures, and diagnostics/
 ├── scripts/        # Orchestration entrypoints
 ├── src/            # Profiling, ILP, runtime, and dataset integration code
 ├── tests/          # Pytest suite
-├── thesis/         # LaTeX manuscript and generated PDF artifacts
+├── final_thesis/   # LaTeX manuscript and generated PDF artifacts
 ├── validation/     # Validation, auditing, ILP, and reporting utilities
 ├── pytest.ini      # Pytest configuration
 └── README.md       # This overview
@@ -291,9 +333,6 @@ The documentation set was reduced so the core references now have distinct respo
 | [docs/operations/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](docs/operations/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Master protocol for real multi-server data collection, Go/No-Go criteria, and operational closure |
 | [docs/operations/SERVER_LAUNCH_PROFILES.md](docs/operations/SERVER_LAUNCH_PROFILES.md) | Launch profiles by server class |
 | [docs/operations/MULTI_NODE_ILP_RUNBOOK.md](docs/operations/MULTI_NODE_ILP_RUNBOOK.md) | Multi-host discovery, merge, and solve workflow |
-| [docs/thesis/CAPITULO_TESIS_PROFILING_ES.md](docs/thesis/CAPITULO_TESIS_PROFILING_ES.md) | Monographic chapter on profiling methodology |
-| [docs/thesis/CAPITULO_TESIS_ILP_ES.md](docs/thesis/CAPITULO_TESIS_ILP_ES.md) | Monographic chapter on ILP formulation and validation |
-| [docs/thesis/schema.md](docs/thesis/schema.md) | Writing map for the doctoral manuscript |
 | [docs/operations/QUICK_START.sh](docs/operations/QUICK_START.sh) | Shell helper that prints frequent commands |
 
 ## System Requirements
@@ -332,4 +371,4 @@ GitHub: @alejandrotorresn
 
 For detailed command semantics, artifact schemas, or deployment guidance, continue from [docs/README.md](docs/README.md).
 
-*Last Updated*: June 2, 2026
+*Last Updated*: June 4, 2026

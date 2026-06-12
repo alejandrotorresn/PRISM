@@ -173,10 +173,24 @@ def compute_effective_costs_phase4(
         if strategy.checkpoint:
             energy_cost += activation_meta.node_energy_io_j.get(n, 0.0)
         
-        # Memory impact
-        mem_cost = base_mem
-        if strategy.retain or strategy.checkpoint:
-            mem_cost += activation_meta.node_mem_activation_mb.get(n, 0.0)
+        # Memory impact:
+        # base_mem = params + activations + grads + optimizer_states (full layer footprint).
+        # activation_meta.node_mem_activation_mb = the activation portion of base_mem.
+        # Strategy determines whether the activation portion stays on device or is freed:
+        #   - retain:     activations kept in memory; no change to base_mem (already included).
+        #   - recompute:  activations freed after forward, recomputed during backward (Chen et al. 2016).
+        #                 GPU memory saving = activation portion.
+        #   - checkpoint: activations evacuated to CPU; same GPU effect as recompute.
+        #                 (CPU-side tracking is the caller's responsibility.)
+        act_mb = activation_meta.node_mem_activation_mb.get(n, 0.0)
+
+        if strategy.retain:
+            mem_cost = base_mem  # activations already counted in base_mem
+        elif strategy.recompute or strategy.checkpoint:
+            mem_cost = max(0.0, base_mem - act_mb)
+        else:
+            mem_cost = base_mem  # safety fallback
+
         
         total_time += time_cost
         total_energy += energy_cost

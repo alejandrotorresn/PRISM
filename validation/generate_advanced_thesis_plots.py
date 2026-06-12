@@ -40,41 +40,80 @@ def find_config_dirs(input_root: Path):
                     dirs.append(batch_path)
     return dirs
 
-def plot_predicted_vs_actual(hybrid_csv: Path, output_dir: Path):
-    if not hybrid_csv.exists():
-        print(f"Warning: Hybrid CSV {hybrid_csv} not found for predicted vs actual scatter.")
+def plot_predicted_vs_actual(config_dir: Path, output_dir: Path, model: str, hybrid_csv: Path):
+    if not hybrid_csv or not hybrid_csv.exists():
         return
         
     df = pd.read_csv(hybrid_csv)
-    
-    if "plan_objective" not in df.columns or "avg_step_ms" not in df.columns:
-        print("Required columns for scatter plot missing in hybrid CSV.")
+
+    # Backward-compatible schema resolution
+    predicted_col = "plan_objective" if "plan_objective" in df.columns else None
+    measured_col = "avg_step_ms" if "avg_step_ms" in df.columns else None
+    if predicted_col is None or measured_col is None:
+        return
+
+    model_col = "config_model" if "config_model" in df.columns else ("model" if "model" in df.columns else None)
+    optimizer_col = "config_optimizer" if "config_optimizer" in df.columns else ("optimizer" if "optimizer" in df.columns else None)
+    precision_col = "config_precision" if "config_precision" in df.columns else ("precision" if "precision" in df.columns else None)
+    batch_col = "config_batch_size" if "config_batch_size" in df.columns else ("batch_size" if "batch_size" in df.columns else None)
+    if model_col is None or optimizer_col is None or precision_col is None or batch_col is None:
         return
         
-    # Filter out baseline runs. Include ALL statuses since analytical fallback can populate avg_step_ms
-    df_valid = df[(df["plan_objective"] > 0) & (df["run_label"] != "all_cpu") & (df["run_label"] != "all_gpu")].copy()
-    df_valid = df_valid.dropna(subset=["avg_step_ms"])
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
+    batch_size_str = batch_name.replace("batch_", "")
+    
+    # Filter for the specific configuration
+    df_valid = df[
+        (pd.to_numeric(df[predicted_col], errors="coerce") > 0)
+        & (df["run_label"] != "all_cpu")
+        & (df["run_label"] != "all_gpu")
+        & (df[model_col].astype(str) == str(model))
+        & (df[optimizer_col].astype(str) == str(optimizer))
+        & (df[precision_col].astype(str) == str(precision))
+        & (df[batch_col].astype(str) == str(batch_size_str))
+    ].copy()
+    
+    plot_dir = output_dir / model / optimizer / precision / batch_name / "predicted_vs_actual_scatter"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    
+    df_valid[predicted_col] = pd.to_numeric(df_valid[predicted_col], errors="coerce")
+    df_valid[measured_col] = pd.to_numeric(df_valid[measured_col], errors="coerce")
+    df_valid = df_valid.dropna(subset=[predicted_col, measured_col])
     
     if df_valid.empty:
-        print("No valid hybrid execution data points for scatter plot.")
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.text(0.5, 0.5, "No Hybrid Validation Data Available", ha="center", va="center", fontsize=14, color="red")
+        ax.set_title(f"Predicted vs Actual Latency: {model}\n{optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.savefig(plot_dir / "scatter.png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
         return
         
     fig, ax = plt.subplots(figsize=(8, 8))
     
-    # Calculate R^2
-    from scipy.stats import pearsonr
-    r_val, _ = pearsonr(df_valid["plan_objective"], df_valid["avg_step_ms"])
-    r2 = r_val ** 2
+    # Calculate R^2 if there is more than 1 point, otherwise just plot
+    if len(df_valid) > 1:
+        from scipy.stats import pearsonr
+        r_val, _ = pearsonr(df_valid[predicted_col], df_valid[measured_col])
+        r2 = r_val ** 2
+        label_text = f'Ideal (y=x)\n$R^2 = {r2:.3f}$'
+    else:
+        label_text = 'Ideal (y=x)'
     
-    sns.scatterplot(data=df_valid, x="plan_objective", y="avg_step_ms", hue="model", s=100, alpha=0.8, ax=ax)
+    sns.scatterplot(data=df_valid, x=predicted_col, y=measured_col, s=150, alpha=0.9, color="#1f77b4", ax=ax, edgecolor="black")
     
     # Ideal y=x line
-    min_val = min(df_valid["plan_objective"].min(), df_valid["avg_step_ms"].min())
-    max_val = max(df_valid["plan_objective"].max(), df_valid["avg_step_ms"].max())
+    min_val = min(df_valid[predicted_col].min(), df_valid[measured_col].min())
+    max_val = max(df_valid[predicted_col].max(), df_valid[measured_col].max())
     
-    ax.plot([min_val, max_val], [min_val, max_val], 'k--', label=f'Ideal (y=x)\n$R^2 = {r2:.3f}$')
+    # Extend slightly for visual clarity
+    padding = (max_val - min_val) * 0.1 if max_val > min_val else min_val * 0.1
+    ax.plot([min_val - padding, max_val + padding], [min_val - padding, max_val + padding], 'k--', label=label_text)
     
-    ax.set_title("Validation: ILP Predicted Latency vs. Hybrid Actual Latency", pad=15, fontweight="bold")
+    ax.set_title(f"Predicted vs Actual Latency: {model}\n{optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
     ax.set_xlabel("ILP Predicted Latency (ms)", fontweight="bold")
     ax.set_ylabel("Hybrid Execution Measured Latency (ms)", fontweight="bold")
     ax.legend(title="", frameon=True)
@@ -82,13 +121,14 @@ def plot_predicted_vs_actual(hybrid_csv: Path, output_dir: Path):
     
     fig.tight_layout()
     
-    plot_dir = output_dir / "all_models" / "predicted_vs_actual"
-    plot_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(plot_dir / "scatter.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-def plot_memory_footprint(config_dir: Path, output_dir: Path):
-    model = config_dir.parents[2].name
+def plot_memory_footprint(config_dir: Path, output_dir: Path, model: str):
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
+    
     stats_path = config_dir / f"{model}_metrics_stats.csv"
     if not stats_path.exists():
         return
@@ -100,56 +140,78 @@ def plot_memory_footprint(config_dir: Path, output_dir: Path):
     df = df.dropna(subset=["activations_mb_mean", "params_mb_mean", "grads_mb_mean"])
     if df.empty:
         return
+
+    # Prepare data for plotting
+    df = df.copy()
+    df["cumulative_params"] = df["params_mb_mean"].cumsum()
+    df["cumulative_acts"] = df["activations_mb_mean"].cumsum()
         
-    # FORWARD PASS FOOTPRINT
-    df_fwd = df.copy()
-    df_fwd["cumulative_params"] = df_fwd["params_mb_mean"].cumsum()
-    df_fwd["cumulative_activations"] = df_fwd["activations_mb_mean"].cumsum()
-    df_fwd["total_memory"] = df_fwd["cumulative_params"] + df_fwd["cumulative_activations"]
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    x = range(len(df_fwd))
-    ax.fill_between(x, 0, df_fwd["cumulative_params"], label="Model Parameters (Cumulative)", alpha=0.6)
-    ax.fill_between(x, df_fwd["cumulative_params"], df_fwd["total_memory"], label="Activations (Cumulative)", alpha=0.6)
-    
-    ax.set_title(f"Memory Footprint Evolution (Forward Pass): {model}", pad=15, fontweight="bold")
-    ax.set_xlabel("Layer Index (Execution Order)", fontweight="bold")
-    ax.set_ylabel("Cumulative VRAM Usage (MB)", fontweight="bold")
-    ax.legend(loc="upper left", frameon=True)
-    sns.despine()
-    fig.tight_layout()
-    
-    plot_dir = output_dir / model / "memory_footprint"
-    plot_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(plot_dir / f"fwd.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-    # BACKWARD PASS FOOTPRINT (Reversed execution conceptually)
+    # BWD pass: layer N down to 0
     df_bwd = df.copy()
-    # In backward, parameters are needed, gradients are accumulated, activations are consumed
-    # For a simple structural view: we show params + accumulating gradients
-    df_bwd["cumulative_params"] = df_bwd["params_mb_mean"].sum() # All params exist
-    df_bwd["cumulative_grads"] = df_bwd["grads_mb_mean"].iloc[::-1].cumsum().iloc[::-1] # Gradients build up from end to start
-    df_bwd["total_memory"] = df_bwd["cumulative_params"] + df_bwd["cumulative_grads"]
+    
+    # In time, backward goes from N to 0. We'll use the backward execution step (0 to len-1)
+    df_bwd["bwd_step"] = np.arange(len(df_bwd))
+    
+    # Gradients accumulate over time.
+    # df_bwd starts with layer 0 at index 0. We reverse it so layer N is at index 0.
+    df_bwd = df_bwd.iloc[::-1].copy()
+    df_bwd["bwd_step"] = np.arange(len(df_bwd))
+    df_bwd["cumulative_grads"] = df_bwd["grads_mb_mean"].cumsum()
+    
+    # Activations start at max and are consumed
+    total_acts = df["activations_mb_mean"].sum()
+    # Subtract activations as they are consumed layer by layer
+    df_bwd["remaining_activations"] = total_acts - df_bwd["activations_mb_mean"].cumsum() + df_bwd["activations_mb_mean"]
+    
+    total_params = df["params_mb_mean"].sum()
+    df_bwd["static_params"] = total_params
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6), sharey=True)
+    
+    # Forward Pass
+    x_fwd = np.arange(len(df))
+    ax1.fill_between(x_fwd, 0, df["cumulative_params"], label="Parameters", color="#3498db", alpha=0.8)
+    ax1.fill_between(x_fwd, df["cumulative_params"], df["cumulative_params"] + df["cumulative_acts"], 
+                     label="Activations", color="#e74c3c", alpha=0.8)
+    ax1.set_title("Forward Pass (Layer 0 $\\rightarrow$ N)", fontsize=14, fontweight="bold")
+    ax1.set_xlabel("Layer Execution Order", fontsize=12)
+    ax1.set_ylabel("Memory (MB)", fontsize=12)
+    ax1.grid(True, linestyle="--", alpha=0.5)
+    
+    # Backward Pass (Single Axis Stacking with cleaner presentation)
+    x_bwd = df_bwd["bwd_step"]
+    
+    # We stack: Params + Gradients + Remaining Activations using stackplot for a cleaner visual
+    y_params = df_bwd["static_params"].values
+    y_grads = df_bwd["cumulative_grads"].values
+    y_acts = df_bwd["remaining_activations"].values
+    
+    # Use stackplot to automatically handle the areas without overlapping jagged lines
+    ax2.stackplot(x_bwd, y_params, y_grads, y_acts, 
+                  labels=["Parameters", "Gradients", "Remaining Activations"], 
+                  colors=["#3498db", "#2ecc71", "#e74c3c"], alpha=0.8)
+    
+    ax2.set_xlabel("Backward Execution Step (Layer N $\\rightarrow$ 0)", fontsize=12)
+    ax2.grid(True, linestyle="--", alpha=0.5)
+    ax2.set_title("Backward Pass", fontsize=14, fontweight="bold")
+    
+    fig.suptitle(f"Memory Footprint Evolution: {model} | {optimizer} | {precision} | {batch_name}", fontsize=16, fontweight="bold")
+    
+    # Place a single shared legend outside the plots
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    # Avoid duplicate labels (Parameters)
+    by_label = dict(zip(labels2 + labels1, handles2 + handles1))
+    fig.legend(by_label.values(), by_label.keys(), bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0., fontsize=12)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.fill_between(x, 0, df_bwd["cumulative_params"], label="Model Parameters (Static)", alpha=0.6, color="tab:blue")
-    ax.fill_between(x, df_bwd["cumulative_params"], df_bwd["total_memory"], label="Gradients (Cumulative during BWD)", alpha=0.6, color="tab:red")
     
-    ax.set_title(f"Memory Footprint Evolution (Backward Pass): {model}", pad=15, fontweight="bold")
-    ax.set_xlabel("Layer Index (Forward Order)", fontweight="bold")
-    ax.set_ylabel("Cumulative VRAM Usage (MB)", fontweight="bold")
-    ax.legend(loc="upper right", frameon=True)
-    sns.despine()
-    fig.tight_layout()
-    
-    plot_dir = output_dir / model / "memory_footprint"
+    plot_dir = output_dir / model / optimizer / precision / batch_name / "memory_footprint"
     plot_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(plot_dir / f"bwd.png", dpi=300, bbox_inches="tight")
+    fig.tight_layout()
+    fig.savefig(plot_dir / f"footprint_{optimizer}_{precision}_{batch_name}.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-def plot_affinity_heatmap(config_dir: Path, output_dir: Path):
-    model = config_dir.parents[2].name
+def plot_affinity_heatmap(config_dir: Path, output_dir: Path, model: str):
     stats_path = config_dir / f"{model}_metrics_stats.csv"
     if not stats_path.exists():
         return
@@ -178,13 +240,19 @@ def plot_affinity_heatmap(config_dir: Path, output_dir: Path):
     
     fig.tight_layout()
     
-    plot_dir = output_dir / model / "affinity_heatmap"
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
+    
+    plot_dir = output_dir / model / optimizer / precision / batch_name / "affinity_heatmap"
     plot_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(plot_dir / f"heatmap.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-def plot_violin_variance(config_dir: Path, output_dir: Path):
-    model = config_dir.parents[2].name
+def plot_violin_variance(config_dir: Path, output_dir: Path, model: str):
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
     
     run_dirs = sorted([d for d in config_dir.iterdir() if d.is_dir() and d.name.startswith("run_")])
     if not run_dirs:
@@ -212,14 +280,14 @@ def plot_violin_variance(config_dir: Path, output_dir: Path):
     if not df_top_fwd.empty and len(df_top_fwd) > 1:
         fig, ax = plt.subplots(figsize=(12, 6))
         sns.violinplot(data=df_top_fwd, x="Layer", y="Time (ms)", ax=ax, density_norm="width", palette="muted", hue="Layer", legend=False)
-        ax.set_title(f"Profiling Variance Distribution (Forward - Top 10 Layers): {model}", pad=15, fontweight="bold")
+        ax.set_title(f"Profiling Variance Distribution (Forward - Top 10 Layers): {model} | {optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
         ax.set_ylabel("GPU Fwd Time (ms)", fontweight="bold")
         ax.set_xlabel("Layer", fontweight="bold")
         sns.despine()
         fig.tight_layout()
         
-        plot_dir = output_dir / model / "variance_violin"
+        plot_dir = output_dir / model / optimizer / precision / batch_name / "variance_violin"
         plot_dir.mkdir(parents=True, exist_ok=True)
         fig.savefig(plot_dir / f"fwd.png", dpi=300, bbox_inches="tight")
         plt.close(fig)
@@ -232,111 +300,269 @@ def plot_violin_variance(config_dir: Path, output_dir: Path):
     if not df_top_bwd.empty and len(df_top_bwd) > 1:
         fig, ax = plt.subplots(figsize=(12, 6))
         sns.violinplot(data=df_top_bwd, x="Layer", y="Time (ms)", ax=ax, density_norm="width", palette="flare", hue="Layer", legend=False)
-        ax.set_title(f"Profiling Variance Distribution (Backward - Top 10 Layers): {model}", pad=15, fontweight="bold")
+        ax.set_title(f"Profiling Variance Distribution (Backward - Top 10 Layers): {model} | {optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
         ax.set_ylabel("GPU Bwd Time (ms)", fontweight="bold")
         ax.set_xlabel("Layer", fontweight="bold")
         sns.despine()
         fig.tight_layout()
         
-        plot_dir = output_dir / model / "variance_violin"
+        plot_dir = output_dir / model / optimizer / precision / batch_name / "variance_violin"
         plot_dir.mkdir(parents=True, exist_ok=True)
         fig.savefig(plot_dir / f"bwd.png", dpi=300, bbox_inches="tight")
         plt.close(fig)
 
-def plot_waterfall_ablation(ilp_pareto_csv: Path, output_dir: Path):
-    if not ilp_pareto_csv.exists():
+def plot_waterfall_ablation(config_dir: Path, output_dir: Path, model: str):
+    stats_path = config_dir / f"{model}_pareto_sweep.csv"
+    if not stats_path.exists():
         return
         
-    df = pd.read_csv(ilp_pareto_csv)
-    
-    # We will pick the best objective for each model to do a simplified waterfall
-    # This is a mock waterfall derivation since we don't have exact transfer/compute breakdown in the consolidated CSV
-    # But we can show All-CPU -> ILP Best for each model
-    if "All-CPU Obj" not in df.columns or "ILP Obj" not in df.columns:
+    df = pd.read_csv(stats_path)
+    if "all_cpu_objective" not in df.columns or "ilp_objective" not in df.columns:
         return
         
-    best_per_model = df.loc[df.groupby("Model")["ILP Obj"].idxmin()]
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
     
-    for _, row in best_per_model.iterrows():
-        model = row["Model"]
-        cpu_obj = float(row["All-CPU Obj"])
-        ilp_obj = float(row["ILP Obj"])
-        saved = cpu_obj - ilp_obj
-        
-        if saved <= 0: continue
-        
-        # Simplified waterfall: Baseline CPU -> ILP GPU Savings -> Final
-        categories = ["All-CPU (Baseline)", "ILP Offload Savings", "Optimized Objective"]
-        values = [cpu_obj, -saved, ilp_obj]
-        
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        # Plotting a basic waterfall
-        bottom = 0
-        for i, (cat, val) in enumerate(zip(categories, values)):
-            if val < 0:
-                ax.bar(cat, val, bottom=bottom, color="green", width=0.6)
-                bottom += val
+    feasible = df[df.get("ilp_status", "").isin(["optimal", "feasible"])].copy() if "ilp_status" in df.columns else df.copy()
+    feasible["ilp_objective"] = pd.to_numeric(feasible["ilp_objective"], errors="coerce")
+    feasible["all_cpu_objective"] = pd.to_numeric(feasible["all_cpu_objective"], errors="coerce")
+    feasible = feasible.dropna(subset=["ilp_objective", "all_cpu_objective"])
+    feasible = feasible[np.isfinite(feasible["ilp_objective"]) & np.isfinite(feasible["all_cpu_objective"])].copy()
+    if feasible.empty:
+        return
+
+    best_row = feasible.loc[feasible["ilp_objective"].idxmin()]
+    cpu_obj = float(best_row["all_cpu_objective"])
+    ilp_obj = float(best_row["ilp_objective"])
+    saved = cpu_obj - ilp_obj
+    
+    if saved <= 0: return
+    
+    categories = ["All-CPU (Baseline)", "ILP Offload Savings", "Optimized Objective"]
+    values = [cpu_obj, -saved, ilp_obj]
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    bottom = 0
+    for i, (cat, val) in enumerate(zip(categories, values)):
+        if val < 0:
+            ax.bar(cat, val, bottom=bottom, color="green", width=0.6)
+            bottom += val
+        else:
+            if i == len(values) - 1:
+                ax.bar(cat, val, color="blue", width=0.6)
             else:
-                if i == len(values) - 1:
-                    ax.bar(cat, val, color="blue", width=0.6) # Final
-                else:
-                    ax.bar(cat, val, color="grey", width=0.6)
-                    bottom += val
-                    
-        ax.set_title(f"Ablation Waterfall Chart: {model}", pad=15, fontweight="bold")
-        ax.set_ylabel("Total Objective (ms)", fontweight="bold")
-        sns.despine()
+                ax.bar(cat, val, color="grey", width=0.6)
+                bottom += val
+                
+    ax.set_title(f"Ablation Waterfall Chart: {model} | {optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
+    ax.set_ylabel("Total Objective (ms)", fontweight="bold")
+    sns.despine()
+    
+    fig.tight_layout()
+    
+    plot_dir = output_dir / model / optimizer / precision / batch_name / "ablation_waterfall"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(plot_dir / f"waterfall_{optimizer}_{precision}_{batch_name}.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+def plot_roofline_model(config_dir: Path, output_dir: Path, model: str):
+    import json
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
+    
+    stats_path = config_dir / f"{model}_metrics_stats.csv"
+    if not stats_path.exists(): 
+        print(f"Roofline: {stats_path} does not exist")
+        return
+    df = pd.read_csv(stats_path)
+    
+    # Use rescued_tflops if available, else fallback to tflops_mean
+    tflops_col = "rescued_tflops" if "rescued_tflops" in df.columns else "tflops_mean"
+    
+    if tflops_col not in df.columns or "gpu_fwd_time_ms_mean" not in df.columns or "transfer_h2d_ms_mean" not in df.columns: 
+        print(f"Roofline: missing columns in {stats_path}")
+        return
         
-        fig.tight_layout()
+    df = df[df[tflops_col] > 0].copy()
+    if df.empty: 
+        print(f"Roofline: {stats_path} has no rows with {tflops_col} > 0")
+        return
         
-        plot_dir = output_dir / model / "ablation_waterfall"
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        fig.savefig(plot_dir / f"waterfall.png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
+    # Read meta json to extract actual hardware measurements
+    peak_tflops_gpu = 20.0
+    peak_tflops_cpu = 1.0
+    meta_json = config_dir / "run_001" / f"{model}_meta.json"
+    if meta_json.exists():
+        with open(meta_json, "r") as f:
+            meta = json.load(f)
+            peak_tflops_gpu = meta.get("measured_peak_tflops_gpu", 20.0)
+            peak_tflops_cpu = meta.get("measured_peak_tflops_cpu", 1.0)
+            
+    # Assuming typical Datacenter GPU (VRAM) and high-end Server CPU (DRAM) bandwidths
+    vram_bandwidth_gb_s = 760.0
+    dram_bandwidth_gb_s = 50.0
+    
+    ridge_gpu = peak_tflops_gpu / (vram_bandwidth_gb_s / 1000.0)
+    ridge_cpu = peak_tflops_cpu / (dram_bandwidth_gb_s / 1000.0)
+    
+    # Approx Bytes transferred: (params_mb + activations_mb) * 1e6
+    df["bytes"] = (df["params_mb_mean"] + df["activations_mb_mean"]) * 1e6
+    
+    # If gpu_fwd_time_ms_mean <= 0 (OOM), fallback to cpu time
+    df["used_time_ms"] = df["gpu_fwd_time_ms_mean"]
+    df.loc[df["used_time_ms"] <= 0, "used_time_ms"] = df["cpu_fwd_time_ms_mean"]
+    df["flops"] = df[tflops_col] * 1e12 * (df["used_time_ms"] / 1000.0)
+    
+    df["arithmetic_intensity"] = df["flops"] / df["bytes"]
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Plot ceilings
+    min_ai = min(0.01, df["arithmetic_intensity"].min() * 0.5)
+    max_ai = max(10000, df["arithmetic_intensity"].max() * 2)
+    ai_vals = np.logspace(np.log10(min_ai), np.log10(max_ai), 100)
+    
+    gpu_bw_roof = ai_vals * (vram_bandwidth_gb_s / 1000.0)
+    gpu_roof = np.minimum(gpu_bw_roof, peak_tflops_gpu)
+    
+    cpu_bw_roof = ai_vals * (dram_bandwidth_gb_s / 1000.0)
+    cpu_roof = np.minimum(cpu_bw_roof, peak_tflops_cpu)
+    
+    ax.plot(ai_vals, gpu_roof, color="red", linestyle="-", linewidth=2.5, label=f"GPU Compute ({peak_tflops_gpu:.1f} TFLOPS) / VRAM BW ({vram_bandwidth_gb_s} GB/s)")
+    ax.plot(ai_vals, cpu_roof, color="blue", linestyle="--", linewidth=2.5, label=f"CPU Compute ({peak_tflops_cpu:.1f} TFLOPS) / DRAM BW ({dram_bandwidth_gb_s} GB/s)")
+    
+    # Regions
+    ax.fill_between(ai_vals[ai_vals <= ridge_gpu], 0, gpu_roof[ai_vals <= ridge_gpu], color='orange', alpha=0.1, label='Memory Bound')
+    ax.fill_between(ai_vals[ai_vals > ridge_gpu], 0, gpu_roof[ai_vals > ridge_gpu], color='purple', alpha=0.1, label='Compute Bound')
+    
+    # Plot layers
+    scatter = ax.scatter(df["arithmetic_intensity"], df[tflops_col], 
+                         c=df["used_time_ms"], cmap="viridis", s=60, alpha=0.8, edgecolors="k", label="Model Layers")
+    
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Arithmetic Intensity (FLOPs/Byte)", fontsize=12)
+    ax.set_ylabel("Performance (TFLOP/s)", fontsize=12)
+    ax.set_title(f"Hardware Roofline Model: {model} | {optimizer} | {precision} | {batch_name}", fontsize=14, fontweight="bold")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+    
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label("Execution Time (ms)")
+    
+    ax.legend(loc="lower right")
+    
+    out_dir = output_dir / model / optimizer / precision / batch_name / "roofline_model"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_dir / "roofline_model.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+def plot_power_throughput_vs_budget(config_dir: Path, output_dir: Path, model: str):
+    stats_path = config_dir / f"{model}_pareto_sweep.csv"
+    if not stats_path.exists():
+        return
+        
+    df = pd.read_csv(stats_path)
+    if "gpu_budget_mb" not in df.columns or "ilp_energy_j" not in df.columns or "ilp_objective" not in df.columns: 
+        return
+        
+    optimizer = config_dir.parents[1].name
+    precision = config_dir.parents[0].name
+    batch_name = config_dir.name
+    try:
+        batch_size = int(batch_name.split("_")[-1])
+    except ValueError:
+        batch_size = 32
+    
+    # Drop rows where latency or energy is missing or inf
+    df_model = df[(df["ilp_energy_j"] > 0) & (df["ilp_objective"] > 0)].copy()
+    df_model = df_model[(df_model["ilp_energy_j"] != np.inf) & (df_model["ilp_objective"] != np.inf)]
+    
+    if df_model.empty:
+        return
+        
+    df_model["watts"] = df_model["ilp_energy_j"] / (df_model["ilp_objective"] / 1000.0)
+    df_model["throughput"] = batch_size / (df_model["ilp_objective"] / 1000.0)
+    
+    # Sort by budget
+    df_model = df_model.sort_values("gpu_budget_mb")
+    
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    
+    color1 = 'tab:red'
+    ax1.set_xlabel('GPU Memory Budget (MB)', fontsize=12, fontweight="bold")
+    ax1.set_ylabel('Power (Watts)', color=color1, fontsize=12, fontweight="bold")
+    ax1.plot(df_model["gpu_budget_mb"], df_model["watts"], color=color1, marker='o', linewidth=2, label="Power (W)")
+    ax1.tick_params(axis='y', labelcolor=color1)
+    ax1.grid(True, linestyle="--", alpha=0.5)
+    
+    ax2 = ax1.twinx()
+    color2 = 'tab:blue'
+    ax2.set_ylabel('Training Throughput (Samples/s)', color=color2, fontsize=12, fontweight="bold")
+    ax2.plot(df_model["gpu_budget_mb"], df_model["throughput"], color=color2, marker='s', linewidth=2, label="Throughput")
+    ax2.tick_params(axis='y', labelcolor=color2)
+    
+    fig.suptitle(f"Power & Throughput vs Budget: {model} | {optimizer} | {precision} | {batch_name}", fontsize=14, fontweight="bold")
+    
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc="lower right")
+    
+    fig.tight_layout()
+    
+    plot_dir = output_dir / model / optimizer / precision / batch_name / "efficiency"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(plot_dir / f"power_throughput_{optimizer}_{precision}_{batch_name}.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Advanced Statistical Thesis Plots")
     parser.add_argument("--input_root", type=Path, required=True, help="Root directory containing model profiling results")
     parser.add_argument("--output_dir", type=Path, required=True, help="Directory to save advanced plots")
     parser.add_argument("--hybrid_csv", type=Path, default=None, help="Path to hybrid_execution_consolidated.csv")
-    parser.add_argument("--ilp_pareto_csv", type=Path, default=None, help="Path to ilp_pareto_consolidated.csv")
-    
     args = parser.parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    
-    print(f"Generating advanced plots in {args.output_dir}...")
+
+    input_root = Path(args.input_root)
+    output_dir = Path(args.output_dir)
+
+    print(f"Generating advanced plots in {output_dir}...")
     
     if args.hybrid_csv and args.hybrid_csv.exists():
-        try:
-            plot_predicted_vs_actual(args.hybrid_csv, args.output_dir)
-        except Exception as e:
-            print(f"Error plotting predicted vs actual: {e}")
-            
-    if args.ilp_pareto_csv and args.ilp_pareto_csv.exists():
-        try:
-            plot_waterfall_ablation(args.ilp_pareto_csv, args.output_dir)
-        except Exception as e:
-            print(f"Error plotting waterfall ablation: {e}")
+        hybrid_csv_path = args.hybrid_csv
+    else:
+        hybrid_csv_path = None
+    total = 0
+    errors = 0
+
+    stats_files = sorted(p for p in input_root.rglob("*_metrics_stats.csv") if "run_" not in p.parent.name)
+
+    for stats_file in stats_files:
+        cdir = stats_file.parent
+        model = stats_file.name.replace("_metrics_stats.csv", "")
+        total += 1
         
-    config_dirs = find_config_dirs(args.input_root)
-    processed_models = set()
-    
-    for cdir in config_dirs:
-        model = cdir.parents[2].name
-        if model in processed_models:
-            continue
-            
+        # We process ALL config_dirs, not skipping if model is seen
         try:
-            plot_memory_footprint(cdir, args.output_dir)
-            plot_affinity_heatmap(cdir, args.output_dir)
-            plot_violin_variance(cdir, args.output_dir)
+            plot_memory_footprint(cdir, output_dir, model)
+            plot_affinity_heatmap(cdir, output_dir, model)
+            plot_roofline_model(cdir, output_dir, model)
+            plot_power_throughput_vs_budget(cdir, output_dir, model)
+            plot_violin_variance(cdir, output_dir, model)
+            plot_waterfall_ablation(cdir, output_dir, model)
+            if hybrid_csv_path:
+                plot_predicted_vs_actual(cdir, output_dir, model, hybrid_csv_path)
         except Exception as e:
-            print(f"Error processing advanced plots for {model}: {e}")
-            
-        processed_models.add(model)
-        
+            errors += 1
+            print(f"Error processing advanced plots for {cdir}: {e}")
+
+    success = total - errors
+    print(f"Advanced plots finished: processed={total}, success={success}, errors={errors}")
+    if errors > 0:
+        raise SystemExit(1)
     print("Advanced plots generated successfully.")
 
 if __name__ == "__main__":

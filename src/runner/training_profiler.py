@@ -1,3 +1,4 @@
+import gc
 import logging
 import math
 import os
@@ -151,6 +152,16 @@ class TrainingProfiler:
                     start = torch.cuda.Event(enable_timing=True)
                     start.record()
                     self._fwd_tstarts[name]["gpu"] = start
+                    # Capture memory baseline BEFORE this layer executes.
+                    # synchronize() ensures prior ops have completed so the baseline
+                    # is not contaminated by in-flight allocations from previous layers.
+                    torch.cuda.synchronize()
+                    self._fwd_tstarts[name]["mem_before_mb"] = (
+                        torch.cuda.memory_allocated(self.gpu_id) / (1024 ** 2)
+                    )
+                    # Reset peak tracker so post-hook can recover in-layer peak usage,
+                    # including transient allocations that may be freed before exit.
+                    torch.cuda.reset_peak_memory_stats(self.gpu_id)
 
             return hook
 
@@ -185,7 +196,12 @@ class TrainingProfiler:
                     end.record()
                     torch.cuda.synchronize()
                     kernel_ms = self._fwd_tstarts[name]["gpu"].elapsed_time(end)
-                    s["mem_mb"] = max(s["mem_mb"], torch.cuda.memory_allocated(self.gpu_id) / (1024**2))
+                    # Per-layer memory peak delta: captures transient allocations
+                    # that may be freed before the layer returns.
+                    mem_peak_mb = torch.cuda.max_memory_allocated(self.gpu_id) / (1024 ** 2)
+                    mem_before_mb = self._fwd_tstarts[name].get("mem_before_mb", 0.0)
+                    layer_peak_delta_mb = max(0.0, mem_peak_mb - mem_before_mb)
+                    s["mem_mb"] = max(s["mem_mb"], layer_peak_delta_mb)
                 else:
                     kernel_ms = (cpu_end - self._fwd_tstarts[name]["cpu"]) * 1000.0
 
@@ -369,6 +385,14 @@ class TrainingProfiler:
                     target_batch,
                     next_micro,
                 )
+                # Release references to failed micro-batch tensors before empty_cache.
+                if "out" in locals():
+                    del out
+                if "loss" in locals():
+                    del loss
+                if "chunk_inp" in locals():
+                    del chunk_inp
+                gc.collect()
                 if device == "cuda":
                     torch.cuda.empty_cache()
                 micro_batch = next_micro
@@ -380,6 +404,38 @@ class TrainingProfiler:
         steps: int,
         allow_backward_hook_fallback: bool = True,
     ) -> Tuple[Optional[float], float]:
+        # Use an iterative fallback instead of recursion so that self.hooks and
+        # other instance state is never shared across two activation frames of
+        # this function simultaneously, eliminating the state-coupling code smell.
+        _allow_fallback = allow_backward_hook_fallback
+
+        while True:
+            result = self._run_epoch_attempt(
+                input_data=input_data,
+                device=device,
+                steps=steps,
+                allow_backward_hook_fallback=_allow_fallback,
+            )
+            if result is not None:
+                return result
+            # result is None only when hook conflict is detected and fallback is
+            # allowed: disable backward hooks and retry without recursion.
+            _allow_fallback = False
+
+    def _run_epoch_attempt(
+        self,
+        input_data: Any,
+        device: str,
+        steps: int,
+        allow_backward_hook_fallback: bool,
+    ) -> Optional[Tuple[Optional[float], float]]:
+        """
+        Execute one profiling epoch attempt.
+
+        Returns the result tuple on success, or None when a backward-hook
+        in-place conflict is detected and a fallback retry without hooks should
+        be attempted by the caller (_run_epoch).
+        """
         device_str = f"cuda:{self.gpu_id}" if device == "cuda" else "cpu"
         self.model.to(device_str)
         self.model.train()
@@ -437,12 +493,8 @@ class TrainingProfiler:
                 self._use_backward_hooks = False
                 self.layer_stats = {}
                 self._active_optimizer = None
-                return self._run_epoch(
-                    input_data=input_data,
-                    device=device,
-                    steps=steps,
-                    allow_backward_hook_fallback=False,
-                )
+                # Signal caller to retry without hooks instead of recursing.
+                return None
             raise
 
         finally:
@@ -1235,7 +1287,9 @@ class TrainingProfiler:
             cpu_layer_energy_j = cpu_energy_per_ms * t_fwd_cpu
             cpu_bwd_energy_j = cpu_energy_per_ms * t_bwd_cpu
 
-            act_bytes = c_s.get("output_bytes", g_s.get("output_bytes", 0))
+            # Prefer GPU measurement: activations are produced on the execution device.
+            # CPU fallback only when GPU profiling was not available for this layer.
+            act_bytes = g_s.get("output_bytes", c_s.get("output_bytes", 0))
             act_mb = act_bytes / (1024**2)
             params_mb = g_s.get("params_mb", c_s.get("params_mb", 0.0))
 
@@ -1290,7 +1344,7 @@ class TrainingProfiler:
                 "cpu_bwd_time_ms": t_bwd_cpu,
                 "cpu_fwd_energy_j": cpu_layer_energy_j,
                 "cpu_bwd_energy_j": cpu_bwd_energy_j,
-                "cpu_mem_mb": act_mb,
+                "cpu_mem_mb": params_mb + act_mb,  # params also reside on CPU when layer is CPU-assigned
                 "layer_j_per_tflop_cpu": (cpu_layer_energy_j / layer_work_tflops)
                 if (layer_work_tflops > 0 and cpu_layer_energy_j > 0)
                 else None,
