@@ -134,6 +134,7 @@ def get_hardware_metadata() -> Dict[str, Any]:
         "cpu_model": get_cpu_model(),
         "gpu_name": "None",
         "gpu_driver": "None",
+        "gpu_vram_total_mb": 0,
         "rapl_available": PYRAPL_AVAILABLE,
     }
     if torch.cuda.is_available():
@@ -142,6 +143,9 @@ def get_hardware_metadata() -> Dict[str, Any]:
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             meta["gpu_name"] = pynvml.nvmlDeviceGetName(handle)
             meta["gpu_driver"] = pynvml.nvmlSystemGetDriverVersion()
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            meta["gpu_vram_total_mb"] = round(mem_info.total / (1024 * 1024), 1)
         except Exception as e:
             logger.warning(f"NVML Init failed in metadata check: {e}")
     return meta
+

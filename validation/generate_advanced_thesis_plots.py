@@ -41,88 +41,8 @@ def find_config_dirs(input_root: Path):
     return dirs
 
 def plot_predicted_vs_actual(config_dir: Path, output_dir: Path, model: str, hybrid_csv: Path):
-    if not hybrid_csv or not hybrid_csv.exists():
-        return
-        
-    df = pd.read_csv(hybrid_csv)
-
-    # Backward-compatible schema resolution
-    predicted_col = "plan_objective" if "plan_objective" in df.columns else None
-    measured_col = "avg_step_ms" if "avg_step_ms" in df.columns else None
-    if predicted_col is None or measured_col is None:
-        return
-
-    model_col = "config_model" if "config_model" in df.columns else ("model" if "model" in df.columns else None)
-    optimizer_col = "config_optimizer" if "config_optimizer" in df.columns else ("optimizer" if "optimizer" in df.columns else None)
-    precision_col = "config_precision" if "config_precision" in df.columns else ("precision" if "precision" in df.columns else None)
-    batch_col = "config_batch_size" if "config_batch_size" in df.columns else ("batch_size" if "batch_size" in df.columns else None)
-    if model_col is None or optimizer_col is None or precision_col is None or batch_col is None:
-        return
-        
-    optimizer = config_dir.parents[1].name
-    precision = config_dir.parents[0].name
-    batch_name = config_dir.name
-    batch_size_str = batch_name.replace("batch_", "")
-    
-    # Filter for the specific configuration
-    df_valid = df[
-        (pd.to_numeric(df[predicted_col], errors="coerce") > 0)
-        & (df["run_label"] != "all_cpu")
-        & (df["run_label"] != "all_gpu")
-        & (df[model_col].astype(str) == str(model))
-        & (df[optimizer_col].astype(str) == str(optimizer))
-        & (df[precision_col].astype(str) == str(precision))
-        & (df[batch_col].astype(str) == str(batch_size_str))
-    ].copy()
-    
-    plot_dir = output_dir / model / optimizer / precision / batch_name / "predicted_vs_actual_scatter"
-    plot_dir.mkdir(parents=True, exist_ok=True)
-    
-    df_valid[predicted_col] = pd.to_numeric(df_valid[predicted_col], errors="coerce")
-    df_valid[measured_col] = pd.to_numeric(df_valid[measured_col], errors="coerce")
-    df_valid = df_valid.dropna(subset=[predicted_col, measured_col])
-    
-    if df_valid.empty:
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.text(0.5, 0.5, "No Hybrid Validation Data Available", ha="center", va="center", fontsize=14, color="red")
-        ax.set_title(f"Predicted vs Actual Latency: {model}\n{optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        fig.savefig(plot_dir / "scatter.png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        return
-        
-    fig, ax = plt.subplots(figsize=(8, 8))
-    
-    # Calculate R^2 if there is more than 1 point, otherwise just plot
-    if len(df_valid) > 1:
-        from scipy.stats import pearsonr
-        r_val, _ = pearsonr(df_valid[predicted_col], df_valid[measured_col])
-        r2 = r_val ** 2
-        label_text = f'Ideal (y=x)\n$R^2 = {r2:.3f}$'
-    else:
-        label_text = 'Ideal (y=x)'
-    
-    sns.scatterplot(data=df_valid, x=predicted_col, y=measured_col, s=150, alpha=0.9, color="#1f77b4", ax=ax, edgecolor="black")
-    
-    # Ideal y=x line
-    min_val = min(df_valid[predicted_col].min(), df_valid[measured_col].min())
-    max_val = max(df_valid[predicted_col].max(), df_valid[measured_col].max())
-    
-    # Extend slightly for visual clarity
-    padding = (max_val - min_val) * 0.1 if max_val > min_val else min_val * 0.1
-    ax.plot([min_val - padding, max_val + padding], [min_val - padding, max_val + padding], 'k--', label=label_text)
-    
-    ax.set_title(f"Predicted vs Actual Latency: {model}\n{optimizer} | {precision} | {batch_name}", pad=15, fontweight="bold")
-    ax.set_xlabel("ILP Predicted Latency (ms)", fontweight="bold")
-    ax.set_ylabel("Hybrid Execution Measured Latency (ms)", fontweight="bold")
-    ax.legend(title="", frameon=True)
-    sns.despine()
-    
-    fig.tight_layout()
-    
-    fig.savefig(plot_dir / "scatter.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    # Removed as per user request to only have the global scatter plot.
+    pass
 
 def plot_memory_footprint(config_dir: Path, output_dir: Path, model: str):
     optimizer = config_dir.parents[1].name
@@ -519,6 +439,87 @@ def plot_power_throughput_vs_budget(config_dir: Path, output_dir: Path, model: s
     fig.savefig(plot_dir / f"power_throughput_{optimizer}_{precision}_{batch_name}.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
+def plot_global_predicted_vs_actual(output_dir: Path, hybrid_csv: Path):
+    if not hybrid_csv or not hybrid_csv.exists():
+        return
+        
+    df = pd.read_csv(hybrid_csv)
+    predicted_col = "plan_objective" if "plan_objective" in df.columns else None
+    measured_col = "avg_step_ms" if "avg_step_ms" in df.columns else None
+    if predicted_col is None or measured_col is None:
+        return
+
+    model_col = "config_model" if "config_model" in df.columns else ("model" if "model" in df.columns else None)
+    if model_col is None:
+        return
+
+    df_valid = df[
+        (pd.to_numeric(df[predicted_col], errors="coerce") > 0)
+        & (df["run_label"] != "all_cpu")
+        & (df["run_label"] != "all_gpu")
+    ].copy()
+
+    df_valid[predicted_col] = pd.to_numeric(df_valid[predicted_col], errors="coerce")
+    df_valid[measured_col] = pd.to_numeric(df_valid[measured_col], errors="coerce")
+    df_valid = df_valid.dropna(subset=[predicted_col, measured_col])
+
+    if df_valid.empty:
+        return
+
+    plot_dir = output_dir / "global_summary"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Density Plot (to solve saturation)
+    fig, ax = plt.subplots(figsize=(10, 8))
+    if len(df_valid) > 1:
+        from scipy.stats import pearsonr
+        r_val, _ = pearsonr(df_valid[predicted_col], df_valid[measured_col])
+        r2 = r_val ** 2
+        title_extra = f" (Global $R^2$ = {r2:.3f})"
+    else:
+        title_extra = ""
+
+    sns.histplot(data=df_valid, x=predicted_col, y=measured_col, bins=50, pmax=0.9, cmap="mako", cbar=True, ax=ax, cbar_kws={'label': 'Density of Configurations'})
+    
+    min_val = min(df_valid[predicted_col].min(), df_valid[measured_col].min())
+    max_val = max(df_valid[predicted_col].max(), df_valid[measured_col].max())
+    padding = (max_val - min_val) * 0.1 if max_val > min_val else min_val * 0.1
+    ax.plot([min_val - padding, max_val + padding], [min_val - padding, max_val + padding], 'r--', label='Ideal Perfect Prediction (y=x)')
+    
+    ax.set_title(f"Global Predicted vs Actual Latency (Density){title_extra}", pad=15, fontweight="bold")
+    ax.set_xlabel("ILP Predicted Latency (ms)", fontweight="bold")
+    ax.set_ylabel("Measured Latency (ms)", fontweight="bold")
+    ax.legend(loc="upper left")
+    sns.despine()
+    fig.tight_layout()
+    fig.savefig(plot_dir / "global_predicted_vs_actual_density.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    # 2. FacetGrid by Model
+    models = df_valid[model_col].unique()
+    if len(models) <= 16:
+        g = sns.FacetGrid(df_valid, col=model_col, col_wrap=4, height=4, sharex=False, sharey=False)
+        g.map_dataframe(sns.scatterplot, x=predicted_col, y=measured_col, alpha=0.7, color="#1f77b4")
+        
+        def plot_ideal_line(**kwargs):
+            ax = plt.gca()
+            lims = [
+                np.min([ax.get_xlim(), ax.get_ylim()]),
+                np.max([ax.get_xlim(), ax.get_ylim()]),
+            ]
+            ax.plot(lims, lims, 'k--', alpha=0.7, zorder=0, label="Ideal Perfect Prediction (y=x)")
+            ax.set_xlim(lims)
+            ax.set_ylim(lims)
+            
+        g.map(plot_ideal_line)
+        g.set_axis_labels("Predicted (ms)", "Actual (ms)")
+        g.set_titles(col_template="{col_name}")
+        g.add_legend()
+        g.fig.subplots_adjust(top=0.85)
+        g.fig.suptitle("Predicted vs Actual Latency by Model", fontweight="bold", fontsize=16)
+        g.savefig(plot_dir / "global_predicted_vs_actual_facets.png", dpi=300, bbox_inches="tight")
+        plt.close(g.fig)
+
 def main():
     parser = argparse.ArgumentParser(description="Generate Advanced Statistical Thesis Plots")
     parser.add_argument("--input_root", type=Path, required=True, help="Root directory containing model profiling results")
@@ -528,6 +529,10 @@ def main():
 
     input_root = Path(args.input_root)
     output_dir = Path(args.output_dir)
+    # Keep output path idempotent: if caller already points to a "plots" dir,
+    # do not append another nested "plots" segment.
+    if output_dir.name != "plots":
+        output_dir = output_dir / "plots"
 
     print(f"Generating advanced plots in {output_dir}...")
     
@@ -561,6 +566,16 @@ def main():
 
     success = total - errors
     print(f"Advanced plots finished: processed={total}, success={success}, errors={errors}")
+    
+    if hybrid_csv_path:
+        print("Generating global scatter plots...")
+        try:
+            plot_global_predicted_vs_actual(output_dir, hybrid_csv_path)
+            print("Global scatter plots generated successfully.")
+        except Exception as e:
+            print(f"Error generating global scatter plots: {e}")
+            errors += 1
+
     if errors > 0:
         raise SystemExit(1)
     print("Advanced plots generated successfully.")

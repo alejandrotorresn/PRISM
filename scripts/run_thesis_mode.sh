@@ -49,7 +49,7 @@ case "$PROFILE" in
     : "${WARMUP:=3}"
     : "${MEASURE:=10}"
     : "${K_SIGMA:=1.0}"
-    : "${GPU_BUDGETS_MB:=400,600,800,1000,1200}"
+    : "${GPU_BUDGETS_MB:=auto}"
     : "${RUN_HYBRID:=true}"
     : "${FAIL_FAST:=false}"
     : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
@@ -68,7 +68,7 @@ case "$PROFILE" in
     : "${WARMUP:=5}"
     : "${MEASURE:=15}"
     : "${K_SIGMA:=1.0}"
-    : "${GPU_BUDGETS_MB:=300,400,600,800,1000,1200,1600,2000}"
+    : "${GPU_BUDGETS_MB:=auto}"
     : "${RUN_HYBRID:=true}"
     : "${FAIL_FAST:=false}"
     : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
@@ -87,7 +87,7 @@ case "$PROFILE" in
     : "${WARMUP:=3}"
     : "${MEASURE:=10}"
     : "${K_SIGMA:=1.0}"
-    : "${GPU_BUDGETS_MB:=400,600,800,1000,1200}"
+    : "${GPU_BUDGETS_MB:=auto}"
     : "${RUN_HYBRID:=true}"
     : "${FAIL_FAST:=false}"
     : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
@@ -105,7 +105,7 @@ case "$PROFILE" in
     : "${REPEATS:=1}"
     : "${WARMUP:=1}"
     : "${MEASURE:=1}"
-    : "${GPU_BUDGETS_MB:=200,400}"
+    : "${GPU_BUDGETS_MB:=auto}"
     : "${RUN_HYBRID:=false}"
     : "${STRICT_GRAPH_MAPPING:=false}"
     : "${STRICT_TRANSFER_MAPPING:=false}"
@@ -148,7 +148,7 @@ W_TRANSFER="${W_TRANSFER:-1.0}"
 BACKEND="${BACKEND:-auto}"
 HW_AGGREGATE="${HW_AGGREGATE:-max}"
 HW_DISPERSION_K="${HW_DISPERSION_K:-0.0}"
-GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-400,600,800,1000,1200}"
+GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-auto}"
 GPU_MEM_BUDGET_MB="${GPU_MEM_BUDGET_MB:-1e18}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
 MEMORY_MODEL="${MEMORY_MODEL:-topological}"
@@ -379,6 +379,35 @@ resolve_report_input_root() {
   printf '%s' "$base_dir"
 }
 
+# ---- GPU VRAM auto-detection utilities ----
+detect_gpu_vram_mb() {
+  # Returns total GPU VRAM in MiB from nvidia-smi, or empty string on failure.
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d '[:space:]'
+  else
+    echo ""
+  fi
+}
+
+compute_dynamic_budgets() {
+  # Computes GPU memory budget values as percentages of total VRAM.
+  # Usage: compute_dynamic_budgets <vram_mb> [percentages_csv]
+  # Example: compute_dynamic_budgets 8188 "90,85,80,75,70,50" -> "7369,6959,6550,6141,5731,4094"
+  local vram_mb="$1"
+  local percentages_csv="${2:-90,85,80,75,70,50}"
+  local budgets=""
+  IFS=',' read -r -a percentages <<< "$percentages_csv"
+  for pct in "${percentages[@]}"; do
+    local val=$(( vram_mb * pct / 100 ))
+    if [ -z "$budgets" ]; then
+      budgets="$val"
+    else
+      budgets="$budgets,$val"
+    fi
+  done
+  echo "$budgets"
+}
+
 section "THESIS MODE - PREFLIGHT"
 log_msg "PROFILE=$PROFILE"
 log_msg "PYTHON_CMD=$PYTHON_CMD"
@@ -407,6 +436,21 @@ if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
   log_msg "ALLOW_FALLBACK_GRAPH_TRACE=true"
 fi
 log_msg "DRY_RUN=$DRY_RUN"
+
+# ---- Resolve GPU_BUDGETS_MB=auto to dynamic values ----
+if [ "$GPU_BUDGETS_MB" = "auto" ]; then
+  GPU_VRAM_TOTAL_MB="$(detect_gpu_vram_mb)"
+  if [ -z "$GPU_VRAM_TOTAL_MB" ] || [ "$GPU_VRAM_TOTAL_MB" -le 0 ] 2>/dev/null; then
+    log_msg "ERROR: GPU_BUDGETS_MB=auto but could not detect GPU VRAM via nvidia-smi."
+    log_msg "       Set GPU_BUDGETS_MB explicitly (e.g. GPU_BUDGETS_MB=5000,6000,7000)."
+    exit 1
+  fi
+  GPU_BUDGETS_MB="$(compute_dynamic_budgets "$GPU_VRAM_TOTAL_MB" "90,85,80,75,70,50")"
+  log_msg "GPU VRAM detected: ${GPU_VRAM_TOTAL_MB} MiB"
+  log_msg "Dynamic GPU budgets (90%,85%,80%,75%,70%,50%): $GPU_BUDGETS_MB"
+else
+  log_msg "GPU budgets (manual): $GPU_BUDGETS_MB"
+fi
 
 if is_true "$DOWNLOAD_DATASETS"; then
   section "STEP 1/5 - DATASET PREPARATION"
@@ -717,7 +761,7 @@ if is_true "$RUN_REPORTS"; then
   log_msg "Generating advanced analytics plots..."
   "$PYTHON_CMD" validation/generate_advanced_thesis_plots.py \
     --input_root "$REPORT_INPUT_ROOT" \
-    --output_dir "$REPORTS_DIR/plots" \
+    --output_dir "$REPORTS_DIR" \
     --hybrid_csv "$REPORTS_DIR/csv/hybrid_execution_best_per_model.csv" >> "$LOG_FILE" 2>&1
 
   PYTHON_CMD="$PYTHON_CMD" \

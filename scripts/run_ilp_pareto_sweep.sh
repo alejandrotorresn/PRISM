@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Usage example:
 # PYTHON_CMD=./.venv/bin/python MODEL=resnet50 CONFIG_DIR=data/test-m4/resnet50/SGD/fp32/batch_8 \
-# GPU_BUDGETS_MB=400,600,800,1000 CPU_MEM_BUDGET_MB=3000 bash scripts/run_ilp_pareto_sweep.sh
+# GPU_BUDGETS_MB=auto CPU_MEM_BUDGET_MB=3000 bash scripts/run_ilp_pareto_sweep.sh
 
 source "$(dirname "$0")/sanitize_cuda_env.sh"
 sanitize_cuda_runtime_env
@@ -12,8 +12,29 @@ PYTHON_CMD="${PYTHON_CMD:-python}"
 MODEL="${MODEL:-resnet50}"
 CONFIG_DIR="${CONFIG_DIR:-data/test-m4/resnet50/SGD/fp32/batch_8}"
 CONFIG_DIRS="${CONFIG_DIRS:-}"
-GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-400,600,800,1000,1200}"
+GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-auto}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
+
+# ---- Resolve GPU_BUDGETS_MB=auto to dynamic values ----
+if [ "$GPU_BUDGETS_MB" = "auto" ]; then
+  _GPU_VRAM_MB=""
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    _GPU_VRAM_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  fi
+  if [ -z "$_GPU_VRAM_MB" ] || [ "$_GPU_VRAM_MB" -le 0 ] 2>/dev/null; then
+    echo "[ERROR] GPU_BUDGETS_MB=auto but could not detect GPU VRAM via nvidia-smi." >&2
+    echo "        Set GPU_BUDGETS_MB explicitly (e.g. GPU_BUDGETS_MB=5000,6000,7000)." >&2
+    exit 1
+  fi
+  _BUDGETS=""
+  for _pct in 90 85 80 75 70 50; do
+    _val=$(( _GPU_VRAM_MB * _pct / 100 ))
+    if [ -z "$_BUDGETS" ]; then _BUDGETS="$_val"; else _BUDGETS="$_BUDGETS,$_val"; fi
+  done
+  GPU_BUDGETS_MB="$_BUDGETS"
+  echo "[INFO] GPU VRAM detected: ${_GPU_VRAM_MB} MiB -> dynamic budgets: $GPU_BUDGETS_MB"
+fi
+
 MEMORY_MODEL="${MEMORY_MODEL:-peak_approx}"
 PEAK_ACTIVATION_OVERLAP="${PEAK_ACTIVATION_OVERLAP:-0.35}"
 K_SIGMA="${K_SIGMA:-1.0}"
