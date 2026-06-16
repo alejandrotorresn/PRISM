@@ -203,7 +203,7 @@ HYBRID_COMPARE_BASELINES="${HYBRID_COMPARE_BASELINES:-true}"
 HYBRID_EXECUTION_MODE="${HYBRID_EXECUTION_MODE:-auto}"
 HYBRID_PLAN_SELECTION="${HYBRID_PLAN_SELECTION:-pareto_best}"
 
-BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results_thesis_mode}"
+BASE_OUTPUT_DIR="${BASE_OUTPUT_DIR:-data/${HOST_TAG}/results_thesis_mode/${PROFILE}}"
 REPORTS_DIR="${REPORTS_DIR:-reports/${HOST_TAG}/${PROFILE}}"
 LATEX_DIR="${LATEX_DIR:-${REPORTS_DIR}/latex}"
 LOG_DIR="${LOG_DIR:-logs/${HOST_TAG}/thesis_mode}"
@@ -348,7 +348,7 @@ discover_config_dirs() {
 
   if [ ${#CONFIG_DIRS[@]} -gt 0 ]; then
     local unique_roots
-    unique_roots="$(printf '%s\n' "${CONFIG_DIRS[@]}" | sed -E 's|(.*?/batch_[^/]+).*|\1|' | sort -u | head -n 3 | paste -sd ', ' -)"
+    unique_roots="$(printf '%s\n' "${CONFIG_DIRS[@]}" | sed -E 's|(.*?/batch_[^/]+).*|\1|' | sort -u | head -n 3 | paste -sd ', ' - || true)"
     log_msg "Discovered ${#CONFIG_DIRS[@]} config dirs (sample roots: ${unique_roots})"
   fi
 }
@@ -481,6 +481,9 @@ if is_true "$RUN_PROFILING"; then
   AUTO_AGGREGATE_STATS="$AUTO_AGGREGATE_STATS" \
   FAIL_FAST="$FAIL_FAST" \
   ALLOW_PARTIAL_FAILURES="$ALLOW_PARTIAL_PROFILING_FAILURES" \
+  USE_CGROUP_MEM_LIMIT="${USE_CGROUP_MEM_LIMIT:-true}" \
+  CPU_MEM_LIMIT_PCT="${CPU_MEM_LIMIT_PCT:-95}" \
+  PROFILER_TIMEOUT_SECS="${PROFILER_TIMEOUT_SECS:-0}" \
   DRY_RUN="$DRY_RUN" \
   bash scripts/run_experiments.sh >> "$LOG_FILE" 2>&1
   log_msg "Profiling campaign finished"
@@ -763,6 +766,12 @@ if is_true "$RUN_REPORTS"; then
     --input_root "$REPORT_INPUT_ROOT" \
     --output_dir "$REPORTS_DIR" \
     --hybrid_csv "$REPORTS_DIR/csv/hybrid_execution_best_per_model.csv" >> "$LOG_FILE" 2>&1
+
+  log_msg "Generating OOM vs ILP Comparison plots..."
+  "$PYTHON_CMD" scripts/plot_all_oom_vs_ilp.py >> "$LOG_FILE" 2>&1
+
+  log_msg "Generating Energy vs Power Tradeoff plots..."
+  "$PYTHON_CMD" scripts/plot_all_energy_tradeoff.py >> "$LOG_FILE" 2>&1
 
   PYTHON_CMD="$PYTHON_CMD" \
   INPUT_ROOT="$REPORT_INPUT_ROOT" \

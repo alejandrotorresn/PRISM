@@ -469,7 +469,7 @@ def plot_global_predicted_vs_actual(output_dir: Path, hybrid_csv: Path):
     plot_dir = output_dir / "global_summary"
     plot_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Density Plot (to solve saturation)
+    # 1. Scatter Plot with Filled Circles Colored by Model
     fig, ax = plt.subplots(figsize=(10, 8))
     if len(df_valid) > 1:
         from scipy.stats import pearsonr
@@ -479,17 +479,24 @@ def plot_global_predicted_vs_actual(output_dir: Path, hybrid_csv: Path):
     else:
         title_extra = ""
 
-    sns.histplot(data=df_valid, x=predicted_col, y=measured_col, bins=50, pmax=0.9, cmap="mako", cbar=True, ax=ax, cbar_kws={'label': 'Density of Configurations'})
-    
+    models = df_valid[model_col].unique()
+    palette = sns.color_palette("colorblind", n_colors=len(models))
+    color_map = {m: palette[i] for i, m in enumerate(models)}
+
+    for m in models:
+        subset = df_valid[df_valid[model_col] == m]
+        ax.scatter(subset[predicted_col], subset[measured_col],
+                   color=color_map[m], label=m, s=50, alpha=0.75, edgecolors='k', linewidths=0.3, zorder=2)
+
     min_val = min(df_valid[predicted_col].min(), df_valid[measured_col].min())
     max_val = max(df_valid[predicted_col].max(), df_valid[measured_col].max())
     padding = (max_val - min_val) * 0.1 if max_val > min_val else min_val * 0.1
     ax.plot([min_val - padding, max_val + padding], [min_val - padding, max_val + padding], 'r--', label='Ideal Perfect Prediction (y=x)')
-    
-    ax.set_title(f"Global Predicted vs Actual Latency (Density){title_extra}", pad=15, fontweight="bold")
+
+    ax.set_title(f"Global Predicted vs Actual Latency{title_extra}", pad=15, fontweight="bold")
     ax.set_xlabel("ILP Predicted Latency (ms)", fontweight="bold")
     ax.set_ylabel("Measured Latency (ms)", fontweight="bold")
-    ax.legend(loc="upper left")
+    ax.legend(loc="upper left", fontsize=9, frameon=True)
     sns.despine()
     fig.tight_layout()
     fig.savefig(plot_dir / "global_predicted_vs_actual_density.png", dpi=300, bbox_inches="tight")
@@ -514,10 +521,18 @@ def plot_global_predicted_vs_actual(output_dir: Path, hybrid_csv: Path):
         g.map(plot_ideal_line)
         g.set_axis_labels("Predicted (ms)", "Actual (ms)")
         g.set_titles(col_template="{col_name}")
-        g.add_legend()
-        g.fig.subplots_adjust(top=0.85)
+        # Create legend below the entire figure
+        leg = g.fig.legend(
+            *g.axes[0].get_legend_handles_labels(),
+            loc='upper center',
+            bbox_to_anchor=(0.5, -0.05),
+            ncol=4,
+            frameon=True,
+            fontsize=11,
+        )
+        g.fig.subplots_adjust(top=0.88, bottom=0.10)
         g.fig.suptitle("Predicted vs Actual Latency by Model", fontweight="bold", fontsize=16)
-        g.savefig(plot_dir / "global_predicted_vs_actual_facets.png", dpi=300, bbox_inches="tight")
+        g.savefig(plot_dir / "global_predicted_vs_actual_facets.png", dpi=300, bbox_inches="tight", bbox_extra_artists=(leg,))
         plt.close(g.fig)
 
 def main():

@@ -101,6 +101,15 @@ OOM_RETRY_MIN_BATCH="${OOM_RETRY_MIN_BATCH:-1}"
 OOM_RETRY_BACKOFF="${OOM_RETRY_BACKOFF:-2}"
 OOM_SKIP_CONFIGS="${OOM_SKIP_CONFIGS:-true}"
 
+# --- CPU (DRAM) OOM PROTECTION ---
+# Isolate each profiler run inside a cgroup with a memory ceiling so that the
+# Linux OOM killer only terminates the child process, not the campaign shell.
+# CPU_MEM_LIMIT_PCT: percentage of MemAvailable (from /proc/meminfo) to allow.
+#   Recalculated dynamically before every profiler invocation.
+USE_CGROUP_MEM_LIMIT="${USE_CGROUP_MEM_LIMIT:-true}"    # true = wrap with systemd-run MemoryMax
+CPU_MEM_LIMIT_PCT="${CPU_MEM_LIMIT_PCT:-95}"             # % of MemAvailable at invocation time
+PROFILER_TIMEOUT_SECS="${PROFILER_TIMEOUT_SECS:-0}"      # 0 = disabled; >0 = kill after N seconds
+
 if [ "$SMOKE_MODE" = true ]; then
     # Smoke mode intentionally shrinks the grid for a fast end-to-end health check.
     MODELS=("simple_mlp")
@@ -299,6 +308,79 @@ is_oom_failure_from_log() {
         "profiling failed after oom retries were exhausted|oom retries were exhausted|cuda out of memory|out of memory|cuda error: out of memory|hip out of memory|cublas.*alloc"
 }
 
+# --- CPU (DRAM) OOM protection helpers ---
+
+get_mem_available_mb() {
+    # Returns MemAvailable from /proc/meminfo in MiB.
+    # MemAvailable is the kernel's estimate of how much memory is available
+    # for starting new applications, without swapping.
+    local mem_avail_kb
+    mem_avail_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null)
+    if [ -z "$mem_avail_kb" ] || [ "$mem_avail_kb" -le 0 ] 2>/dev/null; then
+        echo "0"
+        return 1
+    fi
+    echo $(( mem_avail_kb / 1024 ))
+}
+
+is_cpu_oom_kill() {
+    # Detect if the process was killed by SIGKILL (exit code 137),
+    # which is the signal sent by cgroup MemoryMax enforcement or
+    # the Linux OOM killer.  Also detect exit code 9 (raw SIGKILL
+    # when bash reports $? = 128+signal for some shells).
+    local exit_code="$1"
+    [ "$exit_code" -eq 137 ] || [ "$exit_code" -eq 9 ]
+}
+
+is_timeout_kill() {
+    # Detect if the process was killed by the timeout command (exit code 124).
+    local exit_code="$1"
+    [ "$exit_code" -eq 124 ]
+}
+
+run_profiler_sandboxed() {
+    # Execute the profiler command inside a memory-limited cgroup scope.
+    # Usage: run_profiler_sandboxed <cmd_array...>
+    # Returns the exit code of the profiler process.
+    #
+    # Protection layers (applied in order):
+    #   1. systemd-run --user --scope -p MemoryMax  (cgroup isolation)
+    #   2. timeout (optional, if PROFILER_TIMEOUT_SECS > 0)
+    #   3. Plain execution (fallback if systemd-run is unavailable)
+    #
+    # The cgroup MemoryMax is computed as CPU_MEM_LIMIT_PCT% of the
+    # *current* MemAvailable, so it adapts to the actual system state
+    # at the moment each run starts.
+
+    local cmd=("$@")
+    local wrapper=()
+    local mem_limit_mb=0
+    local mem_avail_mb=0
+
+    # --- Layer 1: cgroup memory ceiling ---
+    if is_true "$USE_CGROUP_MEM_LIMIT" && command -v systemd-run >/dev/null 2>&1; then
+        mem_avail_mb="$(get_mem_available_mb)"
+        if [ "$mem_avail_mb" -gt 0 ] 2>/dev/null; then
+            mem_limit_mb=$(( mem_avail_mb * CPU_MEM_LIMIT_PCT / 100 ))
+            if [ "$mem_limit_mb" -gt 0 ]; then
+                wrapper=(systemd-run --user --scope -q -p "MemoryMax=${mem_limit_mb}M" -p "MemorySwapMax=0")
+                log_msg "  🛡️ CGROUP: MemAvailable=${mem_avail_mb}MB → limit=${mem_limit_mb}MB (${CPU_MEM_LIMIT_PCT}%) swap=0"
+            fi
+        else
+            log_msg "  ⚠ CGROUP: Could not read MemAvailable; running without memory limit"
+        fi
+    fi
+
+    # --- Layer 2: optional timeout ---
+    if [ "$PROFILER_TIMEOUT_SECS" -gt 0 ] 2>/dev/null; then
+        wrapper+=(timeout --signal=KILL "$PROFILER_TIMEOUT_SECS")
+    fi
+
+    # --- Execute ---
+    "${wrapper[@]}" "${cmd[@]}"
+    return $?
+}
+
 mark_oom_skipped_config() {
     local out_dir="$1"
     local model="$2"
@@ -317,6 +399,31 @@ mark_oom_skipped_config() {
   "batch_size": $batch,
   "failed_run_id": "$run_id",
   "exit_code": $exit_code,
+  "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+mark_cpu_oom_skipped_config() {
+    local out_dir="$1"
+    local model="$2"
+    local optimizer="$3"
+    local precision="$4"
+    local batch="$5"
+    local run_id="$6"
+    local exit_code="$7"
+    local mem_limit_mb="${8:-unknown}"
+
+    cat > "$out_dir/oom_cpu_skipped_config.json" <<EOF
+{
+  "status": "oom_cpu_killed",
+  "model": "$model",
+  "optimizer": "$optimizer",
+  "precision": "$precision",
+  "batch_size": $batch,
+  "failed_run_id": "$run_id",
+  "exit_code": $exit_code,
+  "mem_limit_mb": "$mem_limit_mb",
   "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
@@ -378,6 +485,9 @@ print_summary() {
     log_msg "OOM Retry Min Batch: $OOM_RETRY_MIN_BATCH"
     log_msg "OOM Retry Backoff: $OOM_RETRY_BACKOFF"
     log_msg "OOM Skip Configs: $OOM_SKIP_CONFIGS"
+    log_msg "CPU OOM Protection (cgroup): $USE_CGROUP_MEM_LIMIT"
+    log_msg "CPU Mem Limit: ${CPU_MEM_LIMIT_PCT}% of MemAvailable (dynamic)"
+    log_msg "Profiler Timeout: ${PROFILER_TIMEOUT_SECS}s (0=disabled)"
     log_msg "Dry Run: $DRY_RUN"
     log_msg "MODELS_CSV Override: ${MODELS_CSV:-<none>}"
     log_msg "BATCH_SIZES_CSV Override: ${BATCH_SIZES_CSV:-<none>}"
@@ -428,6 +538,9 @@ FAILED_RUNS=0
 FAILED_AGGREGATIONS=0
 OOM_SKIPPED_CONFIGS=0
 OOM_SKIPPED_RUNS=0
+CPU_OOM_SKIPPED_CONFIGS=0
+CPU_OOM_SKIPPED_RUNS=0
+TIMEOUT_SKIPPED_RUNS=0
 
 # Main Loop: Model -> Optimizer -> Precision -> Batch Size
 # Each loop iteration corresponds to one profiler execution and one output folder.
@@ -451,6 +564,17 @@ for model in "${MODELS[@]}"; do
                     log_msg "  → SKIPPING BATCH: Batch $batch already profiled and aggregated (resuming)."
                     ATTEMPTED=$((ATTEMPTED + REPEATS))
                     SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + REPEATS))
+                    continue
+                elif [ -f "$OUT_DIR/oom_skipped_config.json" ] || [ -f "$OUT_DIR/oom_cpu_skipped_config.json" ]; then
+                    log_msg "  → SKIPPING BATCH: Batch $batch previously marked as OOM-skipped (resuming)."
+                    ATTEMPTED=$((ATTEMPTED + REPEATS))
+                    if [ -f "$OUT_DIR/oom_cpu_skipped_config.json" ]; then
+                        CPU_OOM_SKIPPED_CONFIGS=$((CPU_OOM_SKIPPED_CONFIGS + 1))
+                        CPU_OOM_SKIPPED_RUNS=$((CPU_OOM_SKIPPED_RUNS + REPEATS))
+                    else
+                        OOM_SKIPPED_CONFIGS=$((OOM_SKIPPED_CONFIGS + 1))
+                        OOM_SKIPPED_RUNS=$((OOM_SKIPPED_RUNS + REPEATS))
+                    fi
                     continue
                 fi
 
@@ -514,13 +638,33 @@ for model in "${MODELS[@]}"; do
                     if [ "$DRY_RUN" = true ]; then
                         log_msg "  [DRY_RUN] ${CMD[*]}"
                         SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
-                    # Execute profiler with error handling
-                    elif "${CMD[@]}" >> "$LOG_FILE" 2>&1; then
+                    # Execute profiler inside sandboxed cgroup with memory ceiling
+                    elif run_profiler_sandboxed "${CMD[@]}" >> "$LOG_FILE" 2>&1; then
                         SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                         log_msg "  ✓ SUCCESS: Batch $batch replicate $RUN_ID complete"
                     else
                         EXIT_CODE=$?
-                        if is_true "$OOM_SKIP_CONFIGS" && is_oom_failure_from_log "$LOG_FILE"; then
+
+                        # --- Priority 1: CPU/DRAM OOM (SIGKILL from cgroup or kernel) ---
+                        if is_cpu_oom_kill "$EXIT_CODE"; then
+                            CPU_OOM_SKIPPED_CONFIGS=$((CPU_OOM_SKIPPED_CONFIGS + 1))
+                            CPU_OOM_SKIPPED_RUNS=$((CPU_OOM_SKIPPED_RUNS + 1))
+                            mark_cpu_oom_skipped_config "$OUT_DIR" "$model" "$optimizer" "$precision" "$batch" "$RUN_ID" "$EXIT_CODE" "${mem_limit_mb:-unknown}"
+                            log_msg "  🧠 CPU OOM KILL: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE, signal SIGKILL)"
+                            log_msg "  Process exceeded CPU/DRAM memory limit. Marked -> $OUT_DIR/oom_cpu_skipped_config.json"
+                            BATCH_SKIPPED_OOM=true
+                            break
+
+                        # --- Priority 2: Timeout kill ---
+                        elif is_timeout_kill "$EXIT_CODE"; then
+                            TIMEOUT_SKIPPED_RUNS=$((TIMEOUT_SKIPPED_RUNS + 1))
+                            FAILED_RUNS=$((FAILED_RUNS + 1))
+                            log_msg "  ⏱️ TIMEOUT KILL: Batch $batch replicate $RUN_ID exceeded ${PROFILER_TIMEOUT_SECS}s"
+                            BATCH_SKIPPED_OOM=true
+                            break
+
+                        # --- Priority 3: GPU VRAM OOM (detected from Python log output) ---
+                        elif is_true "$OOM_SKIP_CONFIGS" && is_oom_failure_from_log "$LOG_FILE"; then
                             OOM_SKIPPED_CONFIGS=$((OOM_SKIPPED_CONFIGS + 1))
                             OOM_SKIPPED_RUNS=$((OOM_SKIPPED_RUNS + 1))
                             mark_oom_skipped_config "$OUT_DIR" "$model" "$optimizer" "$precision" "$batch" "$RUN_ID" "$EXIT_CODE"
@@ -528,26 +672,29 @@ for model in "${MODELS[@]}"; do
                             log_msg "  Marked as OOM-skipped config -> $OUT_DIR/oom_skipped_config.json"
                             
                             log_msg "  [!] Iniciando Analytical Rescue Regime (--no_gpu) para trazado ILP..."
-                            # Build the rescue command from CMD, removing any gpu-specific flags if necessary, 
-                            # but --no_gpu overrides GPU behavior natively in the python script.
                             RESCUE_CMD=("${CMD[@]}")
                             RESCUE_CMD+=("--no_gpu")
                             
-                            if "${RESCUE_CMD[@]}" >> "$LOG_FILE" 2>&1; then
+                            if run_profiler_sandboxed "${RESCUE_CMD[@]}" >> "$LOG_FILE" 2>&1; then
                                 log_msg "  ✓ RESCUE SUCCESS: El trazado CPU fue exitoso. ILP podrá usar fallback analítico."
                                 SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                                 BATCH_SKIPPED_OOM=false
-                                # Mark that remaining replicates should run in --no_gpu mode
-                                # so the aggregator receives n=REPEATS analytical traces
-                                # instead of n=1, preventing NaN in statistical significance.
                                 FORCE_NO_GPU=true
                             else
-                                log_msg "  \u2717 RESCUE FAILURE: El trazado CPU también falló. No habrá datos ILP."
+                                RESCUE_EXIT=$?
+                                if is_cpu_oom_kill "$RESCUE_EXIT"; then
+                                    CPU_OOM_SKIPPED_CONFIGS=$((CPU_OOM_SKIPPED_CONFIGS + 1))
+                                    log_msg "  🧠 RESCUE CPU OOM KILL: El trazado CPU también excedió la memoria DRAM."
+                                else
+                                    log_msg "  ✗ RESCUE FAILURE: El trazado CPU también falló (exit: $RESCUE_EXIT). No habrá datos ILP."
+                                fi
                                 BATCH_SKIPPED_OOM=true
                                 break
                             fi
                             
                             log_msg "  Continuando con la campaña (réplicas restantes en modo --no_gpu)."
+
+                        # --- Priority 4: Generic failure ---
                         else
                             FAILED_RUNS=$((FAILED_RUNS + 1))
                             log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
@@ -594,8 +741,11 @@ log_msg "Attempted Runs: $ATTEMPTED"
 log_msg "Successful Runs: $SUCCEEDED_RUNS"
 log_msg "Failed Runs: $FAILED_RUNS"
 log_msg "Failed Aggregations: $FAILED_AGGREGATIONS"
-log_msg "OOM-skipped Configurations: $OOM_SKIPPED_CONFIGS"
-log_msg "OOM-skipped Runs: $OOM_SKIPPED_RUNS"
+log_msg "OOM-skipped Configurations (GPU): $OOM_SKIPPED_CONFIGS"
+log_msg "OOM-skipped Runs (GPU): $OOM_SKIPPED_RUNS"
+log_msg "CPU OOM-killed Configurations: $CPU_OOM_SKIPPED_CONFIGS"
+log_msg "CPU OOM-killed Runs: $CPU_OOM_SKIPPED_RUNS"
+log_msg "Timeout-killed Runs: $TIMEOUT_SKIPPED_RUNS"
 log_msg "Output Directory: $BASE_OUTPUT_DIR"
 log_msg "Log File: $LOG_FILE"
 log_msg "Allow Partial Failures: $ALLOW_PARTIAL_FAILURES"

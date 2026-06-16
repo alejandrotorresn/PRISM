@@ -189,7 +189,7 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, optimizer: 
     ax.set_xlabel("GPU Memory Budget (MB)", fontweight="bold")
     ax.set_ylabel("Total Latency (ms)", fontweight="bold")
     ax.set_xlim(left=global_min_vram, right=global_max_vram)
-    ax.legend(title="Execution Strategy", frameon=True, loc="upper right")
+    ax.legend(title="Execution Strategy", frameon=True, loc="center right")
     sns.despine(left=True, bottom=True)
 
     # Note if it's a flat line
@@ -275,10 +275,15 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
         ax.set_ylabel("Total Latency (ms)", fontweight="bold")
         ax.set_xlabel("Execution Strategy", fontweight="bold")
         
-        # Add data labels
-        for p in ax.patches:
+        # Add data labels (skip OOM bars)
+        for i, p in enumerate(ax.patches):
             height = p.get_height()
-            if height > 0 and p.get_facecolor() != (1.0, 1.0, 1.0, 1.0): # Skip OOM bar
+            if i < len(strategies):
+                row_data = plot_df[plot_df["Strategy"] == strategies[i]].iloc[0]
+                is_oom = pd.notna(row_data.get("Is_OOM")) and bool(row_data.get("Is_OOM"))
+            else:
+                is_oom = False
+            if height > 0 and not is_oom:
                 ax.annotate(f"{height:.2f}", 
                             (p.get_x() + p.get_width() / 2., height),
                             ha="center", va="center", xytext=(0, 8), textcoords="offset points",
@@ -872,7 +877,7 @@ def _plot_model_energy_curves(model_df: pd.DataFrame, model: str, optimizer: str
     ax.set_xlabel("GPU Memory Budget (MB)", fontweight="bold")
     ax.set_ylabel("Total Energy (Joules)", fontweight="bold")
     ax.set_xlim(left=global_min_vram, right=global_max_vram)
-    ax.legend(title="Execution Strategy", frameon=True, loc="upper right")
+    ax.legend(title="Execution Strategy", frameon=True, loc="center right")
     sns.despine(left=True, bottom=True)
 
     plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "energy_vs_budget"

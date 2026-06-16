@@ -1265,6 +1265,8 @@ Esta sección cubre los archivos fuente, scripts, validadores, documentación y 
 - `scripts/generate_thesis_figures.py`: produce figuras destinadas al manuscrito.
 - `scripts/launch_grid5k.sh`: lanzador para entornos HPC específicos.
 - `scripts/sanitize_cuda_env.sh`: limpia y endurece el entorno CUDA antes de una campaña para evitar conflictos por bibliotecas o stubs.
+- `scripts/plot_all_oom_vs_ilp.py`: genera gráficas automáticas que comparan el consumo de VRAM de la ejecución nativa (que ocasionaría OOM) contra el plan de distribución híbrida del ILP.
+- `scripts/plot_all_energy_tradeoff.py`: genera gráficas automáticas que revelan el costo o "trade-off" energético y de potencia (Watts/Joules) asumido por el plan ILP para poder evadir el límite de hardware.
 
 ### 12.5 Núcleo del sistema en `src/`
 
@@ -1597,9 +1599,10 @@ Qué hace este script:
 2. sanea el entorno CUDA
 3. prepara datasets opcionalmente
 4. itera el producto cartesiano modelo-batch-precisión-optimizador
-5. ejecuta réplicas por configuración
+5. ejecuta réplicas por configuración incorporando protección contra OOM en CPU (vía cgroups y systemd-run) y límite dinámico de DRAM al 95%.
 6. agrega métricas automáticamente cuando `AUTO_AGGREGATE_STATS=true`
 7. escribe un log cronológico en `logs/experiments/experiments_*.txt`
+8. mantiene un mecanismo de resiliencia: si una configuración falla por OOM (exit code 137), la registra en `oom_skipped_config.json` para saltarla en ejecuciones futuras, lo que permite retomar campañas interrumpidas sin repetir cálculos.
 
 ### 13.5 Agregar réplicas manualmente
 
@@ -1867,7 +1870,7 @@ RUN_HYBRID=true \
 bash scripts/run_thesis_mode.sh
 ```
 
-Este es el orquestador más completo del repositorio. Coordina datasets, profiling, ILP, Pareto, ejecución híbrida opcional y reportes, todo con un log único `logs/thesis_mode/thesis_mode_*.txt`.
+Este es el orquestador más completo del repositorio. Coordina datasets, profiling, ILP, Pareto, ejecución híbrida opcional, reportes y también la auto-generación de gráficas de comparación de memoria (OOM vs ILP) y energía (Trade-off de Potencia), todo con un log único `logs/thesis_mode/thesis_mode_*.txt`.
 
 ### 13.15 Validaciones y pruebas
 
