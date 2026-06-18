@@ -24,13 +24,13 @@ def plot_temporal_decomposition(output_dir: Path):
     width = 0.5
     
     # Stacked bar chart
-    ax.bar(x, t_kernel, width, label=r'$T^{\mathrm{kernel}}$ (Cómputo efectivo)', color='#2ca02c')
-    ax.bar(x, t_dispatch, width, bottom=t_kernel, label=r'$T^{\mathrm{dispatch}}$ (Sobrecarga SO/Driver)', color='#d62728')
+    ax.bar(x, t_kernel, width, label=r'$T^{\mathrm{kernel}}$ (Effective Compute)', color='#2ca02c')
+    ax.bar(x, t_dispatch, width, bottom=t_kernel, label=r'$T^{\mathrm{dispatch}}$ (OS/Driver Overhead)', color='#d62728')
     
     ax.set_xticks(x)
     ax.set_xticklabels(layers)
-    ax.set_ylabel("Tiempo Absoluto (ms)", fontweight="bold")
-    ax.set_title(r"Descomposición Temporal de Latencia por Capa ($T^{\mathrm{wall}}$)", pad=15, fontweight="bold")
+    ax.set_ylabel("Absolute Time (ms)", fontweight="bold")
+    ax.set_title(r"Temporal Latency Decomposition per Layer ($T^{\mathrm{wall}}$)", pad=15, fontweight="bold")
     ax.legend(frameon=True)
     sns.despine()
     
@@ -68,16 +68,16 @@ def plot_congestion_knee(meta_json_path: Path, output_dir: Path):
     ideal_latencies = alpha + (sizes_mb / beta_nom)
     
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(sizes_mb, latencies, color='#1f77b4', linewidth=3, label=r'Modelo Calibrado a Tramos ($t_{\mathrm{dir}}$)')
-    ax.plot(sizes_mb, ideal_latencies, color='gray', linestyle='--', label=r'Extrapolación Nominal (Ideal)')
+    ax.plot(sizes_mb, latencies, color='#1f77b4', linewidth=3, label=r'Piecewise Calibrated Model ($t_{\mathrm{dir}}$)')
+    ax.plot(sizes_mb, ideal_latencies, color='gray', linestyle='--', label=r'Nominal Extrapolation (Ideal)')
     
     # Mark the knee
-    ax.axvline(x=knee, color='#d62728', linestyle=':', linewidth=2, label=rf'Rodilla de Congestión ($S_{{\mathrm{{knee}}}}={knee}$ MB)')
+    ax.axvline(x=knee, color='#d62728', linestyle=':', linewidth=2, label=rf'Congestion Knee ($S_{{\mathrm{{knee}}}}={knee}$ MB)')
     
-    ax.set_xlabel("Tamaño del Tensor a Transferir $S$ (MB)", fontweight="bold")
-    ax.set_ylabel("Latencia PCIe (ms)", fontweight="bold")
-    ax.set_title("Calibración Direccional y Rodilla de Congestión", pad=15, fontweight="bold")
-    ax.legend(frameon=True)
+    ax.set_xlabel("Tensor Transfer Size $S$ (MB)", fontweight="bold")
+    ax.set_ylabel("PCIe Latency (ms)", fontweight="bold")
+    ax.set_title("Directional Calibration and Congestion Knee", pad=15, fontweight="bold")
+    ax.legend(frameon=True, loc='lower right', fontsize=10)
     sns.despine()
     
     fig.tight_layout()
@@ -93,26 +93,34 @@ def plot_overlap_tension(output_dir: Path):
     t_base = 10.0 # ms arbitrario
     kappa = 0.5 # factor de penalización
     
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(8, 6)) # Increased height to accommodate bottom legend
     
     colors = sns.color_palette("rocket", len(p_u_vals))
     
     for i, p_u in enumerate(p_u_vals):
         t_eff = t_base * (1 - 0.5 * sigma_vals) * (1 + kappa * p_u)
-        ax.plot(sigma_vals, t_eff, linewidth=2.5, color=colors[i], label=rf'Presión de Ramificación $p_u = {p_u}$')
+        ax.plot(sigma_vals, t_eff, linewidth=2.5, color=colors[i], label=rf'Branching Pressure $p_u = {p_u}$')
         
-    ax.set_xlabel(r"Grado de Solapamiento Asíncrono ($\sigma$)", fontweight="bold")
-    ax.set_ylabel(r"Latencia Efectiva $t_{\mathrm{edge}}^{\mathrm{eff}}$ (ms)", fontweight="bold")
-    ax.set_title(r"Atenuación por Solapamiento vs. Penalización por Ramificación", pad=15, fontweight="bold")
+    ax.set_xlabel(r"Asynchronous Overlap Degree ($\sigma$)", fontweight="bold")
+    ax.set_ylabel(r"Effective Latency $t_{\mathrm{edge}}^{\mathrm{eff}}$ (ms)", fontweight="bold")
+    ax.set_title(r"Overlap Attenuation vs. Branching Penalty", pad=15, fontweight="bold")
+    
+    # Ground Y-axis to 0 to prevent curves/annotations from hitting the X-axis
+    ax.set_ylim(bottom=0)
     
     # Arrow annotations
-    ax.annotate("Más eficiente\n(Streams independientes)", xy=(0.8, 6), xytext=(0.5, 3),
-                arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=6))
+    # Point precisely to the best case (sigma=1.0, low latency)
+    ax.annotate("More efficient\n(Independent streams)", xy=(0.95, 5.2), xytext=(0.5, 2.5),
+                arrowprops=dict(arrowstyle="->", linestyle="--", color='black', shrinkA=5, shrinkB=5),
+                fontsize=9, fontweight="bold", ha='center')
                 
-    ax.annotate("Congestión masiva\n(Bloqueo por abanico)", xy=(0.2, 25), xytext=(0.4, 28),
-                arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=6))
+    # Point precisely to the worst case (sigma=0.0, high latency)
+    ax.annotate("Massive congestion\n(Fan-out blocking)", xy=(0.05, 29), xytext=(0.4, 20),
+                arrowprops=dict(arrowstyle="->", linestyle="--", color='black', shrinkA=5, shrinkB=5),
+                fontsize=9, fontweight="bold", ha='center')
     
-    ax.legend(frameon=True, loc="upper right")
+    # Place legend horizontally below the X-axis
+    ax.legend(frameon=True, loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=10)
     sns.despine()
     
     fig.tight_layout()

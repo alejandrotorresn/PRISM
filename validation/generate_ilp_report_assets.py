@@ -194,9 +194,8 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, optimizer: 
 
     # Note if it's a flat line
     if len(y_ilp) > 1 and y_ilp.max() - y_ilp.min() < 1e-6:
-        ax.text(0.5, 0.05, "Note: Flat curve indicates optimal partition fits within minimum tested budget", 
-                transform=ax.transAxes, ha='center', va='bottom', fontsize=10, 
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+        ax.text(0.5, -0.15, "Note: Flat curve indicates optimal partition fits within minimum tested budget", 
+                transform=ax.transAxes, ha='center', va='top', fontsize=10, color='gray')
 
     plot_dir = out_dir / "plots" / model / optimizer / precision / f"batch_{batch_size}" / "cost_vs_budget"
     plot_dir.mkdir(parents=True, exist_ok=True)

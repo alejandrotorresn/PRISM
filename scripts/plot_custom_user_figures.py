@@ -19,7 +19,7 @@ def plot_custom_figures(
     results_root: Path,
     reports_root: Path,
 ) -> bool:
-    base_dir = results_root / host / "results_thesis_mode" / model / optimizer / precision / f"batch_{batch_size}"
+    base_dir = results_root / host / "results_thesis_mode" / "doctoral_full" / model / optimizer / precision / f"batch_{batch_size}"
     stats_csv = base_dir / f"{model}_metrics_stats.csv"
 
     run_001 = base_dir / "run_001"

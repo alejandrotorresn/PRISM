@@ -29,7 +29,7 @@ def test_generate_advanced_thesis_plots_help_has_expected_args() -> None:
 
 
 def test_plot_custom_user_figures_help_available() -> None:
-    proc = _run_help("plot_custom_user_figures.py")
+    proc = _run_help("scripts/plot_custom_user_figures.py")
     assert proc.returncode == 0
     assert "--models" in proc.stdout
     assert "--batches" in proc.stdout

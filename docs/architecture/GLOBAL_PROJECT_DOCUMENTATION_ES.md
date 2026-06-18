@@ -1001,6 +1001,425 @@ Para multiples configuraciones de hardware:
 
 ---
 
+
+## 11.5 Ejecución Híbrida y Casos de Estudio Reales
+
+## 9. Cómo se simula el plan
+
+### 9.1 Representación del plan
+
+La representación canónica del plan vive en `src/runtime/plan_representation.py` y `src/runtime/device_plan.py`.
+
+Un plan contiene, como mínimo:
+
+- asignación de capas a dispositivos
+- aristas cortadas
+- en el caso dual, asignaciones separadas de forward y backward
+- estrategias de activación, cuando aplica
+
+### 9.2 Simulador
+
+El simulador está en `src/runtime/simulator.py` y se usa desde `validation/validate_ilp_pipeline.py`.
+
+La idea del simulador es evaluar la solución sin ejecutar entrenamiento real. Toma el plan, el DAG y los costos asociados y calcula:
+
+- costo total previsto
+- consumo de memoria
+- violaciones de factibilidad, si existen
+
+Conceptualmente, recorre nodos y aristas y suma:
+
+1. costo nodal según dispositivo asignado
+2. costo de transferencia por aristas cortadas
+
+Si la memoria usada supera el presupuesto, el plan se declara inviable.
+
+La simulación es importante porque permite detectar errores conceptuales antes de pasar a ejecución real, donde el costo experimental es mayor.
+
+## 10. Cómo se hace la ejecución híbrida real
+
+### 10.1 Punto de entrada
+
+La ejecución real se lanza desde `validation/run_hybrid_execution.py`, que usa:
+
+- `load_execution_plan`
+- `DevicePlan`
+- `run_hybrid_training` en `src/runtime/hybrid_executor.py`
+
+### 10.2 Idea general
+
+La ejecución híbrida real toma un plan ILP y reconstruye un modelo cuyo flujo de capas y tensores puede atravesar CPU y GPU según la asignación definida.
+
+Aquí es importante aclarar una cosa: la decisión de asignación no se calcula de manera online durante el entrenamiento a partir de una política adaptativa que se reoptimiza a cada paso. La decisión principal es offline y viene del ILP. Lo que sí ocurre dinámicamente durante la ejecución es el movimiento de módulos, tensores y activaciones siguiendo esa política ya calculada.
+
+### 10.3 Cómo se distribuyen las capas
+
+`DevicePlan` actúa como traductor entre el archivo de solución y la ejecución real. Para cada capa, conoce:
+
+- dispositivo de forward
+- dispositivo de backward
+- cortes relevantes
+- estrategias de activación
+
+Con esa información, el ejecutor resuelve el dispositivo efectivo de cada capa en cada fase del paso de entrenamiento.
+
+### 10.4 Cómo se usa el DAG en la ejecución real
+
+El DAG no se usa solo para construir el ILP. También informa la interpretación del plan. Las aristas cortadas señalan dónde deben ocurrir transferencias de activaciones. El plan conserva esa semántica estructural para que el runtime sepa cuándo mover datos entre CPU y GPU.
+
+### 10.5 Cómo se mueve la información entre dispositivos
+
+`hybrid_executor.py` implementa utilidades como:
+
+- `_to_device()`
+- `_to_device_non_blocking()`
+- `_current_device()`
+- `_all_tensor_devices()`
+
+Además define estructuras como:
+
+- `TransferEvent`
+- `StepTrace`
+- `HybridExecutionResult`
+
+Estas clases permiten registrar, por paso:
+
+- tiempo total
+- tiempo de forward
+- tiempo de backward
+- tiempo de optimizador
+- cantidad total de transferencia
+- número de eventos de transferencia
+- memoria pico GPU
+- cantidad de recomputaciones y checkpoints
+
+### 10.6 Ejecución por capas y estrategia dual
+
+Cuando una capa requiere dispositivos distintos en forward y backward, el ejecutor puede recurrir a mecanismos específicos como `_run_layer_with_dual_placement()`. Esa función encapsula una estrategia en la que:
+
+1. el forward se ejecuta en el dispositivo de forward
+2. el backward se fuerza en el dispositivo de backward
+3. la información necesaria se guarda o reconstruye para mantener coherencia de gradientes
+
+Esto es uno de los puntos más importantes del proyecto, porque conecta directamente el modelo dual del ILP con una posibilidad real de ejecución física.
+
+El flujo operativo de una capa con colocación dual puede visualizarse así:
+
+```mermaid
+sequenceDiagram
+	participant Host as CPU Host
+	participant GF as GPU forward
+	participant GB as GPU backward
+	participant C as Capa n
+	participant Opt as Optimizer
+
+	alt forward en CPU
+		Host->>C: entrada en CPU
+		C-->>Host: activacion forward
+	else forward en GPU
+		Host->>GF: mover entrada
+		GF->>C: ejecutar forward
+		C-->>GF: activacion forward
+	end
+
+	alt cambio de dispositivo entre fases
+		GF->>Host: transferir activacion o estado intermedio
+		Host->>GB: recolocar para backward
+	else mismo dispositivo entre fases
+		GF->>GB: conservar localidad
+	end
+
+	alt backward en CPU
+		Host->>C: ejecutar backward
+		C-->>Host: gradientes
+	else backward en GPU
+		GB->>C: ejecutar backward
+		C-->>GB: gradientes
+	end
+
+	Host->>Opt: actualizar pesos o sincronizar estado
+	GB->>Opt: actualizar pesos o sincronizar estado
+```
+
+La lógica de ese diagrama es la siguiente. Primero se ejecuta la fase forward en el dispositivo indicado por `assignment_forward`. Después el runtime inspecciona si `assignment_backward` coincide o no. Si coincide, puede reutilizar localidad y reducir movimiento de datos. Si no coincide, aparecen transferencias adicionales, y el ejecutor debe preservar la información necesaria para que el backward siga siendo correcto.
+
+Otra forma útil de leer la ejecución dual es como decisión por frontera entre capas:
+
+```mermaid
+flowchart TD
+	A[Activacion producida por capa n] --> B{forward_device == backward_device}
+	B -- si --> C[Conservar activacion en el mismo dispositivo]
+	B -- no --> D{estrategia de activacion}
+	D -- retain --> E[Transferir y conservar activacion]
+	D -- recompute --> F[Descartar y recomputar en backward]
+	D -- checkpoint --> G[Guardar estado reducido y reconstruir]
+	C --> H[Backward correcto]
+	E --> H
+	F --> H
+	G --> H
+```
+
+Este segundo diagrama conecta directamente el plan dual con las estrategias de activación avanzadas. No toda diferencia entre forward y backward implica la misma política de memoria. El runtime todavía debe decidir si retiene, transfiere, recomputa o checkpointa, y esa decisión modifica tanto el costo real como la presión de memoria.
+
+### 10.7 Prefetching, transferencia asíncrona y activaciones
+
+El ejecutor puede operar con:
+
+- transferencia asíncrona
+- prefetching
+- estrategias de retención, recomputación o checkpointing
+
+Estas decisiones se reflejan en campos del resultado final y permiten analizar cuánto del comportamiento previsto por el ILP se materializa de verdad en ejecución observada.
+
+### 10.8 Qué devuelve la ejecución real
+
+`HybridExecutionResult` resume:
+
+- estado de la corrida
+- energía total
+- potencia media
+- memoria pico GPU
+- pérdida inicial y final
+- métricas de calidad, cuando aplica
+- trazas por paso
+- advertencias y limitaciones
+
+## 11. Cómo se usa el resultado ILP para entrenar el modelo seleccionado
+
+El proceso completo es este:
+
+1. Se perfila el modelo deseado para obtener métricas por capa y artefactos estructurales.
+2. Esas métricas se agregan en `metrics_stats.csv`.
+3. El cargador ILP valida y transforma esos artefactos en `ILPInputData`.
+4. El solver produce `ilp_assignment.csv`, `ilp_cut_edges.csv` y `ilp_solution_summary.json`.
+5. El runtime lee esos archivos, reconstruye un `DevicePlan` y ejecuta el modelo siguiendo esa política.
+
+La decisión de asignación, por tanto, nace de una optimización offline basada en evidencia medida. La dinámica del runtime consiste en hacer cumplir esa asignación durante cada paso del entrenamiento.
+
+### 11.1 Ejemplo visual completo: una capa real de `simple_mlp` desde profiling hasta ejecución híbrida
+
+El caso más pedagógico del repositorio es el escenario controlado `simple_mlp_dual_runtime_evidence`, porque conserva artefactos del solver, de la simulación y del runtime real en un mismo bloque. En ese caso, la solución dual asigna:
+
+- `net.0`: GPU en forward, CPU en backward
+- `net.1`, `net.2`, `net.3`, `net.4`: CPU en ambas fases
+
+La cadena base de capas es:
+
+```text
+net.0 (Linear 784->512) -> net.1 (ReLU) -> net.2 (Linear 512->256) -> net.3 (ReLU) -> net.4 (Linear 256->10)
+```
+
+El rastro extremo a extremo de `net.0` puede visualizarse así:
+
+```mermaid
+flowchart LR
+	P1[Profiling de net.0]
+	P2[metrics_stats.csv]
+	P3[graph_edges.csv]
+	P4[transfer_edges.csv]
+	P5[ILP dual]
+	P6[ilp_assignment.csv]
+	P7[ilp_cut_edges.csv]
+	P8[simulation_summary.json]
+	P9[hybrid_execution_summary.json]
+
+	P1 --> P2
+	P1 --> P3
+	P1 --> P4
+	P2 --> P5
+	P3 --> P5
+	P4 --> P5
+	P5 --> P6
+	P5 --> P7
+	P6 --> P8
+	P7 --> P8
+	P6 --> P9
+	P7 --> P9
+```
+
+La lectura concreta del ejemplo es la siguiente.
+
+En `simple_mlp_metrics_stats.csv`, `net.0` aparece como una capa `Linear` con alta dispersión en CPU y con tiempos robustos significativamente distintos entre CPU y GPU. Para `net.0`, los promedios observados del caso son aproximadamente:
+
+- GPU forward: `0.220 ms`
+- GPU backward: `0.441 ms`
+- CPU forward: `3.448 ms`
+- CPU backward: `6.895 ms`
+- memoria de parámetros: `1.533 MB`
+- activación de salida: `0.015625 MB`
+
+Si se compara `net.0` con las otras dos capas lineales del mismo modelo, la razón de la frontera elegida por el solver se vuelve más visible:
+
+| Capa | Tipo | GPU fwd ms | GPU bwd ms | CPU fwd ms | CPU bwd ms | Params MB | Activación MB | Transfer edge-aware ms | Asignación dual final |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `net.0` | Linear | 0.2204 | 0.4408 | 3.4475 | 6.8950 | 1.5332 | 0.015625 | 0.6217 | GPU en forward, CPU en backward |
+| `net.2` | Linear | 0.1098 | 0.2197 | 3.9178 | 7.8356 | 0.5010 | 0.0078125 | 0.6212 | CPU en forward y backward |
+| `net.4` | Linear | 0.0879 | 0.1758 | 0.0219 | 0.0437 | 0.0098 | 0.0003052 | 1.2354 | CPU en forward y backward |
+
+La interpretación de esa tabla es la clave de la frontera:
+
+1. `net.0` tiene una ventaja muy fuerte de GPU frente a CPU en forward y backward, y además es la capa con mayor peso paramétrico del modelo. Aunque cortar después de `net.0` introduce transferencia, el ahorro de cómputo en GPU compensa ese corte.
+2. `net.2` también es mucho más rápida en GPU que en CPU, pero su activación es más pequeña, su peso paramétrico es menor y, en esta solución concreta, el solver prefiere no abrir un segundo frente de corte adicional río abajo. Mantener `net.2` en CPU evita más complejidad topológica después de haber explotado ya la mayor oportunidad en `net.0`.
+3. `net.4` es el caso más claro de permanencia en CPU: aunque GPU sigue siendo más rápida en términos brutos, el costo CPU ya es muy bajo en valor absoluto y su término de transferencia edge-aware es proporcionalmente mucho menos atractivo. Llevar `net.4` a GPU produciría una ganancia marginal muy pequeña a cambio de introducir o sostener más movimiento de datos.
+
+Dicho de otra manera, la solución no selecciona solo la capa con mejor aceleración relativa. Selecciona la frontera con mejor balance global entre beneficio de cómputo, costo de transferencia y estructura del grafo. En este ejemplo, esa frontera óptima aparece justo después de `net.0`.
+
+En `simple_mlp_graph_edges.csv`, la salida de `net.0` alimenta a `net.1` con un tensor `8x512`, equivalente a `0.015625 MB`. En `simple_mlp_transfer_edges.csv`, esa dependencia recibe un costo de transferencia simétrico cercano a `0.224 ms`.
+
+Con esa evidencia, el solver dual decide que `net.0` vale la pena en GPU durante forward, pero no durante backward. El resultado queda materializado en:
+
+- `ilp_assignment.csv`: `net.0,GPU,GPU,CPU`
+- `ilp_cut_edges.csv`: `net.0 -> net.1` en `forward` y `net.0 -> net.0` en `cross_phase`
+
+Ese comportamiento puede visualizarse en un diagrama específico de capa:
+
+```mermaid
+sequenceDiagram
+	participant In as Input x
+	participant GF as net.0 forward en GPU
+	participant CPU1 as net.1..net.4 en CPU
+	participant BC as net.0 backward en CPU
+
+	In->>GF: tensor 8x784
+	GF-->>CPU1: activacion 8x512
+	Note over GF,CPU1: corte forward: net.0 -> net.1
+	CPU1->>CPU1: resto del forward y parte local del backward
+	CPU1-->>BC: estado requerido para gradiente de net.0
+	Note over GF,BC: cross_phase: net.0 cambia de GPU a CPU
+	BC->>BC: backward de net.0 en CPU
+```
+
+La simulación del mismo caso predice:
+
+- `objective_value`: `19.8848`
+- `total_time_ms`: `19.5474`
+- `total_transfer_ms`: `0.3374`
+- `gpu_mem_used_mb`: `19.3350`
+- `layers_gpu`: `1`
+- `layers_cpu`: `4`
+- `cut_edges_count`: `2`
+
+La ejecución híbrida real del mismo plan reporta:
+
+- `avg_step_ms`: `147.6381`
+- `forward_ms`: `146.1050`
+- `backward_ms`: `0.7704`
+- `optimizer_ms`: `0.6032`
+- `total_transfer_mb`: `0.03955`
+- `total_transfer_events`: `2`
+- `peak_gpu_mem_mb`: `10.6978`
+- `backward_relocation_layers`: `net.0`
+
+La comparación visual entre predicción y observación puede resumirse así:
+
+```mermaid
+flowchart TD
+	S1[Prediccion ILP-simulador]
+	S2[1 capa en GPU]
+	S3[2 cortes efectivos]
+	S4[Transferencia estimada]
+
+	R1[Runtime hibrido observado]
+	R2[net.0 relocalizada en backward]
+	R3[2 eventos de transferencia]
+	R4[1 paso ejecutado correctamente]
+
+	S1 --> S2
+	S1 --> S3
+	S1 --> S4
+	R1 --> R2
+	R1 --> R3
+	R1 --> R4
+	S3 -.coincide estructuralmente.-> R3
+```
+
+Lo importante de este ejemplo no es que la simulación y el runtime tengan exactamente la misma latencia absoluta, porque no miden la misma cosa con el mismo nivel de detalle operacional. Lo importante es que ambos coinciden en la estructura de la solución: una sola capa usa GPU, existen dos cortes relevantes y la relocalización backward ocurre precisamente en `net.0`, como anticipaba el plan dual.
+
+### 11.2 Segunda tabla real: caso `resnet50` y lectura de frontera a escala grande
+
+El repositorio contiene un caso real de `resnet50` con profiling agregado y barrido de Pareto en `data/zephyr/results_smoke/resnet50/SGD/fp32/batch_8`. Ese caso fue regenerado para este tutorial con el solver CBC operativo, de modo que la solución persistida ahora sí coincide con el estado real del ILP dual.
+
+La solución regenerada para `gpu_budget_mb = 2000` tiene la siguiente forma estructural:
+
+- `layers_gpu_forward = 0`
+- `layers_gpu_backward = 9`
+- `cut_edges_backward = 11`
+- `cross_phase_edges = 9`
+
+Es decir, el solver no empuja ninguna capa a GPU durante forward, pero sí considera rentable desplazar un subconjunto pequeño del backward temprano a GPU. Las capas elegidas por el solver en ese subconjunto incluyen:
+
+- `bn1`
+- `conv1`
+- `layer1.0.bn2`
+- `layer1.0.bn3`
+- `layer1.0.conv1`
+- `layer1.0.conv2`
+- `layer1.0.conv3`
+- `layer1.0.downsample.0`
+- `layer1.1.conv1`
+
+La tabla siguiente usa tres de esas capas realmente elegidas por el solver y una capa de contraste que permaneció completamente en CPU:
+
+| Capa | Tipo | GPU fwd ms | GPU bwd ms | CPU fwd ms | CPU bwd ms | Params MB | Activación MB | Transfer edge-aware ms | Asignación dual final |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `bn1` | BatchNorm2d | 0.3028 | 0.6057 | 10.7249 | 21.4499 | 0.0005 | 24.5 | 5.4001 | CPU en forward, GPU en backward |
+| `conv1` | Conv2d | 0.4177 | 0.8355 | 14.7308 | 29.4617 | 0.0359 | 24.5 | 4.3878 | CPU en forward, GPU en backward |
+| `layer1.0.conv2` | Conv2d | 0.2266 | 0.4531 | 14.8536 | 29.7071 | 0.1406 | 6.1250 | 1.6958 | CPU en forward, GPU en backward |
+| `fc` | Linear | 0.1133 | 0.2265 | 3.9675 | 7.9350 | 7.8163 | 0.0305 | 0.9294 | CPU en forward y backward |
+
+La lectura exacta de esta tabla ya no es hipotética, sino consistente con la solución guardada.
+
+1. `bn1` y `conv1` muestran un patrón claro: el backward en CPU es muy costoso y el ahorro al moverlo a GPU sigue siendo grande incluso pagando una transferencia elevada. El solver acepta ese precio porque se trata de capas tempranas cuyo backward concentra trabajo significativo.
+2. `layer1.0.conv2` confirma la misma lógica en una zona más profunda del bloque residual. Su activación es bastante menor que la de `conv1`, lo que reduce el peaje estructural de la frontera y hace todavía más defendible su uso en GPU durante backward.
+3. `fc` actúa como contraste útil. Aunque GPU sigue siendo más rápida en términos absolutos, el costo CPU de esa capa es mucho menor que el de las capas tempranas seleccionadas. Además, el solver ya está usando gran parte del presupuesto disponible para un conjunto de capas backward que ofrece más retorno global. Por eso `fc` permanece en CPU en ambas fases.
+
+Este caso deja una lección importante: en modelos grandes, la frontera óptima puede ser asimétrica entre fases. Aquí el ILP dual no decide “estas capas van a GPU” de forma uniforme, sino “estas capas justifican GPU solo en backward”. Esa asimetría es precisamente una de las razones por las que el modelo dual existe.
+
+### 11.3 Criterio práctico de selección de frontera
+
+La experiencia de los casos `simple_mlp` y `resnet50` permite formular un criterio operativo simple para leer una frontera buena sin depender únicamente de la intuición visual.
+
+Una frontera es atractiva cuando se cumplen simultáneamente cuatro condiciones:
+
+1. La diferencia entre costo CPU y costo GPU de la capa o bloque es material, no marginal.
+2. El tensor que cruza la frontera no es tan grande como para absorber toda la ganancia en transferencia.
+3. La memoria liberada o la estructura preservada justifican el corte en el contexto del presupuesto total.
+4. La frontera no obliga a abrir demasiados cortes adicionales río abajo.
+
+En forma conceptual, el solver está buscando maximizar una ganancia neta aproximada:
+
+$$
+	ext{ganancia neta de frontera} \approx (C^{cpu}_{bloque} - C^{gpu}_{bloque}) - C^{transfer}_{frontera} - C^{complejidad}_{topologia}
+$$
+
+donde:
+
+- $C^{cpu}_{bloque} - C^{gpu}_{bloque}$ resume la mejora de cómputo al mover el bloque a GPU
+- $C^{transfer}_{frontera}$ resume el precio de cortar dependencias entre dispositivos
+- $C^{complejidad}_{topologia}$ representa el costo inducido por abrir más cortes, más relocalizaciones o más presión de memoria en el resto del grafo
+
+Esta expresión no es la función objetivo exacta del ILP, pero sí es una regla de lectura muy útil para entender las soluciones obtenidas. En `simple_mlp`, esa ganancia neta es claramente positiva justo después de `net.0`. En `resnet50`, la comparación entre `conv1`, `layer2.0.conv2` y `fc` muestra por qué la mejor frontera de una red grande rara vez coincide con la capa más rápida o con la primera capa disponible: la mejor frontera es la que mantiene positiva esa ganancia neta después de considerar la transferencia y la topología completa.
+
+### 11.4 Cómo auditar una solución ILP inconsistente
+
+El caso `resnet50` sirve además para fijar un procedimiento de auditoría cuando los artefactos de una solución no parecen coincidir entre sí. La inconsistencia original de este mismo caso era: el `pareto_summary` reportaba una solución mixta, mientras que `ilp_assignment.csv` mostraba una asignación enteramente en GPU.
+
+La forma correcta de auditar un caso así es secuencial:
+
+1. comparar `resnet50_pareto_summary.json` con `resnet50_pareto_sweep.csv` para identificar cuál presupuesto y cuál backend produjeron la fila sospechosa
+2. abrir `ilp_solution_summary.json` y comprobar si sus contadores de capas y cortes coinciden con la fila de Pareto que se considera canónica
+3. abrir `ilp_assignment.csv` e `ilp_cut_edges.csv` para verificar si la solución persistida representa realmente esos contadores
+4. si no coinciden, regenerar `run_ilp_partition.py` y `sweep_ilp_pareto.py` con el mismo `config_dir`, el mismo presupuesto y el mismo backend
+5. volver a validar la coherencia entre `summary`, `assignment`, `cut_edges` y `simulation_summary.json`
+
+En este repositorio, la causa raíz del caso `resnet50` fue doble:
+
+- el entorno activo del workspace no era inicialmente `prism_env`
+- el solver CBC no estaba accesible para PuLP aunque sí podía instalarse en el entorno
+
+Una vez corregidos esos dos problemas, la solución persistida pasó a ser coherente y el caso dejó de ser ambiguo. Esta lección es importante metodológicamente: cuando una solución ILP parece extraña, antes de concluir que el modelo está mal formulado conviene verificar si el problema está en el solver, en el entorno o en la persistencia de artefactos.
+
+
 ## 12. Catalogo de ejecucion de scripts (como correr todo)
 
 Esta seccion es operacional por diseno. Documenta no solo sintaxis de comando, sino tambien dimensiones experimentales controladas por cada parametro, esencial para reproducibilidad entre clases de hardware.
@@ -1196,6 +1615,30 @@ Nota importante:
 - este script utiliza actualmente nombres de argumentos CLI que no coinciden con el parser vigente de `src/profiler.py` (por ejemplo `--batch-size`, `--gpu-id` con estilo de guion y nombres de modelo como `bert`, `vit`), por lo que debe tratarse como legado y actualizarse antes de su uso en produccion.
 
 ---
+
+### 12.10 Busqueda de recursos en Grid5000
+Script: `scripts/find_free_gpus.py`
+Utilidad vital para conectarse via SSH a los multiples sitios de Grid5000 y usar OAR para descubrir en tiempo real nodos GPU libres y disponibles.
+
+### 12.11 Orquestador Multi-servidor y Significancia
+Scripts:
+- `scripts/generate_multiserver_summary.py`: Agrega y genera plots globales de los resultados consolidados a traves de multiples servidores.
+- `scripts/audit_experimental_grid.sh`: Valida que la grilla experimental completa (modelos, batches) se haya ejecutado sin fallas.
+- `scripts/run_statistical_significance.sh`: Corre las pruebas de significancia (p-values) de las mejoras del modelo ILP frente al modelo all-CPU base.
+
+### 12.12 Orquestador Principal Grid5000
+Script: `scripts/run_thesis.sh`
+Este es el lanzador oficial de campañas para los clústeres reales en Grid5000. Reemplaza el enfoque manual antiguo o de HPC legacy.
+
+### 12.13 Generadores de Evidencia Grafica Auxiliar (Testeados)
+Adicionalmente a los artefactos generados por el pipeline principal, existen scripts oficiales y testeados por CI para extraccion de figuras especificas:
+- `scripts/generate_methodological_plots.py`: Extrae las figuras para los diagramas de metodo de la tesis.
+- `scripts/plot_all_energy_tradeoff.py`: Genera las curvas de Pareto de tiempo de ejecucion vs presupuesto y vs consumo energetico.
+- `scripts/plot_all_oom_vs_ilp.py`: Analiza los limites de viabilidad entre esquemas y los umbrales VRAM.
+- `scripts/organize_plots.py`: Organiza automaticamente todas las figuras de los reportes en carpetas tematicas.
+- `scripts/plot_custom_user_figures.py`: API en Python para generar visiones y graficas cortadas a medida (slices) del conjunto de resultados.
+
+(Nota: Cualquier script que resida en `scripts/archive/` constituye implementaciones depreciadas o parches manuales sucios y no forman parte del pipeline oficial)
 
 ## 13. Marco de validacion y prueba
 

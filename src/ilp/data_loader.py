@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import numpy as np
 
 
 logger = logging.getLogger(__name__)
@@ -474,20 +475,29 @@ def load_ilp_inputs(
             
         tflops = 1.0
         tdp_w = 250.0
+        mem_bw_gbps = 900.0  # Heuristic fallback bandwidth
         if meta is not None:
             tflops = float(meta.get("measured_gpu_peak_tflops", 0.0))
             tdp_w = float(meta.get("gpu_tdp_w", 250.0))
+            mem_bw_gbps = float(meta.get("measured_gpu_mem_bw_gbps", 900.0))
             
         if tflops <= 0.0:
             logger.warning("Empirical GPU TFLOPS measurement missing. Falling back to safe 1.0 TFLOPS for projection.")
             tflops = 1.0
         if tdp_w <= 0.0:
             tdp_w = 250.0
+        if mem_bw_gbps <= 0.0:
+            mem_bw_gbps = 900.0
 
         flops_col = _stats_series("flops", default=0.0)
+        cpu_mem = _stats_series("cpu_mem_mb_mean", default=0.0)
         
-        # GPU Time Projection: T_gpu_ms = FLOPs / (TFLOPS * 1e9). Half for fwd, half for bwd.
-        projected_time_ms = (flops_col / (tflops * 1e9)) / 2.0
+        # Roofline Projection: max(Compute Bound, Memory Bound)
+        compute_time_ms = flops_col / (tflops * 1e9)
+        memory_time_ms = cpu_mem / mem_bw_gbps
+        
+        # T_gpu_ms = max(compute_bound, memory_bound). Half for fwd, half for bwd.
+        projected_time_ms = np.maximum(compute_time_ms, memory_time_ms) / 2.0
         
         stats.loc[zero_gpu_mask, "gpu_fwd_time_ms_mean"] = projected_time_ms[zero_gpu_mask]
         stats.loc[zero_gpu_mask, "gpu_bwd_time_ms_mean"] = projected_time_ms[zero_gpu_mask]
@@ -503,7 +513,6 @@ def load_ilp_inputs(
         stats.loc[zero_gpu_mask, "gpu_bwd_energy_j_std"] = 0.0
         
         # GPU Memory Projection: Same as CPU memory (tensors are isomorphic)
-        cpu_mem = _stats_series("cpu_mem_mb_mean", default=0.0)
         stats.loc[zero_gpu_mask, "gpu_mem_peak_mb_mean"] = cpu_mem[zero_gpu_mask]
         
         # Re-compute robust variables now that stats has been populated analytically

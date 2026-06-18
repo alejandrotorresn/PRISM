@@ -986,6 +986,85 @@ For multiple hardware configurations:
 
 ---
 
+## 11.5 Hybrid Execution and Empirical Case Studies
+
+### 11.5.1 How the plan is simulated
+
+The simulator (`src/runtime/simulator.py`) evaluates the ILP solution without executing real training. It takes the plan, the DAG, and the associated costs, and calculates:
+- Predicted total cost
+- Memory consumption
+- Feasibility violations, if any
+
+If the used memory exceeds the budget, the plan is declared unfeasible. This is important to detect conceptual errors before moving to real execution.
+
+### 11.5.2 How real hybrid execution is done
+
+Hybrid execution (`validation/run_hybrid_execution.py` and `src/runtime/hybrid_executor.py`) takes an ILP plan and reconstructs a model whose layer and tensor flow can cross CPU and GPU according to the assigned policy.
+
+The ILP decision is offline. What happens dynamically during execution is the movement of modules, tensors, and activations following that policy.
+When a layer requires different devices in forward and backward phases, the executor uses `_run_layer_with_dual_placement()`. This encapsulates a strategy where:
+1. Forward is executed on the forward device.
+2. Backward is forced on the backward device.
+3. Necessary information is saved or reconstructed (cross-phase relocation) to maintain gradient coherence.
+
+This connects the dual model of the ILP with a real physical execution possibility.
+
+### 11.5.3 Complete visual example: a real simple_mlp layer
+
+In the `simple_mlp` controlled scenario, the dual solution assigns:
+- `net.0`: GPU in forward, CPU in backward
+- `net.1` to `net.4`: CPU in both phases
+
+| Layer | Type | GPU fwd ms | GPU bwd ms | CPU fwd ms | CPU bwd ms | Params MB | Activation MB | Transfer edge ms | Dual assignment |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `net.0` | Linear | 0.2204 | 0.4408 | 3.4475 | 6.8950 | 1.5332 | 0.015625 | 0.6217 | GPU fwd, CPU bwd |
+| `net.2` | Linear | 0.1098 | 0.2197 | 3.9178 | 7.8356 | 0.5010 | 0.0078125 | 0.6212 | CPU fwd & bwd |
+| `net.4` | Linear | 0.0879 | 0.1758 | 0.0219 | 0.0437 | 0.0098 | 0.0003052 | 1.2354 | CPU fwd & bwd |
+
+`net.0` has a very strong GPU advantage over CPU in forward and backward, and is the layer with the most parametric weight. Cutting after `net.0` introduces transfer overhead, but the computation savings on GPU compensates for this cut.
+
+```mermaid
+sequenceDiagram
+	participant In as Input x
+	participant GF as net.0 forward in GPU
+	participant CPU1 as net.1..net.4 in CPU
+	participant BC as net.0 backward in CPU
+
+	In->>GF: tensor 8x784
+	GF-->>CPU1: activation 8x512
+	Note over GF,CPU1: forward cut: net.0 -> net.1
+	CPU1->>CPU1: rest of forward and local backward
+	CPU1-->>BC: required state for net.0 gradient
+	Note over GF,BC: cross_phase: net.0 moves from GPU to CPU
+	BC->>BC: net.0 backward in CPU
+```
+
+### 11.5.4 Second real table: resnet50 and large scale boundary
+
+The `resnet50` case (budget 2000 MB) produces a solution where:
+- `layers_gpu_forward = 0`
+- `layers_gpu_backward = 9`
+- `cut_edges_backward = 11`
+- `cross_phase_edges = 9`
+
+The solver does not push any layer to GPU during forward, but it displaces a small subset of the early backward to GPU.
+
+| Layer | Type | GPU fwd ms | GPU bwd ms | CPU fwd ms | CPU bwd ms | Params MB | Activation MB | Transfer edge ms | Dual assignment |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `bn1` | BatchNorm | 0.3028 | 0.6057 | 10.7249 | 21.4499 | 0.0005 | 24.5 | 5.4001 | CPU fwd, GPU bwd |
+| `conv1` | Conv2d | 0.4177 | 0.8355 | 14.7308 | 29.4617 | 0.0359 | 24.5 | 4.3878 | CPU fwd, GPU bwd |
+| `layer1.0.conv2`| Conv2d | 0.2266 | 0.4531 | 14.8536 | 29.7071 | 0.1406 | 6.1250 | 1.6958 | CPU fwd, GPU bwd |
+| `fc` | Linear | 0.1133 | 0.2265 | 3.9675 | 7.9350 | 7.8163 | 0.0305 | 0.9294 | CPU fwd & bwd |
+
+This teaches an important lesson: in large models, the optimal boundary can be asymmetric between phases. The dual ILP does not decide "these layers go to GPU" uniformly, but "these layers justify GPU only in backward".
+
+A boundary is attractive when:
+1. The difference between CPU and GPU cost is material.
+2. The crossing tensor is not large enough to absorb all transfer gains.
+3. The freed memory or preserved structure justifies the cut.
+4. The boundary does not open too many downstream cuts.
+
+
 ## 12. Script execution catalog (how to run everything)
 
 This section is operational by design. It documents not only command syntax, but also the experimental dimensions controlled by each parameter, which is essential for reproducibility across hardware classes.
@@ -1181,6 +1260,30 @@ Important note:
 - this script currently uses CLI argument names that do not match current `src/profiler.py` parser (for example `--batch-size`, `--gpu-id` with hyphen style and model names like `bert`, `vit`), so it should be treated as legacy and updated before production use.
 
 ---
+
+### 12.10 Grid5000 resource discovery
+Script: `scripts/find_free_gpus.py`
+Vital utility to connect via SSH to multiple Grid5000 sites and use OAR to discover real-time free and available GPU nodes.
+
+### 12.11 Multi-server Orchestrator and Significance
+Scripts:
+- `scripts/generate_multiserver_summary.py`: Aggregates and generates global plots of consolidated results across multiple servers.
+- `scripts/audit_experimental_grid.sh`: Validates that the full experimental grid (models, batches) has executed without silent failures.
+- `scripts/run_statistical_significance.sh`: Runs significance testing (p-values) of the ILP model improvements against the all-CPU baseline.
+
+### 12.12 Main Grid5000 Orchestrator
+Script: `scripts/run_thesis.sh`
+This is the official campaign launcher for real clusters in Grid5000, replacing the old legacy HPC approach.
+
+### 12.13 Auxiliary Graphical Evidence Generators (Tested)
+In addition to the artifacts generated by the main pipeline, there are official CI-tested scripts for extracting specific figures:
+- `scripts/generate_methodological_plots.py`: Extracts figures for the thesis method diagrams.
+- `scripts/plot_all_energy_tradeoff.py`: Generates Pareto curves of execution time vs budget and energy consumption.
+- `scripts/plot_all_oom_vs_ilp.py`: Analyzes feasibility limits between schemes and VRAM thresholds.
+- `scripts/organize_plots.py`: Automatically organizes all report figures into thematic folders.
+- `scripts/plot_custom_user_figures.py`: Python API to generate custom sliced views and graphs of the results dataset.
+
+(Note: Any script residing in `scripts/archive/` constitutes deprecated implementations or dirty manual patches and is not part of the official pipeline)
 
 ## 13. Validation and test framework
 

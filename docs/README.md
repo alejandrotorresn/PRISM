@@ -111,7 +111,7 @@ The documentation now uses four blocks so the top level stays readable.
 |------|----------|-----|
 | [architecture/](architecture) | Repository map and full technical references | Understand system design and pipeline semantics |
 | [operations/](operations) | Runbooks, launch profiles, tutorials, quick command helper | Execute campaigns and recover failures |
-| [thesis/](thesis) | Monographic chapters and thesis writing map | Consume the project as doctoral material |
+| [../thesis/](../thesis) | Monographic chapters and thesis writing map | Consume the project as doctoral material |
 | [archive/](archive) | Legacy office/editor support material | Keep historical context out of the canonical path |
 
 ## 5) Canonical reading order
@@ -125,9 +125,7 @@ The documentation now uses four blocks so the top level stays readable.
 | 5 | [operations/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md](operations/PROTOCOLO_VALIDACION_MULTISERVIDOR_ES.md) | Go/No-Go operational protocol |
 | 6 | [operations/SERVER_LAUNCH_PROFILES.md](operations/SERVER_LAUNCH_PROFILES.md) | Server-class launch profiles |
 | 7 | [operations/MULTI_NODE_ILP_RUNBOOK.md](operations/MULTI_NODE_ILP_RUNBOOK.md) | Multi-host ILP workflow |
-| 8 | [thesis/CAPITULO_TESIS_PROFILING_ES.md](thesis/CAPITULO_TESIS_PROFILING_ES.md) | Profiling chapter |
-| 9 | [thesis/CAPITULO_TESIS_ILP_ES.md](thesis/CAPITULO_TESIS_ILP_ES.md) | ILP chapter |
-| 10 | [thesis/schema.md](thesis/schema.md) | Doctoral writing map |
+
 
 If you only need commands, use [operations/QUICK_START.sh](operations/QUICK_START.sh).
 

@@ -242,7 +242,7 @@ Once multiple servers have completed compatible runs, use:
 See also:
 
 - [MULTI_NODE_ILP_RUNBOOK.md](MULTI_NODE_ILP_RUNBOOK.md)
-- [README.md](README.md)
+- [README.md](../../README.md)
 
 ---
 

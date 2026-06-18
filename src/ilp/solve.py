@@ -354,7 +354,7 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
     xb = {n: pulp.LpVariable(f"xb_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
     yf = {e: pulp.LpVariable(f"yf_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
     yb = {e: pulp.LpVariable(f"yb_{_sanitize_lp_name(e[0])}__{_sanitize_lp_name(e[1])}", lowBound=0, upBound=1, cat=pulp.LpBinary) for e in data.edges}
-    z = {n: pulp.LpVariable(f"z_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    c_v = {n: pulp.LpVariable(f"c_v_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
     overflow_fwd = pulp.LpVariable("congestion_overflow_fwd", lowBound=0.0, cat=pulp.LpContinuous)
     overflow_bwd = pulp.LpVariable("congestion_overflow_bwd", lowBound=0.0, cat=pulp.LpContinuous)
     edge_congestion_ms = {e: max(float(data.edge_transfer_ms.get(e, 0.0)), 0.0) for e in data.edges}
@@ -364,7 +364,7 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         + pulp.lpSum(problem_data.objective_bwd_gpu[n] * xb[n] + problem_data.objective_bwd_cpu[n] * (1 - xb[n]) for n in data.nodes)
         + pulp.lpSum(problem_data.objective_edge_cut_forward[e] * yf[e] for e in data.edges)
         + pulp.lpSum(problem_data.objective_edge_cut_backward[e] * yb[e] for e in data.edges)
-        + pulp.lpSum(problem_data.objective_cross_phase[n] * z[n] for n in data.nodes)
+        + pulp.lpSum(problem_data.objective_cross_phase[n] * c_v[n] for n in data.nodes)
         + cfg.w_congestion * (overflow_fwd + overflow_bwd)
     )
 
@@ -384,58 +384,58 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         prob += yb[(u, v)] <= 2 - xb[u] - xb[v]
 
     for n in data.nodes:
-        prob += z[n] >= xf[n] - xb[n]
-        prob += z[n] >= xb[n] - xf[n]
-        prob += z[n] <= xf[n] + xb[n]
-        prob += z[n] <= 2 - xf[n] - xb[n]
+        prob += c_v[n] >= xf[n] - xb[n]
+        prob += c_v[n] >= xb[n] - xf[n]
+        prob += c_v[n] <= xf[n] + xb[n]
+        prob += c_v[n] <= 2 - xf[n] - xb[n]
 
-    z_gpu = {n: pulp.LpVariable(f"z_gpu_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
+    z_v = {n: pulp.LpVariable(f"z_v_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
     z_cpu = {n: pulp.LpVariable(f"z_cpu_{_sanitize_lp_name(n)}", lowBound=0, upBound=1, cat=pulp.LpBinary) for n in data.nodes}
 
     for n in data.nodes:
-        prob += z_gpu[n] >= xf[n]
-        prob += z_gpu[n] >= xb[n]
-        prob += z_gpu[n] <= xf[n] + xb[n]
+        prob += z_v[n] >= xf[n]
+        prob += z_v[n] >= xb[n]
+        prob += z_v[n] <= xf[n] + xb[n]
         prob += z_cpu[n] >= (1 - xf[n])
         prob += z_cpu[n] >= (1 - xb[n])
         prob += z_cpu[n] <= (1 - xf[n]) + (1 - xb[n])
 
     if cfg.memory_model == "topological":
-        x_kept_gpu = pulp.LpVariable.dicts("x_kept_gpu", data.nodes, cat=pulp.LpBinary)
+        w_v = pulp.LpVariable.dicts("w_v", data.nodes, cat=pulp.LpBinary)
         for n in data.nodes:
-            # x_kept_gpu is 1 iff xf[n] == 1 AND xb[n] == 1
-            prob += x_kept_gpu[n] <= xf[n]
-            prob += x_kept_gpu[n] <= xb[n]
-            prob += x_kept_gpu[n] >= xf[n] + xb[n] - 1
+            # w_v is 1 iff xf[n] == 1 AND xb[n] == 1
+            prob += w_v[n] <= xf[n]
+            prob += w_v[n] <= xb[n]
+            prob += w_v[n] >= xf[n] + xb[n] - 1
             
-        total_gpu_base = pulp.lpSum(problem_data.gpu_base_mem[n] * z_gpu[n] for n in data.nodes)
+        total_gpu_base = pulp.lpSum(problem_data.gpu_base_mem[n] * z_v[n] for n in data.nodes)
         total_cpu_base = pulp.lpSum(problem_data.cpu_base_mem[n] * z_cpu[n] for n in data.nodes)
-        total_gpu_act = pulp.lpSum(problem_data.gpu_act_mem[n] * x_kept_gpu[n] for n in data.nodes)
-        total_cpu_act = pulp.lpSum(problem_data.cpu_act_mem[n] * (1 - x_kept_gpu[n]) for n in data.nodes)
+        total_gpu_act = pulp.lpSum(problem_data.gpu_act_mem[n] * w_v[n] for n in data.nodes)
+        total_cpu_act = pulp.lpSum(problem_data.cpu_act_mem[n] * (1 - w_v[n]) for n in data.nodes)
         
         prob += total_gpu_base + total_gpu_act <= cfg.gpu_mem_budget_mb, "topo_gpu_mem_peak"
         prob += total_cpu_base + total_cpu_act <= cfg.cpu_mem_budget_mb, "topo_cpu_mem_peak"
     else:
-        # nodal_sum / peak_approx: use x_kept_gpu_else (AND logic) for activations.
+        # nodal_sum / peak_approx: use w_v_else (AND logic) for activations.
         # Activations occupy GPU memory only when BOTH forward and backward run on GPU.
         # This matches training semantics: activations are retained from forward until backward.
         # The overlap factor (peak_approx only) scales activation memory by a heuristic
         # to account for non-simultaneous peak within the backward pass.
-        x_kept_gpu_else = pulp.LpVariable.dicts(
-            "x_kept_gpu_e", data.nodes, cat=pulp.LpBinary
+        w_v_else = pulp.LpVariable.dicts(
+            "w_v_e", data.nodes, cat=pulp.LpBinary
         )
         for n in data.nodes:
-            prob += x_kept_gpu_else[n] <= xf[n]
-            prob += x_kept_gpu_else[n] <= xb[n]
-            prob += x_kept_gpu_else[n] >= xf[n] + xb[n] - 1
+            prob += w_v_else[n] <= xf[n]
+            prob += w_v_else[n] <= xb[n]
+            prob += w_v_else[n] >= xf[n] + xb[n] - 1
 
         # Apply overlap factor for peak_approx; nodal_sum uses full activation cost
         act_overlap = cfg.peak_activation_overlap if cfg.memory_model == "peak_approx" else 1.0
 
         prob += (
-            pulp.lpSum(problem_data.gpu_base_mem[n] * z_gpu[n] for n in data.nodes)
+            pulp.lpSum(problem_data.gpu_base_mem[n] * z_v[n] for n in data.nodes)
             + pulp.lpSum(
-                act_overlap * problem_data.gpu_act_mem[n] * x_kept_gpu_else[n]
+                act_overlap * problem_data.gpu_act_mem[n] * w_v_else[n]
                 for n in data.nodes
             )
         ) <= cfg.gpu_mem_budget_mb, "else_gpu_mem_peak"
@@ -443,7 +443,7 @@ def _solve_with_pulp_dual(data: ILPInputData, cfg: ILPConfig) -> ILPSolution:
         prob += (
             pulp.lpSum(problem_data.cpu_base_mem[n] * z_cpu[n] for n in data.nodes)
             + pulp.lpSum(
-                act_overlap * problem_data.cpu_act_mem[n] * (1 - x_kept_gpu_else[n])
+                act_overlap * problem_data.cpu_act_mem[n] * (1 - w_v_else[n])
                 for n in data.nodes
             )
         ) <= cfg.cpu_mem_budget_mb, "else_cpu_mem_peak"
