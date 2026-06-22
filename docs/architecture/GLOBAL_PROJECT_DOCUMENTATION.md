@@ -1230,7 +1230,7 @@ PYTHON_CMD=$(which python) \
 PROFILE=doctoral_diagnostic RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```
 
-`doctoral_minimal` and `doctoral_full` are the official strict profiles for core doctoral evidence. `doctoral_diagnostic` enables an explicit fallback-enabled diagnostic path and its outputs should be treated as auxiliary evidence.
+`doctoral_minimal` and `doctoral_full` are the official strict profiles for core doctoral evidence. `doctoral_full` evaluates an extended range of batch sizes (up to 512) to saturate high-capacity servers (e.g., >40GB VRAM, >256GB RAM). `doctoral_diagnostic` enables an explicit fallback-enabled diagnostic path and its outputs should be treated as auxiliary evidence.
 
 Relevant controls:
 

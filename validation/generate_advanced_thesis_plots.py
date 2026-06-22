@@ -416,14 +416,14 @@ def plot_power_throughput_vs_budget(config_dir: Path, output_dir: Path, model: s
     color1 = 'tab:red'
     ax1.set_xlabel('GPU Memory Budget (MB)', fontsize=12, fontweight="bold")
     ax1.set_ylabel('Power (Watts)', color=color1, fontsize=12, fontweight="bold")
-    ax1.plot(df_model["gpu_budget_mb"], df_model["watts"], color=color1, marker='o', linewidth=2, label="Power (W)")
+    ax1.plot(df_model["gpu_budget_mb"], df_model["watts"], color=color1, marker='o', linewidth=4, markersize=10, alpha=0.7, label="Power (W)")
     ax1.tick_params(axis='y', labelcolor=color1)
     ax1.grid(True, linestyle="--", alpha=0.5)
     
     ax2 = ax1.twinx()
     color2 = 'tab:blue'
     ax2.set_ylabel('Training Throughput (Samples/s)', color=color2, fontsize=12, fontweight="bold")
-    ax2.plot(df_model["gpu_budget_mb"], df_model["throughput"], color=color2, marker='s', linewidth=2, label="Throughput")
+    ax2.plot(df_model["gpu_budget_mb"], df_model["throughput"], color=color2, marker='s', linestyle='--', linewidth=2, markersize=5, label="Throughput")
     ax2.tick_params(axis='y', labelcolor=color2)
     
     fig.suptitle(f"Power & Throughput vs Budget: {model} | {optimizer} | {precision} | {batch_name}", fontsize=14, fontweight="bold")

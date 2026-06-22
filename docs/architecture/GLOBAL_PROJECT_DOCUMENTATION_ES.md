@@ -1585,7 +1585,7 @@ PYTHON_CMD=$(which python) \
 PROFILE=doctoral_diagnostic RUN_HYBRID=true bash scripts/run_thesis_mode.sh
 ```
 
-`doctoral_minimal` y `doctoral_full` constituyen perfiles oficiales en regimen estricto para evidencia troncal de tesis. `doctoral_diagnostic` habilita una ruta de depuracion con `fallbacks` explicitos y sus resultados deben tratarse como evidencia auxiliar, no principal.
+`doctoral_minimal` y `doctoral_full` constituyen perfiles oficiales en regimen estricto para evidencia troncal de tesis. `doctoral_full` evalúa un rango extendido de tamaños de batch (hasta 512) para saturar servidores de alta capacidad (ej. >40GB VRAM, >256GB RAM). `doctoral_diagnostic` habilita una ruta de depuracion con `fallbacks` explicitos y sus resultados deben tratarse como evidencia auxiliar, no principal.
 
 Controles relevantes:
 

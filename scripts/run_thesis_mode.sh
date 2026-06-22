@@ -63,7 +63,7 @@ case "$PROFILE" in
     : "${MODELS_CSV:=simple_mlp,resnet50,resnet152,vit_b16,bert_base,gpt2_small,distilgpt2}"
     : "${OPTIMIZERS_CSV:=SGD,AdamW,RMSprop}"
     : "${PRECISIONS_CSV:=fp32,bf16}"
-    : "${BATCH_SIZES_CSV:=8,16,32,64,128}"
+    : "${BATCH_SIZES_CSV:=8,16,32,64,128,256,512}"
     : "${REPEATS:=7}"
     : "${WARMUP:=5}"
     : "${MEASURE:=15}"

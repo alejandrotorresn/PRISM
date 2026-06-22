@@ -68,6 +68,7 @@ oarsub -S "./scripts/run_thesis.sh --profile doctoral_full --full-seeds 42,43,44
 
 Uso: producir datos finales con estimacion de variabilidad y robustez.
 En modo estricto, el launcher eleva automaticamente esta configuracion a 2 replicas por semilla como minimo.
+Nota: El perfil `doctoral_full` evalúa tamaños de batch hasta 512 (8, 16, 32, 64, 128, 256, 512) y está diseñado para servidores con alta capacidad (ej. >40 GB VRAM, >256 GB RAM).
 
 ## 5. Banderas canonicas (interfaz publica)
 Usar siempre estas banderas en la invocacion OAR:
