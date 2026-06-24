@@ -56,13 +56,13 @@ def _build_model(args, torch_dtype: torch.dtype) -> nn.Module:
         model = vit_b_16(weights=weights).to(dtype=torch_dtype)
     elif args.model == "bert_base":
         model = BertForSequenceClassification.from_pretrained(
-            "bert-base-uncased", num_labels=4, torch_dtype=torch_dtype
-        )
+            "bert-base-uncased", num_labels=4
+        ).to(dtype=torch_dtype)
     elif args.model == "gpt2_small":
-        model = GPT2LMHeadModel.from_pretrained("gpt2", torch_dtype=torch_dtype)
+        model = GPT2LMHeadModel.from_pretrained("gpt2").to(dtype=torch_dtype)
         model.config.pad_token_id = model.config.eos_token_id
     elif args.model == "distilgpt2":
-        model = GPT2LMHeadModel.from_pretrained("distilgpt2", torch_dtype=torch_dtype)
+        model = GPT2LMHeadModel.from_pretrained("distilgpt2").to(dtype=torch_dtype)
         model.config.pad_token_id = model.config.eos_token_id
     elif args.model == "simple_mlp":
         model = SimpleMLP().to(dtype=torch_dtype)
