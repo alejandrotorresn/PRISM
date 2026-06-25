@@ -18,14 +18,7 @@ SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
 DATA_MOUNT_SRC="${DATA_MOUNT_SRC:-/home/ltorresnino/data}"
-_DEFAULT_STORAGE_BASE="${DATA_MOUNT_SRC%/data}"
-REPORTS_MOUNT_SRC="${REPORTS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/reports}"
-LOGS_MOUNT_SRC="${LOGS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/logs}"
-
 DATA_LINK="${DATA_LINK:-$PROJECT_ROOT/data}"
-REPORTS_LINK="${REPORTS_LINK:-$PROJECT_ROOT/reports}"
-LOGS_LINK="${LOGS_LINK:-$PROJECT_ROOT/logs}"
-
 LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs/grid5k}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/grid5k_launch_$(date +%Y%m%d_%H%M%S).log}"
 
@@ -89,53 +82,45 @@ activate_conda_env() {
     log_msg "Conda environment activated: $CONDA_ENV_NAME"
 }
 
-setup_storage_symlink() {
-    local link_path="$1"
-    local mount_src="$2"
-    local name="$3"
-
-    if [ ! -d "$mount_src" ]; then
-        mkdir -p "$mount_src" 2>/dev/null || true
+prepare_storage() {
+    if [ ! -d "$DATA_MOUNT_SRC" ]; then
+        mkdir -p "$DATA_MOUNT_SRC" 2>/dev/null || true
     fi
 
-    if [ -d "$mount_src" ]; then
-        if [ -L "$link_path" ]; then
+    if [ -d "$DATA_MOUNT_SRC" ]; then
+        if [ -L "$DATA_LINK" ]; then
             local current_target
-            current_target="$(readlink "$link_path")"
-            if [ "$current_target" != "$mount_src" ]; then
-                rm -f "$link_path"
-                ln -s "$mount_src" "$link_path"
+            current_target="$(readlink "$DATA_LINK")"
+            if [ "$current_target" != "$DATA_MOUNT_SRC" ]; then
+                rm -f "$DATA_LINK"
+                ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
             fi
-        elif [ -e "$link_path" ]; then
-            if [ -d "$link_path" ]; then
+        elif [ -e "$DATA_LINK" ]; then
+            if [ -d "$DATA_LINK" ]; then
                 local first_entry
-                first_entry="$(find "$link_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
+                first_entry="$(find "$DATA_LINK" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
                 if [ -n "$first_entry" ]; then
-                    log_msg "Migrating existing $name directory into home-backed storage: $link_path -> $mount_src"
-                    mkdir -p "$mount_src"
-                    cp -r "$link_path"/. "$mount_src"/
+                    log_msg "Migrating existing data directory into home-backed storage: $DATA_LINK -> $DATA_MOUNT_SRC"
+                    mkdir -p "$DATA_MOUNT_SRC"
+                    cp -r "$DATA_LINK"/. "$DATA_MOUNT_SRC"/
                 else
-                    log_msg "Replacing empty $name directory with symlink: $link_path -> $mount_src"
+                    log_msg "Replacing empty data directory with symlink: $DATA_LINK -> $DATA_MOUNT_SRC"
                 fi
-                rm -rf "$link_path"
-                ln -s "$mount_src" "$link_path"
+                rm -rf "$DATA_LINK"
+                ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
             else
-                log_msg "WARNING: $link_path exists and is not a directory/symlink. Keeping it as-is."
+                log_msg "WARNING: $DATA_LINK exists and is not a directory/symlink. Keeping it as-is."
             fi
         else
-            ln -s "$mount_src" "$link_path"
+            ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
         fi
-        log_msg "$name path ready: $link_path -> $mount_src"
+        log_msg "Data path ready: $DATA_LINK -> $DATA_MOUNT_SRC"
     else
-        mkdir -p "$link_path"
-        log_msg "WARNING: $mount_src not available. Using local path: $link_path"
+        mkdir -p "$DATA_LINK"
+        log_msg "WARNING: $DATA_MOUNT_SRC not available. Using local path: $DATA_LINK"
     fi
-}
 
-prepare_storage() {
-    setup_storage_symlink "$DATA_LINK" "$DATA_MOUNT_SRC" "data"
-    setup_storage_symlink "$REPORTS_LINK" "$REPORTS_MOUNT_SRC" "reports"
-    setup_storage_symlink "$LOGS_LINK" "$LOGS_MOUNT_SRC" "logs"
+    mkdir -p "$PROJECT_ROOT/logs"
 }
 
 configure_cpu_runtime() {
