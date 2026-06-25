@@ -5,13 +5,12 @@ set -Eeuo pipefail
 # Submit with: oarsub -S ./scripts/run_thesis.sh
 
 #OAR -n PRISM_profiling
-#OAR -q abaca
-#OAR -p musa
+#OAR -q default
+#OAR -p chuc
 #OAR -t deploy
-#OAR -l nodes=1,walltime=96:00:00
+#OAR -l nodes=1,walltime=48:00:00
 #OAR -O prism_job.%jobid%.output
 #OAR -E prism_job.%jobid%.error
-
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -23,7 +22,7 @@ LOCAL_SCRIPTS_DIR="${LOCAL_SCRIPTS_DIR:-$LOCAL_PROJECT_ROOT/scripts}"
 SYNC_PROJECT_BEFORE_RUN="${SYNC_PROJECT_BEFORE_RUN:-true}"
 # IMPORTANT: defaults are anchored to repository root to avoid excluding src/data.
 SYNC_EXCLUDES="${SYNC_EXCLUDES:-/.git,/.venv,/logs,/reports,/data,/datasets,/books,/paper_thesis,/papers}"
-KADEPLOY_FILE="${KADEPLOY_FILE:-rocky9_profiling.yaml}"
+KADEPLOY_FILE="${KADEPLOY_FILE:-/home/ltorresnino/kadeploy_images/PRISM/rocky9_profiling.yaml}"
 KADEPLOY_HOME="${KADEPLOY_HOME:-/home/ltorresnino}"
 
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
@@ -33,6 +32,10 @@ FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
+DATA_MOUNT_SRC="${DATA_MOUNT_SRC:-/home/ltorresnino/data}"
+_DEFAULT_STORAGE_BASE="${DATA_MOUNT_SRC%/data}"
+REPORTS_MOUNT_SRC="${REPORTS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/reports}"
+LOGS_MOUNT_SRC="${LOGS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/logs}"
 
 parse_args() {
     while [ "$#" -gt 0 ]; do
@@ -220,7 +223,7 @@ if [ -z "${OAR_FILE_NODES:-}" ] || [ ! -f "${OAR_FILE_NODES:-}" ]; then
     exit 1
 fi
 
-TARGET_NODE="$(sort -u "$OAR_FILE_NODES" | head -n 1 | xargs)"
+TARGET_NODE="$(sort -u "$OAR_FILE_NODES" | awk 'NR==1' | xargs)"
 if [ -z "$TARGET_NODE" ]; then
     log_msg "ERROR: Could not resolve target node from OAR_FILE_NODES."
     exit 1
@@ -289,6 +292,9 @@ ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" \
     "cd '$PROJECT_ROOT' && \
      CAMPAIGN_PROFILE='$CAMPAIGN_PROFILE' \
      CONDA_ENV_NAME='$CONDA_ENV_NAME' \
+     DATA_MOUNT_SRC='$DATA_MOUNT_SRC' \
+     REPORTS_MOUNT_SRC='$REPORTS_MOUNT_SRC' \
+     LOGS_MOUNT_SRC='$LOGS_MOUNT_SRC' \
     FULL_SEEDS_CSV='$FULL_SEEDS_CSV' \
     SINGLE_SEED='$SINGLE_SEED' \
     FULL_REPEATS_PER_SEED='$FULL_REPEATS_PER_SEED' \

@@ -383,7 +383,7 @@ resolve_report_input_root() {
 detect_gpu_vram_mb() {
   # Returns total GPU VRAM in MiB from nvidia-smi, or empty string on failure.
   if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d '[:space:]'
+    nvidia-smi -i 0 --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d '[:space:]'
   else
     echo ""
   fi
