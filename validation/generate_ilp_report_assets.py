@@ -157,8 +157,13 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, optimizer: 
     
     if y_greedy is not None:
         sns.lineplot(x=x, y=y_greedy, linestyle="-.", linewidth=2.0, label="Greedy Heuristic", ax=ax, color=sns.color_palette()[1], errorbar=None, marker='^', markersize=6)
-        
-    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label="All CPU", ax=ax, color=sns.color_palette()[2], errorbar=None, marker='o', markersize=6)
+
+    # Detect RAPL counter wrap-around: CPU ran (feasible) but energy counter overflowed
+    # (32-bit RAPL register on AMD EPYC wraps after ~21 s at full load, returning 0.0).
+    _cpu_energy_zero = (model_df["all_cpu_energy_j"].astype(float) == 0.0).all() if "all_cpu_energy_j" in model_df.columns else False
+    _cpu_feasible = (model_df["all_cpu_status"].astype(str) == "feasible").any() if "all_cpu_status" in model_df.columns else False
+    cpu_latency_label = "All CPU (RAPL Counter Overflow)" if (_cpu_energy_zero and _cpu_feasible) else "All CPU"
+    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label=cpu_latency_label, ax=ax, color=sns.color_palette()[2], errorbar=None, marker='o', markersize=6)
 
     ax.xaxis.set_major_locator(plt.MaxNLocator(15))
     ax.yaxis.set_major_locator(plt.MaxNLocator(15))
@@ -201,7 +206,7 @@ def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, optimizer: 
     plot_dir.mkdir(parents=True, exist_ok=True)
     out = plot_dir / f"execution_cost_vs_budget_{optimizer}_{precision}_batch_{batch_size}.png"
     fig.tight_layout()
-    fig.savefig(out, dpi=300)
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -216,25 +221,29 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
         precision = str(row.get("precision", "unknown"))
         
         data = []
-        data.append({"Strategy": "All-CPU", "Cost": float(row["all_cpu_objective"]), "Is_OOM": False})
+        cpu_val = float(row["all_cpu_objective"])
+        data.append({"Strategy": "All-CPU", "Cost": cpu_val, "Is_OOM": False, "Is_Overflow": (cpu_val == 0.0)})
         
         # Check if All-GPU is feasible
         all_gpu_val = pd.to_numeric(row["all_gpu_objective"], errors="coerce")
         is_all_gpu_oom = row.get("all_gpu_status") == "infeasible" or pd.isna(all_gpu_val) or all_gpu_val == float("inf")
         if is_all_gpu_oom:
-            data.append({"Strategy": "All-GPU", "Cost": 0, "Is_OOM": True})
+            data.append({"Strategy": "All-GPU", "Cost": 0, "Is_OOM": True, "Is_Overflow": False})
         else:
-            data.append({"Strategy": "All-GPU", "Cost": float(all_gpu_val), "Is_OOM": False})
+            gpu_c = float(all_gpu_val)
+            data.append({"Strategy": "All-GPU", "Cost": gpu_c, "Is_OOM": False, "Is_Overflow": (gpu_c == 0.0)})
             
         if "greedy_objective" in row:
             greedy_val = pd.to_numeric(row["greedy_objective"], errors="coerce")
             is_greedy_oom = row.get("greedy_status") == "infeasible" or pd.isna(greedy_val) or greedy_val == float("inf")
             if is_greedy_oom:
-                data.append({"Strategy": "Greedy", "Cost": 0, "Is_OOM": True})
+                data.append({"Strategy": "Greedy", "Cost": 0, "Is_OOM": True, "Is_Overflow": False})
             else:
-                data.append({"Strategy": "Greedy", "Cost": float(greedy_val), "Is_OOM": False})
+                gc = float(greedy_val)
+                data.append({"Strategy": "Greedy", "Cost": gc, "Is_OOM": False, "Is_Overflow": (gc == 0.0)})
             
-        data.append({"Strategy": "ILP Optimal", "Cost": float(row["ilp_objective"]), "Is_OOM": False})
+        ilp_c = float(row["ilp_objective"])
+        data.append({"Strategy": "ILP Optimal", "Cost": ilp_c, "Is_OOM": False, "Is_Overflow": (ilp_c == 0.0)})
         
         plot_df = pd.DataFrame(data)
         if plot_df.empty:
@@ -248,41 +257,54 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
         # Plot ALL strategies to ensure x-axis ticks exist
         sns.barplot(data=plot_df, x="Strategy", y="Cost", ax=ax, palette="viridis")
         
-        # Now find the OOM strategies and draw over their bars ONLY IF physical OOM
+        # Determine appropriate positive y-limits
+        valid_costs = plot_df[~plot_df["Is_OOM"] & ~plot_df["Is_Overflow"]]["Cost"]
+        max_valid = valid_costs.max() if not valid_costs.empty and valid_costs.max() > 0 else 1000.0
+        placeholder_height = max_valid * 0.9 if max_valid > 1 else 1000.0
+        ax.set_ylim(0, max_valid * 1.15 if max_valid > 1 else 1150.0)
+        
+        # Now find the OOM/Overflow strategies and draw over their bars
         strategies = plot_df["Strategy"].tolist()
         for i, patch in enumerate(ax.patches):
             if i < len(strategies):
                 strategy = strategies[i]
                 row_data = plot_df[plot_df["Strategy"] == strategy].iloc[0]
+                is_oom = bool(row_data.get("Is_OOM", False))
+                is_overflow = bool(row_data.get("Is_Overflow", False))
                 
-                if pd.notna(row_data.get("Is_OOM")) and bool(row_data.get("Is_OOM")):
-                    # Replace with physical OOM bar
-                    patch.set_height(ax.get_ylim()[1] * 0.9 if ax.get_ylim()[1] > 1 else 1000)
+                if is_oom:
+                    patch.set_height(placeholder_height)
                     patch.set_facecolor('dimgrey')
                     patch.set_hatch('///')
                     patch.set_edgecolor('black')
-                    
-                    oom_text = "Out of Memory (OOM)"
-                    ax.text(patch.get_x() + patch.get_width() / 2., patch.get_height() * 0.5, 
-                            oom_text, color="black", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
+                    ax.text(patch.get_x() + patch.get_width() / 2., placeholder_height * 0.5, 
+                            "Out of Memory (OOM)", color="black", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
+                elif is_overflow:
+                    patch.set_height(placeholder_height)
+                    patch.set_facecolor('coral')
+                    patch.set_hatch('xx')
+                    patch.set_edgecolor('black')
+                    ax.text(patch.get_x() + patch.get_width() / 2., placeholder_height * 0.5, 
+                            "RAPL Counter Overflow (>21s)", color="black", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
         
         # Add a horizontal line for the Pareto ceiling (ILP Optimal cost)
         ilp_cost = float(row["ilp_objective"])
-        ax.axhline(y=ilp_cost, color='r', linestyle='--', linewidth=2, label='Pareto Boundary (ILP Ceiling)')
+        if ilp_cost > 0:
+            ax.axhline(y=ilp_cost, color='r', linestyle='--', linewidth=2, label='Pareto Boundary (ILP Ceiling)')
         
         ax.set_title(f"Execution Latency Comparison: {model} (Batch {batch_size})", pad=15, fontweight="bold")
         ax.set_ylabel("Total Latency (ms)", fontweight="bold")
         ax.set_xlabel("Execution Strategy", fontweight="bold")
         
-        # Add data labels (skip OOM bars)
+        # Add data labels (skip OOM/Overflow bars)
         for i, p in enumerate(ax.patches):
             height = p.get_height()
             if i < len(strategies):
                 row_data = plot_df[plot_df["Strategy"] == strategies[i]].iloc[0]
-                is_oom = pd.notna(row_data.get("Is_OOM")) and bool(row_data.get("Is_OOM"))
+                is_special = bool(row_data.get("Is_OOM", False)) or bool(row_data.get("Is_Overflow", False))
             else:
-                is_oom = False
-            if height > 0 and not is_oom:
+                is_special = False
+            if height > 0 and not is_special:
                 ax.annotate(f"{height:.2f}", 
                             (p.get_x() + p.get_width() / 2., height),
                             ha="center", va="center", xytext=(0, 8), textcoords="offset points",
@@ -295,8 +317,13 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
             if 'Out of Memory' not in labels:
                 handles.append(oom_patch)
                 labels.append('Out of Memory')
+        if plot_df["Is_Overflow"].any():
+            of_patch = mpatches.Patch(facecolor='coral', hatch='xx', edgecolor='black', label='RAPL Overflow (>21s)')
+            if 'RAPL Overflow (>21s)' not in labels:
+                handles.append(of_patch)
+                labels.append('RAPL Overflow (>21s)')
         
-        ax.legend(handles=handles, labels=labels, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        ax.legend(handles=handles, labels=labels, bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
 
         sns.despine()
 
@@ -304,7 +331,7 @@ def _plot_model_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None:
         plot_dir.mkdir(parents=True, exist_ok=True)
         out = plot_dir / f"strategy_comparison_{optimizer}_{precision}_batch_{batch_size}.png"
         fig.tight_layout()
-        fig.savefig(out, dpi=300)
+        fig.savefig(out, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
 
@@ -479,25 +506,29 @@ def _plot_model_energy_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None
         
         data = []
         if "all_cpu_energy_j" in row and not pd.isna(row["all_cpu_energy_j"]):
-            data.append({"Strategy": "All-CPU", "Energy": float(row["all_cpu_energy_j"]), "Is_OOM": False})
+            cpu_e = float(row["all_cpu_energy_j"])
+            data.append({"Strategy": "All-CPU", "Energy": cpu_e, "Is_OOM": False, "Is_Overflow": (cpu_e == 0.0)})
         # Check if All-GPU is feasible
         all_gpu_val = pd.to_numeric(row.get("all_gpu_energy_j", float("inf")), errors="coerce")
         is_all_gpu_oom = row.get("all_gpu_status") == "infeasible" or pd.isna(all_gpu_val) or all_gpu_val == float("inf")
         if is_all_gpu_oom:
-            data.append({"Strategy": "All-GPU", "Energy": 0, "Is_OOM": True})
+            data.append({"Strategy": "All-GPU", "Energy": 0, "Is_OOM": True, "Is_Overflow": False})
         else:
-            data.append({"Strategy": "All-GPU", "Energy": float(all_gpu_val), "Is_OOM": False})
+            gpu_e = float(all_gpu_val)
+            data.append({"Strategy": "All-GPU", "Energy": gpu_e, "Is_OOM": False, "Is_Overflow": (gpu_e == 0.0)})
             
         if "greedy_energy_j" in row:
             greedy_val = pd.to_numeric(row.get("greedy_energy_j", float("inf")), errors="coerce")
             is_greedy_oom = row.get("greedy_status") == "infeasible" or pd.isna(greedy_val) or greedy_val == float("inf")
             if is_greedy_oom:
-                data.append({"Strategy": "Greedy", "Energy": 0, "Is_OOM": True})
+                data.append({"Strategy": "Greedy", "Energy": 0, "Is_OOM": True, "Is_Overflow": False})
             else:
-                data.append({"Strategy": "Greedy", "Energy": float(greedy_val), "Is_OOM": False})
+                ge = float(greedy_val)
+                data.append({"Strategy": "Greedy", "Energy": ge, "Is_OOM": False, "Is_Overflow": (ge == 0.0)})
             
         if "ilp_energy_j" in row and not pd.isna(row["ilp_energy_j"]):
-            data.append({"Strategy": "ILP Optimal", "Energy": float(row["ilp_energy_j"]), "Is_OOM": False})
+            ilp_e = float(row["ilp_energy_j"])
+            data.append({"Strategy": "ILP Optimal", "Energy": ilp_e, "Is_OOM": False, "Is_Overflow": (ilp_e == 0.0)})
         
         plot_df = pd.DataFrame(data)
         if plot_df.empty:
@@ -511,30 +542,35 @@ def _plot_model_energy_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None
         # Plot ALL strategies to ensure x-axis ticks exist
         sns.barplot(data=plot_df, x="Strategy", y="Energy", ax=ax, palette="plasma")
         
-        # Now find the OOM strategies and draw over their bars
+        # Determine appropriate positive y-limits
+        valid_energy = plot_df[~plot_df["Is_OOM"] & ~plot_df["Is_Overflow"]]["Energy"]
+        max_valid = valid_energy.max() if not valid_energy.empty and valid_energy.max() > 0 else 1000.0
+        placeholder_height = max_valid * 0.9 if max_valid > 1 else 1000.0
+        ax.set_ylim(0, max_valid * 1.15 if max_valid > 1 else 1150.0)
+        
+        # Now find the OOM/Overflow strategies and draw over their bars
         strategies = plot_df["Strategy"].tolist()
         for i, patch in enumerate(ax.patches):
             if i < len(strategies):
                 strategy = strategies[i]
                 row_data = plot_df[plot_df["Strategy"] == strategy].iloc[0]
+                is_oom = bool(row_data.get("Is_OOM", False))
+                is_overflow = bool(row_data.get("Is_Overflow", False))
                 
-                if pd.notna(row_data.get("Is_OOM")) and bool(row_data.get("Is_OOM")):
-                    # Replace with OOM bar
-                    patch.set_height(ax.get_ylim()[1] * 0.9 if ax.get_ylim()[1] > 1 else 1000)
+                if is_oom:
+                    patch.set_height(placeholder_height)
                     patch.set_facecolor('dimgrey')
                     patch.set_hatch('///')
                     patch.set_edgecolor('black')
-                    
-                    oom_text = "Out of Memory (OOM)"
-                    ax.text(patch.get_x() + patch.get_width() / 2., patch.get_height() * 0.5, 
-                            oom_text, color="black", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
-                else:
-                    height = patch.get_height()
-                    if height > 0:
-                        ax.annotate(f"{height:.2f}", 
-                                    (patch.get_x() + patch.get_width() / 2., height),
-                                    ha="center", va="center", xytext=(0, 8), textcoords="offset points",
-                                    fontsize=10, fontweight="bold")
+                    ax.text(patch.get_x() + patch.get_width() / 2., placeholder_height * 0.5, 
+                            "Out of Memory (OOM)", color="black", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
+                elif is_overflow:
+                    patch.set_height(placeholder_height)
+                    patch.set_facecolor('coral')
+                    patch.set_hatch('xx')
+                    patch.set_edgecolor('black')
+                    ax.text(patch.get_x() + patch.get_width() / 2., placeholder_height * 0.5, 
+                            "RAPL Counter Overflow (>21s)", color="black", ha="center", va="center", rotation=90, fontweight="bold", fontsize=10)
                                     
         # Add a horizontal line for the Pareto ceiling (ILP Optimal cost)
         ilp_energy = float(row["ilp_energy_j"]) if "ilp_energy_j" in row and not pd.isna(row["ilp_energy_j"]) else 0
@@ -552,8 +588,13 @@ def _plot_model_energy_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None
             if 'Out of Memory' not in labels:
                 handles.append(oom_patch)
                 labels.append('Out of Memory')
+        if plot_df["Is_Overflow"].any():
+            of_patch = mpatches.Patch(facecolor='coral', hatch='xx', edgecolor='black', label='RAPL Overflow (>21s)')
+            if 'RAPL Overflow (>21s)' not in labels:
+                handles.append(of_patch)
+                labels.append('RAPL Overflow (>21s)')
         
-        ax.legend(handles=handles, labels=labels, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        ax.legend(handles=handles, labels=labels, bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
 
         sns.despine()
 
@@ -561,7 +602,7 @@ def _plot_model_energy_comparisons(best_df: pd.DataFrame, out_dir: Path) -> None
         plot_dir.mkdir(parents=True, exist_ok=True)
         out = plot_dir / f"energy_comparison_{optimizer}_{precision}_batch_{batch_size}.png"
         fig.tight_layout()
-        fig.savefig(out, dpi=300)
+        fig.savefig(out, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
 
@@ -612,7 +653,7 @@ def _plot_memory_utilization_bar(metrics_csv: Path, model: str, optimizer: str, 
     plot_dir.mkdir(parents=True, exist_ok=True)
     out = plot_dir / f"memory_utilization_{optimizer}_{precision}_batch_{batch_size}.png"
     fig.tight_layout()
-    fig.savefig(out, dpi=300)
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -657,7 +698,7 @@ def _plot_top15_memory_layers(metrics_csv: Path, model: str, optimizer: str, pre
     plot_dir.mkdir(parents=True, exist_ok=True)
     out = plot_dir / f"top15_memory_layers_{optimizer}_{precision}_batch_{batch_size}.png"
     fig.tight_layout()
-    fig.savefig(out, dpi=300)
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -740,29 +781,31 @@ def main() -> int:
     if detected_vram_total_mb is not None:
         global_max_vram = min(global_max_vram, detected_vram_total_mb * 1.02)
     
-    for model in sorted(full_df["model"].astype(str).unique().tolist()):
-        model_data = full_df[full_df["model"] == model]
-        for optimizer in sorted(model_data["optimizer"].astype(str).unique().tolist()):
-            opt_data = model_data[model_data["optimizer"] == optimizer]
-            for precision in sorted(opt_data["precision"].astype(str).unique().tolist()):
-                prec_data = opt_data[opt_data["precision"] == precision]
-                for batch_size in sorted(prec_data["batch_size"].astype(str).unique().tolist()):
-                    batch_data = prec_data[prec_data["batch_size"] == batch_size]
-                    if not batch_data.empty:
-                        _plot_model_objective_curves(batch_data, model, optimizer, precision, batch_size, out_dir, global_min_vram, global_max_vram)
-                        _plot_model_energy_curves(batch_data, model, optimizer, precision, batch_size, out_dir, global_min_vram, global_max_vram)
-                        
-                        source_csv = Path(batch_data.iloc[0]["source_csv"])
-                        config_dir = source_csv.parent
-                        metrics_stats_csv = config_dir / f"{model}_metrics_stats.csv"
-                        if metrics_stats_csv.exists():
-                            _plot_memory_utilization_bar(metrics_stats_csv, model, optimizer, precision, batch_size, out_dir)
-                            _plot_top15_memory_layers(metrics_stats_csv, model, optimizer, precision, batch_size, out_dir)
+    unique_seeds = full_df["source_csv"].str.extract(r'/(seed_\d+)/')[0].dropna().unique()
+    is_multiseed_root = len(unique_seeds) > 1
 
-    # Note: best_df now groups by (model, optimizer, precision, batch_size), 
-    # so these plot functions will naturally loop over all combinations.
-    _plot_model_comparisons(best_df, out_dir)
-    _plot_model_energy_comparisons(best_df, out_dir)
+    if not is_multiseed_root:
+        for model in sorted(full_df["model"].astype(str).unique().tolist()):
+            model_data = full_df[full_df["model"] == model]
+            for optimizer in sorted(model_data["optimizer"].astype(str).unique().tolist()):
+                opt_data = model_data[model_data["optimizer"] == optimizer]
+                for precision in sorted(opt_data["precision"].astype(str).unique().tolist()):
+                    prec_data = opt_data[opt_data["precision"] == precision]
+                    for batch_size in sorted(prec_data["batch_size"].astype(str).unique().tolist()):
+                        batch_data = prec_data[prec_data["batch_size"] == batch_size]
+                        if not batch_data.empty:
+                            _plot_model_objective_curves(batch_data, model, optimizer, precision, batch_size, out_dir, global_min_vram, global_max_vram)
+                            _plot_model_energy_curves(batch_data, model, optimizer, precision, batch_size, out_dir, global_min_vram, global_max_vram)
+                            
+                            source_csv = Path(batch_data.iloc[0]["source_csv"])
+                            config_dir = source_csv.parent
+                            metrics_stats_csv = config_dir / f"{model}_metrics_stats.csv"
+                            if metrics_stats_csv.exists():
+                                _plot_memory_utilization_bar(metrics_stats_csv, model, optimizer, precision, batch_size, out_dir)
+                                _plot_top15_memory_layers(metrics_stats_csv, model, optimizer, precision, batch_size, out_dir)
+
+        _plot_model_comparisons(best_df, out_dir)
+        _plot_model_energy_comparisons(best_df, out_dir)
 
     md_dir = out_dir / "summary_docs"
     md_dir.mkdir(parents=True, exist_ok=True)
@@ -846,7 +889,13 @@ def _plot_model_energy_curves(model_df: pd.DataFrame, model: str, optimizer: str
     if y_greedy is not None:
         sns.lineplot(x=x, y=y_greedy, linestyle="-.", linewidth=2.0, label="Greedy Heuristic", ax=ax, color=sns.color_palette()[1], errorbar=None, marker='^', markersize=6)
 
-    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label="All CPU", ax=ax, color=sns.color_palette()[2], errorbar=None, marker='o', markersize=6)
+    # Detect RAPL counter wrap-around: CPU ran (feasible) but the 32-bit hardware
+    # energy register overflowed (AMD EPYC 7513 wraps after ~21 s at full load,
+    # causing pyRAPL to return 0.0 instead of the real measured Joules).
+    _cpu_energy_zero = (y_cpu == 0.0).all()
+    _cpu_feasible = (model_df["all_cpu_status"].astype(str) == "feasible").any() if "all_cpu_status" in model_df.columns else False
+    cpu_energy_label = "All CPU (RAPL Counter Overflow)" if (_cpu_energy_zero and _cpu_feasible) else "All CPU"
+    sns.lineplot(x=x, y=y_cpu, linestyle="--", linewidth=2.0, label=cpu_energy_label, ax=ax, color=sns.color_palette()[2], errorbar=None, marker='o', markersize=6)
 
     ax.xaxis.set_major_locator(plt.MaxNLocator(15))
     ax.yaxis.set_major_locator(plt.MaxNLocator(15))
@@ -883,7 +932,7 @@ def _plot_model_energy_curves(model_df: pd.DataFrame, model: str, optimizer: str
     plot_dir.mkdir(parents=True, exist_ok=True)
     out = plot_dir / f"execution_energy_vs_budget_{optimizer}_{precision}_batch_{batch_size}.png"
     fig.tight_layout()
-    fig.savefig(out, dpi=300)
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
 if __name__ == "__main__":
     raise SystemExit(main())

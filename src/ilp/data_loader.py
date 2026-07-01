@@ -364,13 +364,17 @@ def load_ilp_inputs(
             flagged_layers = bad_quality["layer"].astype(str).tolist()
             logger.warning(
                 f"metrics_stats.csv contains {len(flagged_layers)} low-quality profiling rows (e.g. {flagged_layers[:5]}). "
-                "Triggering analytical estimation regime for these specific layers to maintain mathematical integrity without aborting."
+                "Empirical GPU measurements are preserved and used as-is; the ILP will use "
+                "real hardware telemetry even for flagged layers. Re-profile with more "
+                "replicas to improve statistical reliability."
             )
-            # Enforce analytical fallback for bad layers by clearing their empirical GPU data
-            stats.loc[bad_quality.index, "gpu_fwd_time_ms_mean"] = 0.0
-            stats.loc[bad_quality.index, "gpu_bwd_time_ms_mean"] = 0.0
-            stats.loc[bad_quality.index, "gpu_fwd_energy_j_mean"] = 0.0
-            stats.loc[bad_quality.index, "gpu_bwd_energy_j_mean"] = 0.0
+            # NOTE: Empirical GPU data (timing and energy) is intentionally NOT zeroed
+            # out here. Destroying measured silicon telemetry in favour of a theoretical
+            # FLOPS-based lower bound produces ILP objectives that are orders of magnitude
+            # below reality (e.g. 0.91 J vs 57.5 J NVML-measured for ResNet-152).
+            # The analytical fallback regime is reserved for datasets where GPU timing is
+            # genuinely zero (true OOM / hardware absence), which is caught by the
+            # all_gpu_zero guard below (line ~448).
 
     meta: Dict[str, object] | None = None
     if strict_transfer_calibration or strict_graph_trace_source:

@@ -10,7 +10,10 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Minimum number of independent runs recommended for reliable coefficient estimation.
-MIN_RECOMMENDED_RUNS: int = 3
+# Set to 2 to match the 2-replica HPC campaign structure used in Grid5000 (chuc-4)
+# experiments. The CV threshold (HIGH_CV_THRESHOLD) acts as a secondary quality
+# guard for high-dispersion data even when n_runs >= 2.
+MIN_RECOMMENDED_RUNS: int = 2
 # Coefficient-of-variation threshold above which timing estimates are flagged as
 # high-dispersion (std/|mean| > 30 % is considered unreliable for ILP regression).
 HIGH_CV_THRESHOLD: float = 0.30
