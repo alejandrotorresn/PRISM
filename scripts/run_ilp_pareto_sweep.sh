@@ -35,7 +35,7 @@ if [ "$GPU_BUDGETS_MB" = "auto" ]; then
   echo "[INFO] GPU VRAM detected: ${_GPU_VRAM_MB} MiB -> dynamic budgets: $GPU_BUDGETS_MB"
 fi
 
-MEMORY_MODEL="${MEMORY_MODEL:-peak_approx}"
+MEMORY_MODEL="${MEMORY_MODEL:-topological}"
 PEAK_ACTIVATION_OVERLAP="${PEAK_ACTIVATION_OVERLAP:-0.35}"
 K_SIGMA="${K_SIGMA:-1.0}"
 W_TIME="${W_TIME:-1.0}"
@@ -53,6 +53,8 @@ STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
 ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
 ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
 ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
+STRICT_METRIC_VALIDITY="${STRICT_METRIC_VALIDITY:-false}"
+FAIL_FAST_PROFILE_ERRORS="${FAIL_FAST_PROFILE_ERRORS:-false}"
 
 STRICT_FLAGS=()
 if [ "$STRICT_GRAPH_MAPPING" = true ]; then
@@ -69,6 +71,12 @@ if [ "$ALLOW_TRANSFER_CALIBRATION_FALLBACK" = true ]; then
 fi
 if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
   STRICT_FLAGS+=(--allow_fallback_graph_trace)
+fi
+if [ "$STRICT_METRIC_VALIDITY" = true ]; then
+  STRICT_FLAGS+=(--strict_metric_validity)
+fi
+if [ "$FAIL_FAST_PROFILE_ERRORS" = true ]; then
+  STRICT_FLAGS+=(--fail_fast_profile_errors)
 fi
 if [ "$ENFORCE_CONVEX_WEIGHTS" = true ]; then
   STRICT_FLAGS+=(--enforce_convex_weights)

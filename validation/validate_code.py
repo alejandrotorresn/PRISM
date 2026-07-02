@@ -67,19 +67,28 @@ def validate_profiler() -> Dict[str, Any]:
     preflight_src = inspect.getsource(precision_policy.run_cpu_fp16_model_preflight)
 
     # Check 3: Phase 1 timeout (60s for forward measurement)
-    if 'preflight_thread.join(timeout=60.0)' in preflight_src:
+    if (
+        'preflight_thread.join(timeout=60.0)' in preflight_src
+        or 'preflight_thread.join(timeout=FORWARD_PREFLIGHT_TIMEOUT_S)' in preflight_src
+    ):
         results["checks_passed"].append("✅ Phase 1 timeout = 60.0s for forward measurement")
     else:
         results["checks_failed"].append("❌ Phase 1 timeout (60.0s) not found")
 
     # Check 4: Phase 2 backward timeout calculation
-    if 'backward_timeout = max(10.0, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)' in preflight_src:
+    if (
+        'backward_timeout = max(10.0, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)' in preflight_src
+        or 'backward_timeout = max(BACKWARD_PREFLIGHT_MIN_TIMEOUT_S, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)' in preflight_src
+    ):
         results["checks_passed"].append("✅ Phase 2 backward timeout calculation with formula")
     else:
         results["checks_failed"].append("❌ Phase 2 backward timeout calculation formula missing")
 
     # Check 5: Minimum backward timeout (10s)
-    if 'max(10.0, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)' in preflight_src:
+    if (
+        'max(10.0, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)' in preflight_src
+        or 'max(BACKWARD_PREFLIGHT_MIN_TIMEOUT_S, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)' in preflight_src
+    ):
         results["checks_passed"].append("✅ Backward timeout minimum = 10s")
     else:
         results["checks_failed"].append("❌ Backward timeout minimum not set to 10s")

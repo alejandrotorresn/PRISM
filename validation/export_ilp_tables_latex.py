@@ -251,7 +251,7 @@ def main() -> int:
     else:
         hybrid_tex = "% [WARNING] Hybrid execution CSV not found. Table omitted.\n"
 
-    sig_path = Path("reports/ilp_results/latex").parent / "csv" / "ilp_statistical_significance.csv"
+    sig_path = out_dir.parent / "csv" / "ilp_statistical_significance.csv"
     if sig_path.exists():
         sig_df = pd.read_csv(sig_path)
         # Prepare significance table

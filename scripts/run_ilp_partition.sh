@@ -17,7 +17,7 @@ W_ENERGY="${W_ENERGY:-0.0}"
 W_TRANSFER="${W_TRANSFER:-1.0}"
 GPU_MEM_BUDGET_MB="${GPU_MEM_BUDGET_MB:-1e18}"
 CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
-MEMORY_MODEL="${MEMORY_MODEL:-peak_approx}"
+MEMORY_MODEL="${MEMORY_MODEL:-topological}"
 PEAK_ACTIVATION_OVERLAP="${PEAK_ACTIVATION_OVERLAP:-0.35}"
 BACKEND="${BACKEND:-auto}"
 HW_AGGREGATE="${HW_AGGREGATE:-max}"
@@ -30,6 +30,7 @@ STRICT_TRANSFER_MAPPING="${STRICT_TRANSFER_MAPPING:-true}"
 ALLOW_LOW_QUALITY_STATS="${ALLOW_LOW_QUALITY_STATS:-false}"
 ALLOW_TRANSFER_CALIBRATION_FALLBACK="${ALLOW_TRANSFER_CALIBRATION_FALLBACK:-false}"
 ALLOW_FALLBACK_GRAPH_TRACE="${ALLOW_FALLBACK_GRAPH_TRACE:-false}"
+STRICT_METRIC_VALIDITY="${STRICT_METRIC_VALIDITY:-false}"
 
 # Fail fast if CBC is not available; strict campaigns should not start ILP with
 # an unusable MILP backend and then fall back to exhaustive search limits.
@@ -70,6 +71,9 @@ if [ "$ALLOW_TRANSFER_CALIBRATION_FALLBACK" = true ]; then
 fi
 if [ "$ALLOW_FALLBACK_GRAPH_TRACE" = true ]; then
   STRICT_FLAGS+=(--allow_fallback_graph_trace)
+fi
+if [ "$STRICT_METRIC_VALIDITY" = true ]; then
+  STRICT_FLAGS+=(--strict_metric_validity)
 fi
 if [ "$ENFORCE_CONVEX_WEIGHTS" = true ]; then
   STRICT_FLAGS+=(--enforce_convex_weights)

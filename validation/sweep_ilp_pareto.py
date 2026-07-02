@@ -304,6 +304,60 @@ def _to_execution_plan_from_ilp(ilp) -> ExecutionPlan:
     )
 
 
+def _profile_invalid_rows(args: argparse.Namespace, budgets: List[float], profile_errors: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    error_text = " | ".join(f"{e['config_dir']}: {e['error']}" for e in profile_errors)
+    rows: List[Dict[str, Any]] = []
+    for b in budgets:
+        rows.append({
+            "model": args.model,
+            "gpu_budget_mb": b,
+            "cpu_budget_mb": args.cpu_mem_budget_mb,
+            "backend": args.backend,
+            "ilp_status": "profile_invalid",
+            "ilp_objective": float("inf"),
+            "ilp_gpu_mem_mb": None,
+            "ilp_cpu_mem_mb": None,
+            "ilp_layers_gpu": 0,
+            "ilp_layers_cpu": 0,
+            "ilp_cut_edges": 0,
+            "ilp_energy_j": None,
+            "all_cpu_status": "skipped",
+            "all_cpu_objective": None,
+            "all_cpu_gpu_mem_mb": None,
+            "all_cpu_cpu_mem_mb": None,
+            "all_cpu_energy_j": None,
+            "all_gpu_status": "skipped",
+            "all_gpu_objective": None,
+            "all_gpu_gpu_mem_mb": None,
+            "all_gpu_cpu_mem_mb": None,
+            "all_gpu_energy_j": None,
+            "greedy_status": "skipped",
+            "greedy_objective": None,
+            "greedy_gpu_mem_mb": None,
+            "greedy_cpu_mem_mb": None,
+            "greedy_layers_gpu": 0,
+            "greedy_layers_cpu": 0,
+            "greedy_cut_edges": 0,
+            "greedy_energy_j": None,
+            "sim_status": "skipped",
+            "sim_objective": None,
+            "sim_time_ms": None,
+            "sim_energy_j": None,
+            "sim_transfer_ms": None,
+            "sim_gpu_mem_mb": None,
+            "sim_cpu_mem_mb": None,
+            "sim_warnings": 0,
+            "sim_violations": 0,
+            "sim_error": None,
+            "input_validation_status": "profile_invalid",
+            "input_validation_error": error_text,
+            "input_profile_error_count": len(profile_errors),
+            "pareto_method": "weighted_sum_gpu_budget_sweep",
+            "strict_metric_validity": bool(args.strict_metric_validity),
+        })
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep ILP over GPU memory budgets and compare baselines")
     parser.add_argument("--config_dir", default=None)
@@ -323,6 +377,8 @@ def main() -> int:
     parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow ILP sweep on metrics_stats.csv rows flagged as low quality (diagnostic only)")
     parser.add_argument("--allow_transfer_calibration_fallback", action="store_true", help="Allow ILP sweep when transfer calibration fell back to neutral defaults (diagnostic only)")
     parser.add_argument("--allow_fallback_graph_trace", action="store_true", help="Allow ILP sweep from fallback_leaf_modules graph traces (diagnostic only)")
+    parser.add_argument("--strict_metric_validity", action="store_true", help="Require strictly positive CPU/GPU mean timings for all layers")
+    parser.add_argument("--fail_fast_profile_errors", action="store_true", help="Abort immediately on profile validation errors instead of emitting profile_invalid rows")
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
@@ -353,23 +409,31 @@ def main() -> int:
             raise FileNotFoundError(f"config_dir does not exist: {cdir}")
 
     profiles = []
+    loaded_config_dirs: List[Path] = []
+    profile_errors: List[Dict[str, str]] = []
     for cdir in config_dirs:
         stats_csv, graph_csv, transfer_csv = _default_paths(cdir, args.model)
-        profile = load_ilp_inputs(
-            metrics_stats_csv=str(stats_csv),
-            graph_edges_csv=str(graph_csv),
-            transfer_edges_csv=str(transfer_csv),
-            k_sigma=args.k_sigma,
-            k_sigma_time=args.k_sigma_time,
-            k_sigma_energy=args.k_sigma_energy,
-            strict_graph_mapping=args.strict_graph_mapping,
-            strict_transfer_mapping=args.strict_transfer_mapping,
-            strict_sample_quality=not args.allow_low_quality_stats,
-            strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
-            strict_graph_trace_source=not args.allow_fallback_graph_trace,
-            strict_metric_validity=False,
-        )
-        profiles.append(profile)
+        try:
+            profile = load_ilp_inputs(
+                metrics_stats_csv=str(stats_csv),
+                graph_edges_csv=str(graph_csv),
+                transfer_edges_csv=str(transfer_csv),
+                k_sigma=args.k_sigma,
+                k_sigma_time=args.k_sigma_time,
+                k_sigma_energy=args.k_sigma_energy,
+                strict_graph_mapping=args.strict_graph_mapping,
+                strict_transfer_mapping=args.strict_transfer_mapping,
+                strict_sample_quality=not args.allow_low_quality_stats,
+                strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
+                strict_graph_trace_source=not args.allow_fallback_graph_trace,
+                strict_metric_validity=bool(args.strict_metric_validity),
+            )
+            profiles.append(profile)
+            loaded_config_dirs.append(cdir)
+        except Exception as exc:
+            profile_errors.append({"config_dir": str(cdir), "error": f"{type(exc).__name__}: {exc}"})
+            if args.fail_fast_profile_errors:
+                raise
 
     if len(profiles) == 1:
         data = profiles[0]
@@ -384,7 +448,47 @@ def main() -> int:
     budgets = _parse_budget_list(args.gpu_budgets_mb)
     rows = []
 
-    inferred_inputs = infer_ilp_input_paths(config_dir=config_dirs[0], model_name=args.model)
+    if not profiles:
+        rows = _profile_invalid_rows(args=args, budgets=budgets, profile_errors=profile_errors)
+        out_df = pd.DataFrame(rows).sort_values(by=["gpu_budget_mb"], kind="stable")
+
+        base_config_dir = config_dirs[0]
+        out_csv = Path(args.output_csv) if args.output_csv else (base_config_dir / f"{args.model}_pareto_sweep.csv")
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        out_df.to_csv(out_csv, index=False)
+
+        summary = {
+            "model": args.model,
+            "rows": int(len(out_df)),
+            "gpu_budgets_mb": budgets,
+            "backend_requested": args.backend,
+            "regime": regime,
+            "enforce_convex_weights": enforce_convex_weights,
+            "output_csv": str(out_csv),
+            "best_feasible_row": None,
+            "pareto_method": "weighted_sum_gpu_budget_sweep",
+            "strict_metric_validity": bool(args.strict_metric_validity),
+            "profile_error_count": len(profile_errors),
+            "profile_errors": profile_errors,
+        }
+
+        out_json = Path(args.output_json) if args.output_json else (base_config_dir / f"{args.model}_pareto_summary.json")
+        with open(out_json, "w") as f:
+            json.dump(summary, f, indent=4)
+
+        print("=" * 80)
+        print("ILP PARETO SWEEP")
+        print("=" * 80)
+        print(f"Model: {args.model}")
+        print(f"Rows: {len(out_df)}")
+        print(f"CSV: {out_csv}")
+        print(f"JSON: {out_json}")
+        print(f"Profile validation errors: {len(profile_errors)}")
+        print("No valid profiles loaded; emitted profile_invalid rows to preserve full campaign mapping.")
+        print("=" * 80)
+        return 0
+
+    inferred_inputs = infer_ilp_input_paths(config_dir=loaded_config_dirs[0], model_name=args.model)
     measured_layers = set(data.nodes)
     graph_edges = load_graph_edges(
         inferred_inputs.graph_edges_csv,
@@ -500,6 +604,11 @@ def main() -> int:
             "sim_warnings": len(sim_result.warnings) if sim_result is not None else 0,
             "sim_violations": len(sim_result.violations) if sim_result is not None else 0,
             "sim_error": sim_error,
+            "input_validation_status": "ok" if len(profile_errors) == 0 else "partial",
+            "input_validation_error": " | ".join(f"{e['config_dir']}: {e['error']}" for e in profile_errors) if profile_errors else None,
+            "input_profile_error_count": len(profile_errors),
+            "pareto_method": "weighted_sum_gpu_budget_sweep",
+            "strict_metric_validity": bool(args.strict_metric_validity),
         })
 
     out_df = pd.DataFrame(rows).sort_values(by=["gpu_budget_mb"], kind="stable")
@@ -518,6 +627,10 @@ def main() -> int:
         "enforce_convex_weights": enforce_convex_weights,
         "output_csv": str(out_csv),
         "best_feasible_row": None,
+        "pareto_method": "weighted_sum_gpu_budget_sweep",
+        "strict_metric_validity": bool(args.strict_metric_validity),
+        "profile_error_count": len(profile_errors),
+        "profile_errors": profile_errors,
     }
 
     feasible = out_df[out_df["ilp_status"].isin(["optimal", "feasible"])]

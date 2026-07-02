@@ -92,6 +92,7 @@ def main() -> int:
     parser.add_argument("--allow_low_quality_stats", action="store_true", help="Allow ILP solve on metrics_stats.csv rows flagged as low quality (diagnostic only)")
     parser.add_argument("--allow_transfer_calibration_fallback", action="store_true", help="Allow ILP solve when transfer calibration fell back to neutral defaults (diagnostic only)")
     parser.add_argument("--allow_fallback_graph_trace", action="store_true", help="Allow ILP solve from fallback_leaf_modules graph traces (diagnostic only)")
+    parser.add_argument("--strict_metric_validity", action="store_true", help="Require strictly positive CPU/GPU mean timings for all layers")
     parser.add_argument("--w_time", type=float, default=1.0)
     parser.add_argument("--w_energy", type=float, default=0.0)
     parser.add_argument("--w_transfer", type=float, default=1.0)
@@ -175,7 +176,7 @@ def main() -> int:
             strict_sample_quality=not args.allow_low_quality_stats,
             strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
             strict_graph_trace_source=not args.allow_fallback_graph_trace,
-            strict_metric_validity=False,
+            strict_metric_validity=bool(args.strict_metric_validity),
         )
     else:
         profiles = []
@@ -193,7 +194,7 @@ def main() -> int:
                 strict_sample_quality=not args.allow_low_quality_stats,
                 strict_transfer_calibration=not args.allow_transfer_calibration_fallback,
                 strict_graph_trace_source=not args.allow_fallback_graph_trace,
-                strict_metric_validity=False,
+                strict_metric_validity=bool(args.strict_metric_validity),
             )
             profiles.append(profile)
 

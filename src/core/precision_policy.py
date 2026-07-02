@@ -12,6 +12,10 @@ from core.constants import BACKWARD_FACTOR
 
 logger = logging.getLogger(__name__)
 
+# Preflight timeout policy constants used by the CPU FP16 smoke test.
+FORWARD_PREFLIGHT_TIMEOUT_S = 60.0
+BACKWARD_PREFLIGHT_MIN_TIMEOUT_S = 10.0
+
 
 def cpu_supports_bf16() -> bool:
     try:
@@ -205,20 +209,20 @@ def run_cpu_fp16_model_preflight(model: nn.Module, input_data: Any, timeout_safe
 
     preflight_thread = threading.Thread(target=_run_training_step, daemon=True)
     preflight_thread.start()
-    preflight_thread.join(timeout=60.0)
+    preflight_thread.join(timeout=FORWARD_PREFLIGHT_TIMEOUT_S)
 
     if execution_result["forward_completed"]:
         forward_time_sec = execution_result["forward_time_ms"] / 1000.0
-        backward_timeout = max(10.0, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)
+        backward_timeout = max(BACKWARD_PREFLIGHT_MIN_TIMEOUT_S, forward_time_sec * BACKWARD_FACTOR * timeout_safety_factor)
         logger.debug(
             f"FP16 preflight forward time: {execution_result['forward_time_ms']:.2f}ms, "
             f"calculated backward timeout: {backward_timeout:.2f}s "
             f"(formula: {forward_time_sec:.4f}s × {BACKWARD_FACTOR} × {timeout_safety_factor})"
         )
     else:
-        backward_timeout = 10.0
+        backward_timeout = BACKWARD_PREFLIGHT_MIN_TIMEOUT_S
         logger.warning(
-            f"FP16 preflight forward pass did not complete within 60s timeout; "
+            f"FP16 preflight forward pass did not complete within {FORWARD_PREFLIGHT_TIMEOUT_S:.0f}s timeout; "
             f"using minimum backward timeout of {backward_timeout:.2f}s"
         )
 
@@ -245,7 +249,7 @@ def run_cpu_fp16_model_preflight(model: nn.Module, input_data: Any, timeout_safe
     else:
         result["ok"] = False
         result["reason"] = (
-            f"cpu fp16 forward pass timeout after 60s; "
+            f"cpu fp16 forward pass timeout after {FORWARD_PREFLIGHT_TIMEOUT_S:.0f}s; "
             f"model layers too large for CPU FP16 on this hardware or severe resource limitation"
         )
 

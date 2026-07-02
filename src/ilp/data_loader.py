@@ -591,6 +591,8 @@ def load_ilp_inputs(
     }
     node_mem_gpu_mb = {}
     node_mem_cpu_mb = {}
+    missing_power_rate_layers = []
+
     for _, row in stats.iterrows():
         layer = row["layer"]
         isolated_mem = (
@@ -642,7 +644,19 @@ def load_ilp_inputs(
             power_rates.append(gpu_energy_mean / gpu_time_mean)
         if cpu_time_mean > 0 and cpu_energy_mean > 0:
             power_rates.append(cpu_energy_mean / cpu_time_mean)
-        node_energy_io_j[layer] = max(node_time_io_ms[layer] * (sum(power_rates) / len(power_rates)), 0.0) if power_rates else 0.0
+        if power_rates:
+            node_energy_io_j[layer] = max(node_time_io_ms[layer] * (sum(power_rates) / len(power_rates)), 0.0)
+        else:
+            node_energy_io_j[layer] = 0.0
+            missing_power_rate_layers.append(layer)
+
+    if missing_power_rate_layers:
+        logger.warning(
+            "I/O energy fallback used zero power-rate on %s layer(s) (example: %s); "
+            "node_energy_io_j was set to 0.0 for those layers due to missing positive CPU/GPU energy-time telemetry.",
+            len(missing_power_rate_layers),
+            missing_power_rate_layers[:5],
+        )
 
     measured_node_names = set(node_cost_gpu_ms)
     edges_raw = []

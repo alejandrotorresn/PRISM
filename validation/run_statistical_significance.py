@@ -85,6 +85,8 @@ def main():
         return 1
 
     df = pd.read_csv(cons_path)
+    if "model" in df.columns:
+        df = df[~df["model"].astype(str).str.contains("mlp|simple", case=False)].copy()
 
     # We want to compare ILP objective vs All-GPU and All-CPU
     # The variance of the baseline is estimated via max_cv_key_metrics

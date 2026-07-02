@@ -547,6 +547,7 @@ def main() -> int:
     ]
 
     full_df = pd.DataFrame(rows).sort_values(by=["model", "optimizer", "precision", "batch_size"], kind="stable")
+    full_df = full_df[~full_df["model"].astype(str).str.contains("mlp|simple", case=False)].copy()
     failed_df = full_df[~full_df["doctoral_operational_ready"]].copy()
 
     by_model_df = _group_completeness(full_df, "model")

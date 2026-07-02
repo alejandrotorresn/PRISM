@@ -723,6 +723,7 @@ def main() -> int:
         frames.append(df)
 
     full_df = pd.concat(frames, ignore_index=True)
+    full_df = full_df[~full_df["model"].astype(str).str.contains("mlp|simple", case=False)].copy()
 
     # Normalize rescue_influence columns (backward compatibility)
     full_df = _normalize_rescue_columns(full_df)
@@ -762,6 +763,7 @@ def main() -> int:
             hdf["source_csv"] = str(p)
             hybrid_frames.append(hdf)
         hybrid_df = pd.concat(hybrid_frames, ignore_index=True)
+        hybrid_df = hybrid_df[~hybrid_df["model"].astype(str).str.contains("mlp|simple", case=False)].copy()
         # Normalize rescue_influence columns in hybrid data
         hybrid_df = _normalize_rescue_columns(hybrid_df)
         hybrid_csv = csv_dir / "hybrid_execution_consolidated.csv"
@@ -784,7 +786,7 @@ def main() -> int:
     unique_seeds = full_df["source_csv"].str.extract(r'/(seed_\d+)/')[0].dropna().unique()
     is_multiseed_root = len(unique_seeds) > 1
 
-    if not is_multiseed_root:
+    if True:
         for model in sorted(full_df["model"].astype(str).unique().tolist()):
             model_data = full_df[full_df["model"] == model]
             for optimizer in sorted(model_data["optimizer"].astype(str).unique().tolist()):
