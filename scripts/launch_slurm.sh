@@ -13,6 +13,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 MODULE_NAME="${MODULE_NAME:-Analytics/anaconda3}"
 CONDA_EXE="${CONDA_EXE:-/opt/ohpc/pub/Analytics/anaconda3/bin/conda}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
+GPU_VRAM_FALLBACK_MB="${GPU_VRAM_FALLBACK_MB:-40960}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
@@ -234,6 +235,7 @@ run_campaign() {
             REPORTS_DIR="$seed_reports_dir" \
             LOG_DIR="$PROJECT_ROOT/logs/thesis_mode" \
             DATASETS_DIR="${DATASETS_DIR:-$PROJECT_ROOT/datasets}" \
+            GPU_VRAM_FALLBACK_MB="$GPU_VRAM_FALLBACK_MB" \
             DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}" \
             RUN_PROFILING="${RUN_PROFILING:-true}" \
             RUN_ILP="${RUN_ILP:-true}" \
@@ -290,6 +292,7 @@ main() {
     log_msg "Project root: $PROJECT_ROOT"
     log_msg "Slurm job id: ${SLURM_JOB_ID:-unset}"
     log_msg "Node list: ${SLURM_JOB_NODELIST:-unset}"
+    log_msg "GPU VRAM fallback: ${GPU_VRAM_FALLBACK_MB} MiB"
     activate_conda_env
     prepare_storage
     configure_cpu_runtime

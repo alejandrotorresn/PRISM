@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
 
 # ==============================================================================
 # SLURM submission wrapper for PRISM final thesis campaigns.
@@ -17,6 +16,8 @@ set -Eeuo pipefail
 #SBATCH --output=logs/slurm/%x_%j.out
 #SBATCH --error=logs/slurm/%x_%j.err
 
+set -Eeuo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-/home/latorresn/PRISM}"
 LAUNCH_SCRIPT="${LAUNCH_SCRIPT:-$PROJECT_ROOT/scripts/launch_slurm.sh}"
@@ -24,6 +25,7 @@ LAUNCH_SCRIPT="${LAUNCH_SCRIPT:-$PROJECT_ROOT/scripts/launch_slurm.sh}"
 MODULE_NAME="${MODULE_NAME:-Analytics/anaconda3}"
 CONDA_EXE="${CONDA_EXE:-/opt/ohpc/pub/Analytics/anaconda3/bin/conda}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
+GPU_VRAM_FALLBACK_MB="${GPU_VRAM_FALLBACK_MB:-40960}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 RUN_HYBRID="${RUN_HYBRID:-true}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
@@ -133,6 +135,7 @@ log_msg "Node list: ${SLURM_JOB_NODELIST:-unknown}"
 log_msg "Requested profile: $CAMPAIGN_PROFILE"
 log_msg "Seeds config: SINGLE_SEED=$SINGLE_SEED FULL_SEEDS_CSV=$FULL_SEEDS_CSV"
 log_msg "Project root: $PROJECT_ROOT"
+log_msg "GPU VRAM fallback: ${GPU_VRAM_FALLBACK_MB} MiB"
 
 cd "$PROJECT_ROOT"
 
@@ -152,6 +155,7 @@ CAMPAIGN_PROFILE="$CAMPAIGN_PROFILE" \
 MODULE_NAME="$MODULE_NAME" \
 CONDA_EXE="$CONDA_EXE" \
 CONDA_ENV_NAME="$CONDA_ENV_NAME" \
+GPU_VRAM_FALLBACK_MB="$GPU_VRAM_FALLBACK_MB" \
 DATA_MOUNT_SRC="$DATA_MOUNT_SRC" \
 FULL_SEEDS_CSV="$FULL_SEEDS_CSV" \
 SINGLE_SEED="$SINGLE_SEED" \
