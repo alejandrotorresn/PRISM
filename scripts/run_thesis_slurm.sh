@@ -26,6 +26,8 @@ MODULE_NAME="${MODULE_NAME:-Analytics/anaconda3}"
 CONDA_EXE="${CONDA_EXE:-/opt/ohpc/pub/Analytics/anaconda3/bin/conda}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
 GPU_VRAM_FALLBACK_MB="${GPU_VRAM_FALLBACK_MB:-40960}"
+# Slurm batch jobs commonly lack a user systemd bus; disable cgroup wrapper by default here.
+USE_CGROUP_MEM_LIMIT="${USE_CGROUP_MEM_LIMIT:-false}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 RUN_HYBRID="${RUN_HYBRID:-true}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
@@ -136,6 +138,7 @@ log_msg "Requested profile: $CAMPAIGN_PROFILE"
 log_msg "Seeds config: SINGLE_SEED=$SINGLE_SEED FULL_SEEDS_CSV=$FULL_SEEDS_CSV"
 log_msg "Project root: $PROJECT_ROOT"
 log_msg "GPU VRAM fallback: ${GPU_VRAM_FALLBACK_MB} MiB"
+log_msg "USE_CGROUP_MEM_LIMIT: ${USE_CGROUP_MEM_LIMIT}"
 
 cd "$PROJECT_ROOT"
 
@@ -156,6 +159,7 @@ MODULE_NAME="$MODULE_NAME" \
 CONDA_EXE="$CONDA_EXE" \
 CONDA_ENV_NAME="$CONDA_ENV_NAME" \
 GPU_VRAM_FALLBACK_MB="$GPU_VRAM_FALLBACK_MB" \
+USE_CGROUP_MEM_LIMIT="$USE_CGROUP_MEM_LIMIT" \
 DATA_MOUNT_SRC="$DATA_MOUNT_SRC" \
 FULL_SEEDS_CSV="$FULL_SEEDS_CSV" \
 SINGLE_SEED="$SINGLE_SEED" \
