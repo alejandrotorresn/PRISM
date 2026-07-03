@@ -132,14 +132,26 @@ def main():
             res["significant_vs_gpu"] = res["p_value_vs_gpu"] < 0.05
         results.append(res)
 
-    out_df = pd.DataFrame(results)
+    cols = [
+        "model", "gpu_budget_mb", "ilp_objective", "n_samples",
+        "cohens_d_vs_cpu", "p_value_vs_cpu", "significant_vs_cpu",
+        "cohens_d_vs_gpu", "p_value_vs_gpu", "significant_vs_gpu",
+    ]
+    if results:
+        out_df = pd.DataFrame(results)
+    else:
+        out_df = pd.DataFrame(columns=cols)
+
     out_path = Path(args.output_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out_path, index=False)
     print(f"Statistical significance tests written to {out_path}")
     try:
-        _plot_statistical_validity(out_df, out_path)
-        print("Statistical validity plots generated successfully.")
+        if not out_df.empty and "cohens_d_vs_cpu" in out_df.columns:
+            _plot_statistical_validity(out_df, out_path)
+            print("Statistical validity plots generated successfully.")
+        else:
+            print("No valid rows for statistical validity plotting; skipping plots.")
     except Exception as e:
         print(f"Error generating statistical validity plots: {e}")
     return 0

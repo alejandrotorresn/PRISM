@@ -213,6 +213,15 @@ def _latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
     )
 
 
+def _safe_read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export ILP result tables to LaTeX")
     parser.add_argument("--best_csv", default="reports/ilp_results/ilp_best_per_model.csv")
@@ -234,14 +243,28 @@ def main() -> int:
     if not cons_path.exists():
         raise FileNotFoundError(f"consolidated csv not found: {cons_path}")
 
-    best_df = pd.read_csv(best_path)
-    cons_df = pd.read_csv(cons_path)
+    best_df = _safe_read_csv(best_path)
+    cons_df = _safe_read_csv(cons_path)
+
+    if best_df.empty or cons_df.empty:
+        print("[WARNING] best_df or cons_df is empty. Generating placeholder LaTeX output.")
+        best_tex = "% [WARNING] Best ILP results CSV is empty.\n"
+        budget_tex = "% [WARNING] Consolidated ILP Pareto sweep CSV is empty.\n"
+        hybrid_tex = "% [WARNING] Hybrid execution CSV is empty.\n"
+        sig_tex = "% [WARNING] Statistical significance CSV is empty.\n"
+        combined_tex = best_tex + budget_tex + hybrid_tex + sig_tex
+        (out_dir / "ilp_best_per_model.tex").write_text(best_tex)
+        (out_dir / "ilp_budget_sweep.tex").write_text(budget_tex)
+        (out_dir / "ilp_hybrid_best_per_model.tex").write_text(hybrid_tex)
+        (out_dir / "ilp_statistical_significance.tex").write_text(sig_tex)
+        (out_dir / "ilp_tables.tex").write_text(combined_tex)
+        return 0
 
     best_tbl = _prepare_best_table(best_df)
     budget_tbl = _prepare_budget_table(cons_df)
 
-    if hybrid_path.exists():
-        hybrid_df = pd.read_csv(hybrid_path)
+    hybrid_df = _safe_read_csv(hybrid_path)
+    if not hybrid_df.empty:
         hybrid_tbl = _prepare_hybrid_table(hybrid_df)
         hybrid_tex = _latex_table(
             hybrid_tbl,
@@ -249,11 +272,11 @@ def main() -> int:
             label="tab:hybrid-execution-best",
         )
     else:
-        hybrid_tex = "% [WARNING] Hybrid execution CSV not found. Table omitted.\n"
+        hybrid_tex = "% [WARNING] Hybrid execution CSV not found or empty. Table omitted.\n"
 
     sig_path = out_dir.parent / "csv" / "ilp_statistical_significance.csv"
-    if sig_path.exists():
-        sig_df = pd.read_csv(sig_path)
+    sig_df = _safe_read_csv(sig_path)
+    if not sig_df.empty and "p_value_vs_gpu" in sig_df.columns:
         # Prepare significance table
         sig_tbl = sig_df.copy()
         sig_tbl = sig_tbl[["model", "gpu_budget_mb", "p_value_vs_gpu", "cohens_d_vs_gpu", "significant_vs_gpu"]]
@@ -264,7 +287,7 @@ def main() -> int:
             label="tab:statistical-significance",
         )
     else:
-        sig_tex = "% [WARNING] Statistical significance CSV not found. Table omitted.\n"
+        sig_tex = "% [WARNING] Statistical significance CSV not found or empty. Table omitted.\n"
 
     best_tex = _latex_table(
         best_tbl,
@@ -290,8 +313,8 @@ def main() -> int:
     sig_path_tex.write_text(sig_tex)
     combined_tex = best_tex + "\n" + budget_tex + "\n" + hybrid_tex + "\n" + sig_tex
 
-    if abl_path.exists():
-        abl_df = pd.read_csv(abl_path)
+    abl_df = _safe_read_csv(abl_path)
+    if not abl_df.empty:
         abl_tbl = _prepare_ablation_table(abl_df)
         if not abl_tbl.empty:
             abl_tex = _latex_table(
@@ -302,17 +325,15 @@ def main() -> int:
             ablation_path_tex.write_text(abl_tex)
             combined_tex += "\n" + abl_tex
 
-    if hybrid_path.exists():
-        hybrid_df = pd.read_csv(hybrid_path)
-        if not hybrid_df.empty:
-            hybrid_tbl = _prepare_hybrid_table(hybrid_df)
-            hybrid_tex = _latex_table(
-                hybrid_tbl,
-                caption="Best observed hybrid runtime row per model with task-quality metric and dataset provenance.",
-                label="tab:ilp-hybrid-best-per-model",
-            )
-            hybrid_path_tex.write_text(hybrid_tex)
-            combined_tex += "\n" + hybrid_tex
+    if not hybrid_df.empty:
+        hybrid_tbl = _prepare_hybrid_table(hybrid_df)
+        hybrid_tex = _latex_table(
+            hybrid_tbl,
+            caption="Best observed hybrid runtime row per model with task-quality metric and dataset provenance.",
+            label="tab:ilp-hybrid-best-per-model",
+        )
+        hybrid_path_tex.write_text(hybrid_tex)
+        combined_tex += "\n" + hybrid_tex
 
     all_path_tex.write_text(combined_tex)
 

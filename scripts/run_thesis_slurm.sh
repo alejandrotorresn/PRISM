@@ -26,8 +26,9 @@ MODULE_NAME="${MODULE_NAME:-Analytics/anaconda3}"
 CONDA_EXE="${CONDA_EXE:-/opt/ohpc/pub/Analytics/anaconda3/bin/conda}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
 GPU_VRAM_FALLBACK_MB="${GPU_VRAM_FALLBACK_MB:-40960}"
-# Slurm batch jobs commonly lack a user systemd bus; disable cgroup wrapper by default here.
-USE_CGROUP_MEM_LIMIT="${USE_CGROUP_MEM_LIMIT:-false}"
+# Slurm batch jobs commonly lack a user systemd bus.
+# Use a Slurm-specific variable to avoid inheriting USE_CGROUP_MEM_LIMIT=true from user shells.
+USE_CGROUP_MEM_LIMIT="${SLURM_USE_CGROUP_MEM_LIMIT:-false}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 RUN_HYBRID="${RUN_HYBRID:-true}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"

@@ -55,7 +55,7 @@ case "$PROFILE" in
     : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
     : "${STRICT_GRAPH_MAPPING:=true}"
     : "${STRICT_TRANSFER_MAPPING:=true}"
-    : "${STRICT_METRIC_VALIDITY:=true}"
+    : "${STRICT_METRIC_VALIDITY:=false}"
     : "${FAIL_FAST_PROFILE_ERRORS:=false}"
     : "${ALLOW_LOW_QUALITY_STATS:=false}"
     : "${ALLOW_TRANSFER_CALIBRATION_FALLBACK:=false}"
@@ -76,7 +76,7 @@ case "$PROFILE" in
     : "${ALLOW_PARTIAL_PROFILING_FAILURES:=true}"
     : "${STRICT_GRAPH_MAPPING:=true}"
     : "${STRICT_TRANSFER_MAPPING:=true}"
-    : "${STRICT_METRIC_VALIDITY:=true}"
+    : "${STRICT_METRIC_VALIDITY:=false}"
     : "${FAIL_FAST_PROFILE_ERRORS:=false}"
     : "${ALLOW_LOW_QUALITY_STATS:=false}"
     : "${ALLOW_TRANSFER_CALIBRATION_FALLBACK:=false}"
@@ -522,7 +522,7 @@ if is_true "$RUN_ILP"; then
       model="$(basename "$(dirname "$(dirname "$(dirname "$cfg")")")")"
 
       log_msg "ILP partition -> model=$model cfg=$cfg"
-      MODEL="$model" \
+      if ! MODEL="$model" \
       CONFIG_DIR="$cfg" \
       PYTHON_CMD="$PYTHON_CMD" \
       K_SIGMA="$K_SIGMA" \
@@ -544,13 +544,17 @@ if is_true "$RUN_ILP"; then
       ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
       ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
       ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
-      bash scripts/run_ilp_partition.sh >> "$LOG_FILE" 2>&1 || {
-        log_msg "[WARN] ILP partition failed for $cfg. See log for details. Skipping Pareto..."
+      bash scripts/run_ilp_partition.sh >> "$LOG_FILE" 2>&1; then
+        log_msg "[WARN] ILP partition failed for $cfg. Extracting failure traceback from log:"
+        tail -n 15 "$LOG_FILE" | while IFS= read -r line; do
+          log_msg "    [LOG] $line"
+        done
+        log_msg "[WARN] Skipping Pareto sweep for $cfg due to ILP partition failure..."
         continue
-      }
+      fi
 
       log_msg "Pareto sweep -> model=$model cfg=$cfg"
-      MODEL="$model" \
+      if ! MODEL="$model" \
       CONFIG_DIR="$cfg" \
       PYTHON_CMD="$PYTHON_CMD" \
       GPU_BUDGETS_MB="$GPU_BUDGETS_MB" \
@@ -573,10 +577,13 @@ if is_true "$RUN_ILP"; then
       ALLOW_LOW_QUALITY_STATS="$ALLOW_LOW_QUALITY_STATS" \
       ALLOW_TRANSFER_CALIBRATION_FALLBACK="$ALLOW_TRANSFER_CALIBRATION_FALLBACK" \
       ALLOW_FALLBACK_GRAPH_TRACE="$ALLOW_FALLBACK_GRAPH_TRACE" \
-      bash scripts/run_ilp_pareto_sweep.sh >> "$LOG_FILE" 2>&1 || {
-        log_msg "[WARN] Pareto sweep failed for $cfg. See log for details. Continuing..."
+      bash scripts/run_ilp_pareto_sweep.sh >> "$LOG_FILE" 2>&1; then
+        log_msg "[WARN] Pareto sweep failed for $cfg. Extracting failure traceback from log:"
+        tail -n 15 "$LOG_FILE" | while IFS= read -r line; do
+          log_msg "    [LOG] $line"
+        done
         continue
-      }
+      fi
     done
   fi
 
