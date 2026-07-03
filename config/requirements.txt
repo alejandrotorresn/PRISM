@@ -39,3 +39,6 @@ pytest>=8.0
 # CPU energy measurement (Intel RAPL via sysfs on Linux)
 # Requires: /sys/class/powercap/intel-rapl/* accessible (may need sudo)
 pyRAPL>=0.2.3
+
+# Optional experiment tracking / telemetry backend support
+pymongo>=4.0.0

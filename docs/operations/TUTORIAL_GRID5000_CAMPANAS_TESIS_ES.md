@@ -31,11 +31,13 @@ La interfaz canonica de ejecucion en frontend es por banderas de [scripts/run_th
 
 ## 4. Ejecucion recomendada
 
+Al haber eliminado las directivas fijas de cola y clúster dentro de `scripts/run_thesis.sh`, se debe indicar explícitamente en la línea de comando el clúster, la cola, el modo de despliegue (`-t deploy`) y el tiempo solicitado (`-l nodes=1,walltime=...`). A continuación se muestran los comandos adaptados para el clúster **`kinovis`** en Grenoble:
+
 ### 4.1 Verificacion rapida (quick_smoke)
 Comando:
 
 ```bash
-oarsub -S "./scripts/run_thesis.sh --profile quick_smoke --single-seed 42 --non-full-repeats 1"
+oarsub -q besteffort -t deploy -p "cluster='kinovis'" -l nodes=1,walltime=2:00:00 -S "./scripts/run_thesis.sh --profile quick_smoke --single-seed 42 --non-full-repeats 1"
 ```
 
 Uso: validar que despliegue, entorno, rutas, permisos, logs y artefactos funcionan.
@@ -44,7 +46,7 @@ Uso: validar que despliegue, entorno, rutas, permisos, logs y artefactos funcion
 Comando:
 
 ```bash
-oarsub -S "./scripts/run_thesis.sh --profile doctoral_minimal --single-seed 42 --non-full-repeats 2"
+oarsub -q besteffort -t deploy -p "cluster='kinovis'" -l nodes=1,walltime=6:00:00 -S "./scripts/run_thesis.sh --profile doctoral_minimal --single-seed 42 --non-full-repeats 2"
 ```
 
 Uso: validar pipeline completo en escala intermedia antes de produccion final.
@@ -54,7 +56,7 @@ En modo estricto, el launcher eleva automaticamente esta configuracion a 2 repli
 Comando:
 
 ```bash
-oarsub -S "./scripts/run_thesis.sh --profile doctoral_diagnostic --single-seed 42 --non-full-repeats 1"
+oarsub -q besteffort -t deploy -p "cluster='kinovis'" -l nodes=1,walltime=4:00:00 -S "./scripts/run_thesis.sh --profile doctoral_diagnostic --single-seed 42 --non-full-repeats 1"
 ```
 
 Uso: depuracion metodologica y cobertura operativa cuando se requiere habilitar `fallbacks` explicitos. Sus resultados no forman parte del corpus principal de evidencia doctoral.
@@ -63,7 +65,7 @@ Uso: depuracion metodologica y cobertura operativa cuando se requiere habilitar 
 Comando:
 
 ```bash
-oarsub -S "./scripts/run_thesis.sh --profile doctoral_full --full-seeds 42,43,44,45,46 --full-repeats 2"
+oarsub -q besteffort -t deploy -p "cluster='kinovis'" -l nodes=1,walltime=48:00:00 -S "./scripts/run_thesis.sh --profile doctoral_full --full-seeds 42,43,44,45,46 --full-repeats 2"
 ```
 
 Uso: producir datos finales con estimacion de variabilidad y robustez.

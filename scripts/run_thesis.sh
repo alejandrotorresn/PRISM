@@ -2,13 +2,10 @@
 set -Eeuo pipefail
 
 # OAR submission wrapper for Grid5000 final thesis campaigns.
-# Submit with: oarsub -S ./scripts/run_thesis.sh
+# Submit passing queue, cluster, and walltime via command line:
+#   oarsub -q besteffort -t deploy -p "cluster='kinovis'" -l nodes=1,walltime=48:00:00 -S "./scripts/run_thesis.sh --profile doctoral_full"
 
 #OAR -n PRISM_profiling
-#OAR -q default
-#OAR -p chuc
-#OAR -t deploy
-#OAR -l nodes=1,walltime=48:00:00
 #OAR -O prism_job.%jobid%.output
 #OAR -E prism_job.%jobid%.error
 

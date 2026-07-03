@@ -32,6 +32,8 @@ dependencies:
   - scipy>=1.10
   # Test runner
   - pytest>=8.0
+  # Optional experiment tracking / telemetry backend support
+  - pymongo>=4.0
   - pip:
       # CPU energy (RAPL). Requires read access to /sys/class/powercap/intel-rapl/* on Linux
       - pyRAPL>=0.2.3
