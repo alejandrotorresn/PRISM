@@ -25,6 +25,7 @@ KADEPLOY_HOME="${KADEPLOY_HOME:-/home/ltorresnino}"
 CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
 RUN_HYBRID="${RUN_HYBRID:-true}"
+MODELS_CSV="${MODELS_CSV:-}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
@@ -39,6 +40,10 @@ parse_args() {
         case "$1" in
             --profile)
                 CAMPAIGN_PROFILE="$2"
+                shift 2
+                ;;
+            --models)
+                MODELS_CSV="$2"
                 shift 2
                 ;;
             --single-seed)
@@ -292,10 +297,11 @@ ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" \
      DATA_MOUNT_SRC='$DATA_MOUNT_SRC' \
      REPORTS_MOUNT_SRC='$REPORTS_MOUNT_SRC' \
      LOGS_MOUNT_SRC='$LOGS_MOUNT_SRC' \
-    FULL_SEEDS_CSV='$FULL_SEEDS_CSV' \
-    SINGLE_SEED='$SINGLE_SEED' \
-    FULL_REPEATS_PER_SEED='$FULL_REPEATS_PER_SEED' \
-    NON_FULL_REPEATS='$NON_FULL_REPEATS' \
+     MODELS_CSV='$MODELS_CSV' \
+     FULL_SEEDS_CSV='$FULL_SEEDS_CSV' \
+     SINGLE_SEED='$SINGLE_SEED' \
+     FULL_REPEATS_PER_SEED='$FULL_REPEATS_PER_SEED' \
+     NON_FULL_REPEATS='$NON_FULL_REPEATS' \
      RUN_HYBRID='$RUN_HYBRID' \
      '$REMOTE_LAUNCH_SCRIPT'"
 

@@ -211,6 +211,7 @@ run_campaign() {
             fi
 
             PROFILE="$CAMPAIGN_PROFILE" \
+            MODELS_CSV="$MODELS_CSV" \
             PYTHON_CMD="$PYTHON_CMD" \
             HOST_TAG="$host_tag" \
             SEED_BASE="$campaign_seed" \
