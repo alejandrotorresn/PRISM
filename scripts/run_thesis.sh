@@ -282,7 +282,7 @@ ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" "mkdir -p '$PROJECT_ROOT/scripts'"
 
 scp "${SSH_OPTS[@]}" "$RESOLVED_LOCAL_LAUNCH_SCRIPT" "root@$TARGET_NODE:$REMOTE_LAUNCH_SCRIPT"
 
-for dep in run_thesis_mode.sh run_experiments.sh run_ilp_partition.sh run_ilp_pareto_sweep.sh sanitize_cuda_env.sh audit_experimental_grid.sh; do
+for dep in run_thesis_mode.sh run_experiments.sh run_ilp_partition.sh run_ilp_pareto_sweep.sh sanitize_cuda_env.sh audit_experimental_grid.sh generate_ilp_report_assets.sh export_ilp_tables_latex.sh run_statistical_significance.sh; do
     if [ -f "$LOCAL_SCRIPTS_DIR/$dep" ]; then
         scp "${SSH_OPTS[@]}" "$LOCAL_SCRIPTS_DIR/$dep" "root@$TARGET_NODE:$PROJECT_ROOT/scripts/$dep"
     fi

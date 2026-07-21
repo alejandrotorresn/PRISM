@@ -1,12 +1,11 @@
+import argparse
 import os
 import glob
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-def generate_energy_tradeoff_plots():
-    base_dir = "data/zephyr/results_thesis_mode/doctoral_full"
-    output_dir = "reports/zephyr/doctoral_full/plots/energy_tradeoff"
+def generate_energy_tradeoff_plots(base_dir: str, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
     
     metrics_files = glob.glob(f"{base_dir}/*/*/*/*/*_metrics_stats.csv")
@@ -148,5 +147,22 @@ def generate_energy_tradeoff_plots():
 
     print(f"\\nFinished. Generated {generated_count} plots in: {output_dir}")
 
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate energy/power tradeoff plots for a thesis-mode result tree.")
+    parser.add_argument(
+        "--input_root",
+        default="data/zephyr/results_thesis_mode/doctoral_full",
+        help="Root directory containing model/optimizer/precision/batch_* folders",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="reports/zephyr/doctoral_full/plots/energy_tradeoff",
+        help="Directory where plots will be written",
+    )
+    args = parser.parse_args()
+    generate_energy_tradeoff_plots(args.input_root, args.output_dir)
+    return 0
+
 if __name__ == "__main__":
-    generate_energy_tradeoff_plots()
+    raise SystemExit(main())

@@ -143,6 +143,9 @@ def _best_hybrid_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _plot_model_objective_curves(model_df: pd.DataFrame, model: str, optimizer: str, precision: str, batch_size: str, out_dir: Path, global_min_vram: float, global_max_vram: float) -> None:
+    if "source_csv" in model_df.columns and model_df["source_csv"].nunique() > 1:
+        best_src = model_df.groupby("source_csv").size().idxmax()
+        model_df = model_df[model_df["source_csv"] == best_src].copy()
     model_df = model_df.sort_values(by=["gpu_budget_mb"], kind="stable")
 
     x = model_df["gpu_budget_mb"].astype(float)
@@ -706,6 +709,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate consolidated ILP report assets from Pareto sweep CSV files")
     parser.add_argument("--input_root", default="data/test-m4", help="Root folder to scan for *_pareto_sweep.csv")
     parser.add_argument("--output_dir", default="reports/ilp_results", help="Output folder for tables/plots")
+    parser.add_argument(
+        "--exclude_models_regex",
+        default="",
+        help="Optional regex to exclude model names from consolidation (example: 'mlp|simple')",
+    )
     args = parser.parse_args()
 
     input_root = Path(args.input_root)
@@ -723,7 +731,15 @@ def main() -> int:
         frames.append(df)
 
     full_df = pd.concat(frames, ignore_index=True)
-    full_df = full_df[~full_df["model"].astype(str).str.contains("mlp|simple", case=False)].copy()
+    if args.exclude_models_regex:
+        full_df = full_df[
+            ~full_df["model"].astype(str).str.contains(args.exclude_models_regex, case=False, regex=True)
+        ].copy()
+
+    if full_df.empty:
+        raise ValueError(
+            f"No rows available after applying model filters. input_root={input_root} exclude_models_regex={args.exclude_models_regex!r}"
+        )
 
     # Normalize rescue_influence columns (backward compatibility)
     full_df = _normalize_rescue_columns(full_df)
@@ -763,7 +779,10 @@ def main() -> int:
             hdf["source_csv"] = str(p)
             hybrid_frames.append(hdf)
         hybrid_df = pd.concat(hybrid_frames, ignore_index=True)
-        hybrid_df = hybrid_df[~hybrid_df["model"].astype(str).str.contains("mlp|simple", case=False)].copy()
+        if args.exclude_models_regex:
+            hybrid_df = hybrid_df[
+                ~hybrid_df["model"].astype(str).str.contains(args.exclude_models_regex, case=False, regex=True)
+            ].copy()
         # Normalize rescue_influence columns in hybrid data
         hybrid_df = _normalize_rescue_columns(hybrid_df)
         hybrid_csv = csv_dir / "hybrid_execution_consolidated.csv"
@@ -771,6 +790,11 @@ def main() -> int:
         hybrid_best_df = _best_hybrid_rows(hybrid_df)
         hybrid_best_csv = csv_dir / "hybrid_execution_best_per_model.csv"
         hybrid_best_df.to_csv(hybrid_best_csv, index=False)
+
+    full_df["gpu_budget_mb"] = pd.to_numeric(full_df["gpu_budget_mb"], errors="coerce")
+    full_df = full_df[full_df["gpu_budget_mb"].notna()].copy()
+    if full_df.empty:
+        raise ValueError(f"No valid gpu_budget_mb values found under input_root={input_root}")
 
     base_min_vram = float(full_df["gpu_budget_mb"].min())
     base_max_vram = float(full_df["gpu_budget_mb"].max())
@@ -874,6 +898,9 @@ def main() -> int:
 
 
 def _plot_model_energy_curves(model_df: pd.DataFrame, model: str, optimizer: str, precision: str, batch_size: str, out_dir: Path, global_min_vram: float, global_max_vram: float) -> None:
+    if "source_csv" in model_df.columns and model_df["source_csv"].nunique() > 1:
+        best_src = model_df.groupby("source_csv").size().idxmax()
+        model_df = model_df[model_df["source_csv"] == best_src].copy()
     model_df = model_df.sort_values(by=["gpu_budget_mb"], kind="stable")
 
     if "ilp_energy_j" not in model_df.columns:

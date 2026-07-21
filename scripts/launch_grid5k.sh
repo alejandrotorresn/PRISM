@@ -19,8 +19,13 @@ FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
 DATA_MOUNT_SRC="${DATA_MOUNT_SRC:-/home/ltorresnino/data}"
 DATA_LINK="${DATA_LINK:-$PROJECT_ROOT/data}"
-LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs/grid5k}"
-LOG_FILE="${LOG_FILE:-$LOG_DIR/grid5k_launch_$(date +%Y%m%d_%H%M%S).log}"
+_DEFAULT_STORAGE_BASE="${DATA_MOUNT_SRC%/data}"
+REPORTS_MOUNT_SRC="${REPORTS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/reports}"
+REPORTS_LINK="${REPORTS_LINK:-$PROJECT_ROOT/reports}"
+LOGS_MOUNT_SRC="${LOGS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/logs}"
+LOGS_LINK="${LOGS_LINK:-$PROJECT_ROOT/logs}"
+LOG_DIR="${LOG_DIR:-$LOGS_LINK/grid5k}"
+LOG_FILE="${LOG_DIR}/grid5k_launch_$(date +%Y%m%d_%H%M%S).log}"
 
 mkdir -p "$LOG_DIR"
 
@@ -83,44 +88,52 @@ activate_conda_env() {
 }
 
 prepare_storage() {
-    if [ ! -d "$DATA_MOUNT_SRC" ]; then
-        mkdir -p "$DATA_MOUNT_SRC" 2>/dev/null || true
-    fi
+    link_or_migrate_dir() {
+        local mount_src="$1"
+        local link_path="$2"
+        local label="$3"
 
-    if [ -d "$DATA_MOUNT_SRC" ]; then
-        if [ -L "$DATA_LINK" ]; then
-            local current_target
-            current_target="$(readlink "$DATA_LINK")"
-            if [ "$current_target" != "$DATA_MOUNT_SRC" ]; then
-                rm -f "$DATA_LINK"
-                ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
-            fi
-        elif [ -e "$DATA_LINK" ]; then
-            if [ -d "$DATA_LINK" ]; then
-                local first_entry
-                first_entry="$(find "$DATA_LINK" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
-                if [ -n "$first_entry" ]; then
-                    log_msg "Migrating existing data directory into home-backed storage: $DATA_LINK -> $DATA_MOUNT_SRC"
-                    mkdir -p "$DATA_MOUNT_SRC"
-                    cp -r "$DATA_LINK"/. "$DATA_MOUNT_SRC"/
-                else
-                    log_msg "Replacing empty data directory with symlink: $DATA_LINK -> $DATA_MOUNT_SRC"
-                fi
-                rm -rf "$DATA_LINK"
-                ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
-            else
-                log_msg "WARNING: $DATA_LINK exists and is not a directory/symlink. Keeping it as-is."
-            fi
-        else
-            ln -s "$DATA_MOUNT_SRC" "$DATA_LINK"
+        if [ ! -d "$mount_src" ]; then
+            mkdir -p "$mount_src" 2>/dev/null || true
         fi
-        log_msg "Data path ready: $DATA_LINK -> $DATA_MOUNT_SRC"
-    else
-        mkdir -p "$DATA_LINK"
-        log_msg "WARNING: $DATA_MOUNT_SRC not available. Using local path: $DATA_LINK"
-    fi
 
-    mkdir -p "$PROJECT_ROOT/logs"
+        if [ -d "$mount_src" ]; then
+            if [ -L "$link_path" ]; then
+                local current_target
+                current_target="$(readlink "$link_path")"
+                if [ "$current_target" != "$mount_src" ]; then
+                    rm -f "$link_path"
+                    ln -s "$mount_src" "$link_path"
+                fi
+            elif [ -e "$link_path" ]; then
+                if [ -d "$link_path" ]; then
+                    local first_entry
+                    first_entry="$(find "$link_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
+                    if [ -n "$first_entry" ]; then
+                        log_msg "Migrating existing $label directory into home-backed storage: $link_path -> $mount_src"
+                        mkdir -p "$mount_src"
+                        cp -r "$link_path"/. "$mount_src"/
+                    else
+                        log_msg "Replacing empty $label directory with symlink: $link_path -> $mount_src"
+                    fi
+                    rm -rf "$link_path"
+                    ln -s "$mount_src" "$link_path"
+                else
+                    log_msg "WARNING: $link_path exists and is not a directory/symlink. Keeping it as-is."
+                fi
+            else
+                ln -s "$mount_src" "$link_path"
+            fi
+            log_msg "$label path ready: $link_path -> $mount_src"
+        else
+            mkdir -p "$link_path"
+            log_msg "WARNING: $mount_src not available. Using local path: $link_path"
+        fi
+    }
+
+    link_or_migrate_dir "$DATA_MOUNT_SRC" "$DATA_LINK" "Data"
+    link_or_migrate_dir "$REPORTS_MOUNT_SRC" "$REPORTS_LINK" "Reports"
+    link_or_migrate_dir "$LOGS_MOUNT_SRC" "$LOGS_LINK" "Logs"
 }
 
 configure_cpu_runtime() {
@@ -182,7 +195,7 @@ run_campaign() {
     host_tag="${HOST_TAG:-$(hostname)}"
     run_namespace="${RUN_NAMESPACE:-job_${OAR_JOB_ID:-adhoc}_$(date +%Y%m%d_%H%M%S)}"
     base_output_root="${BASE_OUTPUT_DIR:-$DATA_LINK/$host_tag/thesis_runs/$run_namespace}"
-    reports_root="${REPORTS_DIR:-$PROJECT_ROOT/reports/ilp_results/grid5k_${host_tag}_thesis_mode}"
+    reports_root="${REPORTS_DIR:-$REPORTS_LINK/ilp_results/grid5k_${host_tag}_thesis_mode}"
 
     log_msg "Run namespace: $run_namespace"
     log_msg "Base output root: $base_output_root"
@@ -218,7 +231,7 @@ run_campaign() {
             REPEATS="$run_repeats" \
             BASE_OUTPUT_DIR="$seed_output_dir" \
             REPORTS_DIR="$seed_reports_dir" \
-            LOG_DIR="$PROJECT_ROOT/logs/thesis_mode" \
+            LOG_DIR="$LOGS_LINK/thesis_mode" \
             DATASETS_DIR="${DATASETS_DIR:-$PROJECT_ROOT/datasets}" \
             DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}" \
             RUN_PROFILING="${RUN_PROFILING:-true}" \

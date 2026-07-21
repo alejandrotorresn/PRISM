@@ -24,23 +24,39 @@ import numpy as np
 sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
 sns.set_palette("colorblind")
 
+
+def _collect_baseline_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Build a common baseline dataframe using Greedy as primary baseline."""
+    out = df.copy()
+    out["ilp_objective"] = pd.to_numeric(out.get("ilp_objective"), errors="coerce")
+    out["greedy_objective"] = pd.to_numeric(out.get("greedy_objective"), errors="coerce")
+    out["all_cpu_objective"] = pd.to_numeric(out.get("all_cpu_objective"), errors="coerce")
+
+    # Primary baseline is Greedy. Fallback to All-CPU only if Greedy is missing.
+    out["baseline_objective"] = out["greedy_objective"]
+    fallback_mask = out["baseline_objective"].isna() | (out["baseline_objective"] <= 0)
+    out.loc[fallback_mask, "baseline_objective"] = out.loc[fallback_mask, "all_cpu_objective"]
+
+    out = out[(out["ilp_objective"] > 0) & (out["baseline_objective"] > 0)].copy()
+    if out.empty:
+        return out
+
+    out["speedup_vs_baseline"] = out["baseline_objective"] / out["ilp_objective"]
+    return out
+
 def plot_speedup_distribution(best_df: pd.DataFrame, out_dir: Path):
-    if "all_cpu_objective" not in best_df.columns or "ilp_objective" not in best_df.columns:
+    if "ilp_objective" not in best_df.columns:
         return
-        
-    df = best_df.copy()
-    df["all_cpu_objective"] = pd.to_numeric(df["all_cpu_objective"], errors="coerce")
-    df["ilp_objective"] = pd.to_numeric(df["ilp_objective"], errors="coerce")
-    
-    # Filter valid rows
-    df = df[(df["all_cpu_objective"] > 0) & (df["ilp_objective"] > 0)].copy()
-    df["speedup_vs_cpu"] = df["all_cpu_objective"] / df["ilp_objective"]
+
+    df = _collect_baseline_df(best_df)
+    if df.empty:
+        return
     
     fig, ax = plt.subplots(figsize=(12, 6))
-    sns.violinplot(data=df, x="server_name", y="speedup_vs_cpu", ax=ax, density_norm="width", inner="quartile", palette="muted")
+    sns.violinplot(data=df, x="server_name", y="speedup_vs_baseline", ax=ax, density_norm="width", inner="quartile", palette="muted")
     
-    ax.axhline(y=1.0, color='r', linestyle='--', linewidth=2, label="Baseline (All-CPU)")
-    ax.set_title("Distribution of ILP Speedup vs All-CPU across Servers", pad=15, fontweight="bold")
+    ax.axhline(y=1.0, color='r', linestyle='--', linewidth=2, label="Baseline (Greedy preferred)")
+    ax.set_title("Distribution of ILP Speedup vs Baseline across Servers", pad=15, fontweight="bold")
     ax.set_ylabel("Speedup Ratio (Higher is Better)", fontweight="bold")
     ax.set_xlabel("Server Hardware", fontweight="bold")
     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
@@ -54,24 +70,27 @@ def plot_speedup_distribution(best_df: pd.DataFrame, out_dir: Path):
 def plot_feasibility_stacked_bar(best_df: pd.DataFrame, out_dir: Path):
     if "ilp_status" not in best_df.columns:
         return
-        
-    df = best_df.copy()
+
+    df = _collect_baseline_df(best_df)
+    if df.empty:
+        return
+    df["ilp_status"] = best_df.loc[df.index, "ilp_status"] if "ilp_status" in best_df.columns else "unknown"
     
     def determine_outcome(row):
         ilp_status = str(row.get("ilp_status", "")).lower()
         if ilp_status not in ["optimal", "feasible"]:
             return "ILP OOM / Infeasible"
-            
+
         ilp_obj = pd.to_numeric(row.get("ilp_objective", np.nan), errors="coerce")
-        cpu_obj = pd.to_numeric(row.get("all_cpu_objective", np.nan), errors="coerce")
-        
-        if pd.isna(ilp_obj) or pd.isna(cpu_obj):
+        baseline_obj = pd.to_numeric(row.get("baseline_objective", np.nan), errors="coerce")
+
+        if pd.isna(ilp_obj) or pd.isna(baseline_obj):
             return "Unknown"
-            
-        if ilp_obj < cpu_obj:
-            return "ILP Faster than CPU"
+
+        if ilp_obj < baseline_obj:
+            return "ILP Faster than Baseline"
         else:
-            return "CPU Faster / Tie"
+            return "Baseline Faster / Tie"
             
     df["outcome"] = df.apply(determine_outcome, axis=1)
     
@@ -84,7 +103,7 @@ def plot_feasibility_stacked_bar(best_df: pd.DataFrame, out_dir: Path):
     fig, ax = plt.subplots(figsize=(10, 6))
     percentages.plot(kind="bar", stacked=True, ax=ax, colormap="viridis")
     
-    ax.set_title("ILP Feasibility and Win-Rate by Server", pad=15, fontweight="bold")
+    ax.set_title("ILP Feasibility and Win-Rate by Server (vs Greedy Baseline)", pad=15, fontweight="bold")
     ax.set_ylabel("Percentage of Configurations (%)", fontweight="bold")
     ax.set_xlabel("Server Hardware", fontweight="bold")
     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
@@ -98,25 +117,23 @@ def plot_feasibility_stacked_bar(best_df: pd.DataFrame, out_dir: Path):
 def plot_global_pareto_scatter(pareto_df: pd.DataFrame, out_dir: Path):
     if "gpu_budget_mb" not in pareto_df.columns or "ilp_objective" not in pareto_df.columns:
         return
-        
-    df = pareto_df.copy()
-    df["ilp_objective"] = pd.to_numeric(df["ilp_objective"], errors="coerce")
+
+    df = _collect_baseline_df(pareto_df)
+    if df.empty:
+        return
     df["gpu_budget_mb"] = pd.to_numeric(df["gpu_budget_mb"], errors="coerce")
-    df["all_cpu_objective"] = pd.to_numeric(df["all_cpu_objective"], errors="coerce")
-    
-    df = df[(df["ilp_objective"] > 0) & (df["all_cpu_objective"] > 0)].copy()
-    
-    # Normalize objective to speedup
-    df["speedup"] = df["all_cpu_objective"] / df["ilp_objective"]
+    df = df[df["gpu_budget_mb"].notna()].copy()
+    if df.empty:
+        return
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
     # Use scatterplot with hue=server_name
-    sns.scatterplot(data=df, x="gpu_budget_mb", y="speedup", hue="server_name", alpha=0.6, s=50, ax=ax, edgecolor=None)
+    sns.scatterplot(data=df, x="gpu_budget_mb", y="speedup_vs_baseline", hue="server_name", alpha=0.6, s=50, ax=ax, edgecolor=None)
     
-    ax.axhline(y=1.0, color='r', linestyle='--', linewidth=2, label="Baseline (All-CPU)")
-    ax.set_title("Global Pareto Frontier: Speedup vs VRAM Budget", pad=15, fontweight="bold")
-    ax.set_ylabel("Speedup vs All-CPU", fontweight="bold")
+    ax.axhline(y=1.0, color='r', linestyle='--', linewidth=2, label="Baseline (Greedy preferred)")
+    ax.set_title("Global Pareto Frontier: Speedup vs Baseline", pad=15, fontweight="bold")
+    ax.set_ylabel("Speedup vs Baseline", fontweight="bold")
     ax.set_xlabel("GPU Memory Budget (MB)", fontweight="bold")
     ax.legend(title="Server Hardware", bbox_to_anchor=(1.05, 1), loc='upper left')
     
@@ -155,14 +172,30 @@ def main():
         pareto_csv = list(server_dir.rglob("ilp_pareto_consolidated.csv"))
         
         if best_csv:
-            df = pd.read_csv(best_csv[0])
-            df["server_name"] = server_name
-            best_frames.append(df)
+            server_best_frames = []
+            for csv_path in best_csv:
+                try:
+                    server_best_frames.append(pd.read_csv(csv_path))
+                except Exception:
+                    continue
+            if server_best_frames:
+                df = pd.concat(server_best_frames, ignore_index=True)
+                if not df.empty:
+                    df["server_name"] = server_name
+                    best_frames.append(df)
             
         if pareto_csv:
-            df = pd.read_csv(pareto_csv[0])
-            df["server_name"] = server_name
-            pareto_frames.append(df)
+            server_pareto_frames = []
+            for csv_path in pareto_csv:
+                try:
+                    server_pareto_frames.append(pd.read_csv(csv_path))
+                except Exception:
+                    continue
+            if server_pareto_frames:
+                df = pd.concat(server_pareto_frames, ignore_index=True)
+                if not df.empty:
+                    df["server_name"] = server_name
+                    pareto_frames.append(df)
 
     if not best_frames and not pareto_frames:
         print(f"No valid consolidated CSV files found in subdirectories of {input_root}.")

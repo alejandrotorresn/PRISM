@@ -103,3 +103,21 @@ Estos scripts utilizan `seaborn` / `matplotlib` en formato vectorizado sin visua
 - **`plot_all_energy_tradeoff.py` / `plot_all_oom_vs_ilp.py`**: Utilidades que se alimentan de la Frontera de Pareto para crear la visualización del impacto de la energía vs la memoria, mostrando claramente que ejecuciones habrían fallado sin el particionamiento (OOM).
 - **`organize_plots.py`**: Utilidad funcional que renombra y reacomoda todos los miles de archivos `.png` o `.pdf` generados basándose en las palabras clave del título y moviéndolos a carpetas correctas por modelo y categoría (`memory`, `energy`, etc).
 - **`plot_custom_user_figures.py`**: Excluido del pipeline automático; es un *script de usuario* que permite modificar en su propio código fuente una petición ad-hoc y forzar al motor a dibujar la gráfica solo para ese experimento específico en vez de graficar millones de combinaciones.
+- **`scripts/generate_chapter6_prism_vs_allgpu_figures.py`**: Generador estadístico específico para el Capítulo 6, crea diagramas comparativos entre PRISM y las estrategias All-GPU basándose en la viabilidad (feasible regime).
+- **`validation/generate_advanced_thesis_plots.py`**: Genera gráficos complejos integrados de Roofline, cascada de ablación, y mapas de calor (heatmaps) de afinidad, requeridos explícitamente para documentar el modelo teórico.
+- **`validation/regenerate_chapter6_global_plots_no_mlp.py`**: Versión filtrada y robusta que extrae métricas estadísticas globales (Cohen's d, valores p) excluyendo modelos de juguete como MLP para enfocar el análisis en redes profundas válidas.
+- **`validation/generate_vertex_distribution_oom_plot.py` / `generate_overhead_rescue_plot.py`**: Analíticas específicas de distribución de memoria y rescate en escenarios OOM, enfocándose en qué tan útil es la solución ILP ante estrés de memoria extrema.
+
+## 5. Validación, Aseguramiento ILP y Ejecución (Carpeta `validation/`)
+
+Esta carpeta es el puente entre el código fuente empírico y la rigurosidad académica requerida por la tesis, aislando las simulaciones, barridos y tests del orquestador principal.
+
+- **`validation/sweep_ilp_pareto.py`**: Genera de forma sistemática la frontera de Pareto para un modelo, iterando automáticamente por los límites del presupuesto de VRAM de la GPU.
+- **`validation/run_ilp_ablation_suite.py` / `run_ilp_sensitivity.py`**: Ejecutan análisis metodológicos rigurosos: la suite de ablación evalúa el impacto de quitar componentes de la función objetivo, mientras que los tests de sensibilidad evalúan cómo responde el modelo a los cambios en las restricciones.
+- **`validation/run_hybrid_execution.py`**: Simulador / ejecutor híbrido que materializa las decisiones del modelo matemático (el plan de partición ILP) en hardware real, probando que el *speedup* matemático es realizable físicamente.
+- **`validation/validate_ilp_pipeline.py` / `validate_all_models.py`**: Pruebas de integración continua que evalúan si los modelos pueden generar planes viables bajo condiciones controladas de estrés, previniendo regresiones o cuelgues del solver CBC.
+- **`validation/comprehensive_check.sh` / `validate_zombie_fix.py`**: Scripts de resiliencia y limpieza técnica para el clúster. Previenen fugas de memoria (zombies) y validan el pipeline end-to-end de una forma más ágil que el flujo doctoral completo.
+
+## 6. Scripts Históricos y Deprecados (Carpeta `scripts/archive/`)
+
+Contiene utilidades de la primera fase experimental y migraciones históricas, como `fast_aggregate.sh` o `inject_gpu_metadata.py`. Se conservan por trazabilidad del repositorio doctoral, pero no son invocados por el pipeline automático moderno `run_thesis_mode.sh`.

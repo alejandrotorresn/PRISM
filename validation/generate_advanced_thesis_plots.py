@@ -457,7 +457,6 @@ def plot_global_predicted_vs_actual(output_dir: Path, hybrid_csv: Path):
         (pd.to_numeric(df[predicted_col], errors="coerce") > 0)
         & (df["run_label"] != "all_cpu")
         & (df["run_label"] != "all_gpu")
-        & (~df[model_col].astype(str).str.contains("mlp|simple", case=False))
     ].copy()
 
     df_valid[predicted_col] = pd.to_numeric(df_valid[predicted_col], errors="coerce")
@@ -559,7 +558,7 @@ def main():
     total = 0
     errors = 0
 
-    stats_files = sorted(p for p in input_root.rglob("*_metrics_stats.csv") if "run_" not in p.parent.name and "mlp" not in p.name.lower() and "simple" not in p.name.lower())
+    stats_files = sorted(p for p in input_root.rglob("*_metrics_stats.csv") if "run_" not in p.parent.name)
 
     for stats_file in stats_files:
         cdir = stats_file.parent

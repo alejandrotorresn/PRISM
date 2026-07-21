@@ -30,44 +30,53 @@ def plot_statistical_validity(sig_csv_path: Path, output_dir: Path):
     df_plot = df.dropna(subset=["cohens_d_vs_cpu"]).copy()
     if not df_plot.empty:
         fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(data=df_plot, x="model", y="cohens_d_vs_cpu", palette="viridis", ax=ax, errorbar=None, order=VALID_MODELS)
-        ax.set_title("Tamaño del Efecto (Cohen's d) de PRISM vs Línea Base CPU", pad=15, fontweight="bold")
-        ax.set_xlabel("Arquitectura Neuronal Profunda", fontweight="bold")
-        ax.set_ylabel("Cohen's d (Ahorro Estandarizado)", fontweight="bold")
+        sns.barplot(data=df_plot, x="model", y="cohens_d_vs_cpu", hue="model", palette="viridis", ax=ax, legend=False, order=VALID_MODELS)
+        ax.set_title("Effect Size (Cohen's d): PRISM vs. CPU Baseline", pad=15, fontweight="bold")
+        ax.set_xlabel("Deep Neural Architecture", fontweight="bold")
+        ax.set_ylabel("Cohen's d (Standardized Improvement)", fontweight="bold")
         ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha='right')
+        ax.set_xticks(range(len(VALID_MODELS)))
+        ax.set_xticklabels(VALID_MODELS, rotation=20, ha='right')
         sns.despine()
         fig.tight_layout()
         fig.savefig(output_dir / "cohens_d_effect_size_vs_cpu.png", dpi=300, bbox_inches="tight")
         plt.close(fig)
-        print("Generated cohens_d_effect_size_vs_cpu.png without simple_mlp")
+        print("Generated cohens_d_effect_size_vs_cpu.png (English, 5 models)")
 
     # 2. p-value
     df_p = df.dropna(subset=["p_value_vs_cpu"]).copy()
     if not df_p.empty:
         df_p["neg_log_p"] = -np.log10(df_p["p_value_vs_cpu"] + 1e-15)
         fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(data=df_p, x="model", y="neg_log_p", palette="magma", ax=ax, errorbar=None, order=VALID_MODELS)
-        ax.axhline(-np.log10(0.05), color="red", linestyle="--", linewidth=2, label="Umbral de Significancia (p=0.05)")
-        ax.axhline(-np.log10(0.001), color="orange", linestyle=":", linewidth=2, label="Significancia Doctoral Estricta (p=0.001)")
-        ax.set_title("Significancia Estadística (-log10 p-valor) de PRISM vs Línea Base CPU", pad=15, fontweight="bold")
-        ax.set_xlabel("Arquitectura Neuronal Profunda", fontweight="bold")
-        ax.set_ylabel("-log10(p-valor)", fontweight="bold")
+        sns.barplot(data=df_p, x="model", y="neg_log_p", hue="model", palette="magma", ax=ax, legend=False, order=VALID_MODELS)
+        ax.axhline(-np.log10(0.05), color="red", linestyle="--", linewidth=2, label="Significance Threshold (p=0.05)")
+        ax.axhline(-np.log10(0.001), color="orange", linestyle=":", linewidth=2, label="Strict Doctoral Significance (p=0.001)")
+        ax.set_title("Statistical Significance (-log10 p-value): PRISM vs. CPU Baseline", pad=15, fontweight="bold")
+        ax.set_xlabel("Deep Neural Architecture", fontweight="bold")
+        ax.set_ylabel("-log10(p-value)", fontweight="bold")
         ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
         ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha='right')
+        ax.set_xticks(range(len(VALID_MODELS)))
+        ax.set_xticklabels(VALID_MODELS, rotation=20, ha='right')
         sns.despine()
         fig.tight_layout()
         fig.savefig(output_dir / "p_value_significance_vs_cpu.png", dpi=300, bbox_inches="tight")
         plt.close(fig)
-        print("Generated p_value_significance_vs_cpu.png without simple_mlp")
+        print("Generated p_value_significance_vs_cpu.png (English, 5 models)")
 
-def plot_global_predicted_vs_actual(hybrid_csv_path: Path, output_dir: Path):
-    if not hybrid_csv_path.exists():
-        print(f"File not found: {hybrid_csv_path}")
+def plot_global_predicted_vs_actual(hybrid_csv_paths: list, output_dir: Path):
+    dfs = []
+    for p in hybrid_csv_paths:
+        if p.exists():
+            dfs.append(pd.read_csv(p))
+        else:
+            print(f"Warning: path {p} not found during loading")
+            
+    if not dfs:
+        print("No hybrid CSV files found!")
         return
 
-    df = pd.read_csv(hybrid_csv_path)
+    df = pd.concat(dfs, ignore_index=True)
     predicted_col = "plan_objective" if "plan_objective" in df.columns else None
     measured_col = "avg_step_ms" if "avg_step_ms" in df.columns else None
     model_col = "config_model" if "config_model" in df.columns else ("model" if "model" in df.columns else None)
@@ -82,7 +91,7 @@ def plot_global_predicted_vs_actual(hybrid_csv_path: Path, output_dir: Path):
         & (df["run_label"] != "all_gpu")
     ].copy()
 
-    # STRICTLY FILTER OUT simple_mlp
+    # STRICTLY FILTER OUT simple_mlp AND KEEP ALL 5 DEEP MODELS
     df_valid = df_valid[df_valid[model_col].isin(VALID_MODELS)].copy()
 
     df_valid[predicted_col] = pd.to_numeric(df_valid[predicted_col], errors="coerce")
@@ -95,13 +104,13 @@ def plot_global_predicted_vs_actual(hybrid_csv_path: Path, output_dir: Path):
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Scatter Plot
+    # 1. Scatter Plot (Global Density)
     fig, ax = plt.subplots(figsize=(10, 8))
     if len(df_valid) > 1:
         from scipy.stats import pearsonr
         r_val, _ = pearsonr(df_valid[predicted_col], df_valid[measured_col])
         r2 = r_val ** 2
-        title_extra = f" ($R^2$ Global = {r2:.3f})"
+        title_extra = f" (Global $R^2$ = {r2:.3f})"
     else:
         title_extra = ""
 
@@ -117,17 +126,17 @@ def plot_global_predicted_vs_actual(hybrid_csv_path: Path, output_dir: Path):
     min_val = min(df_valid[predicted_col].min(), df_valid[measured_col].min())
     max_val = max(df_valid[predicted_col].max(), df_valid[measured_col].max())
     padding = (max_val - min_val) * 0.05 if max_val > min_val else min_val * 0.05
-    ax.plot([min_val - padding, max_val + padding], [min_val - padding, max_val + padding], 'r--', linewidth=2, label='Predicción Ideal Perfecta (y=x)')
+    ax.plot([min_val - padding, max_val + padding], [min_val - padding, max_val + padding], 'r--', linewidth=2, label='Ideal Perfect Prediction (y=x)')
 
-    ax.set_title(f"Correlación Global: Latencia Predicha vs Medida en Hardware{title_extra}", pad=15, fontweight="bold")
-    ax.set_xlabel("Latencia Teórica Predicha por PRISM ILP (ms)", fontweight="bold")
-    ax.set_ylabel("Latencia Real Cronometrada en Hardware (ms)", fontweight="bold")
+    ax.set_title(f"Global Correlation: Predicted vs. Hardware Measured Latency{title_extra}", pad=15, fontweight="bold")
+    ax.set_xlabel("Predicted ILP Latency (ms)", fontweight="bold")
+    ax.set_ylabel("Hardware Measured Latency (ms)", fontweight="bold")
     ax.legend(loc="lower right", fontsize=11, frameon=True)
     sns.despine()
     fig.tight_layout()
     fig.savefig(output_dir / "global_predicted_vs_actual_density.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print("Generated global_predicted_vs_actual_density.png without simple_mlp")
+    print("Generated global_predicted_vs_actual_density.png (English, all 5 models)")
 
     # 2. FacetGrid by Model (strictly 5 models)
     g = sns.FacetGrid(df_valid, col=model_col, col_order=models, col_wrap=3, height=4.2, sharex=False, sharey=False)
@@ -139,12 +148,12 @@ def plot_global_predicted_vs_actual(hybrid_csv_path: Path, output_dir: Path):
             np.min([ax.get_xlim(), ax.get_ylim()]),
             np.max([ax.get_xlim(), ax.get_ylim()]),
         ]
-        ax.plot(lims, lims, 'r--', alpha=0.8, zorder=0, label="Predicción Ideal (y=x)")
+        ax.plot(lims, lims, 'r--', alpha=0.8, zorder=0, label="Ideal Prediction (y=x)")
         ax.set_xlim(lims)
         ax.set_ylim(lims)
         
     g.map(plot_ideal_line)
-    g.set_axis_labels("Predicción ILP (ms)", "Medición en Hardware (ms)")
+    g.set_axis_labels("Predicted ILP Latency (ms)", "Hardware Measured Latency (ms)")
     g.set_titles(col_template="{col_name}", size=13, weight="bold")
     leg = g.fig.legend(
         *g.axes[0].get_legend_handles_labels(),
@@ -155,21 +164,27 @@ def plot_global_predicted_vs_actual(hybrid_csv_path: Path, output_dir: Path):
         fontsize=12,
     )
     g.fig.subplots_adjust(top=0.88, bottom=0.14, hspace=0.38, wspace=0.25)
-    suptitle = g.fig.suptitle("Fidelidad Predictiva Desglosada por Familia Arquitectónica", fontweight="bold", fontsize=16, y=1.03)
+    suptitle = g.fig.suptitle("Predictive Fidelity Faceted by Neural Architecture", fontweight="bold", fontsize=16, y=1.03)
     g.savefig(output_dir / "global_predicted_vs_actual_facets.png", dpi=300, bbox_inches="tight", bbox_extra_artists=(leg, suptitle))
     plt.close(g.fig)
-    print("Generated global_predicted_vs_actual_facets.png without simple_mlp")
+    print("Generated global_predicted_vs_actual_facets.png (English, strictly 5 models)")
 
 def main():
     base_dir = Path("/home/zephyr/Documents/University/PhD/Code/Final Thesis Code")
     sig_csv = base_dir / "reports/chuc-4/doctoral_full/csv/ilp_statistical_significance.csv"
-    hybrid_csv = base_dir / "reports/zephyr/doctoral_minimal/csv/hybrid_execution_consolidated.csv"
+    
+    # Load all full campaign CSVs across nodes to get the complete dataset for all 5 models
+    hybrid_csvs = [
+        base_dir / "reports/chuc-4/doctoral_full/csv/hybrid_execution_consolidated.csv",
+        base_dir / "reports/kinovis-2/doctoral_full/csv/hybrid_execution_consolidated.csv",
+        base_dir / "reports/paccaA100.unicartagena.edu.co/doctoral_full/csv/hybrid_execution_consolidated.csv"
+    ]
     out_dir = base_dir / "final_thesis/figures/chapter6"
 
-    print("Regenerating global plots without simple_mlp into:", out_dir)
+    print("Regenerating global and faceted plots (strictly English, 5 models) into:", out_dir)
     plot_statistical_validity(sig_csv, out_dir)
-    plot_global_predicted_vs_actual(hybrid_csv, out_dir)
-    print("All global plots regenerated successfully without simple_mlp!")
+    plot_global_predicted_vs_actual(hybrid_csvs, out_dir)
+    print("All global and faceted plots regenerated successfully!")
 
 if __name__ == "__main__":
     main()

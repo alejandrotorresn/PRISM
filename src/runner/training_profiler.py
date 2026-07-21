@@ -964,7 +964,7 @@ class TrainingProfiler:
             "cpu_fwd_power_w": float(self.args.cpu_fwd_power_w) if hasattr(self.args, "cpu_fwd_power_w") else 0.0,
             "cpu_bwd_power_w": float(self.args.cpu_bwd_power_w) if hasattr(self.args, "cpu_bwd_power_w") else 0.0,
             "analytical_fallback_gpu": getattr(self.args, "gpu_oom_fallback_triggered", False),
-            "measured_gpu_peak_tflops": float(measured_gpu_peak_tflops) if 'measured_gpu_peak_tflops' in locals() else 0.0,
+            "measured_gpu_peak_tflops": float(getattr(self.args, "measured_gpu_peak_tflops", 0.0)),
             "gpu_tdp_w": float(getattr(self.args, "gpu_tdp_w", 0.0)),
         })
 

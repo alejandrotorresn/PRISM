@@ -789,10 +789,14 @@ if is_true "$RUN_REPORTS"; then
     --hybrid_csv "$REPORTS_DIR/csv/hybrid_execution_best_per_model.csv" >> "$LOG_FILE" 2>&1
 
   log_msg "Generating OOM vs ILP Comparison plots..."
-  "$PYTHON_CMD" scripts/plot_all_oom_vs_ilp.py >> "$LOG_FILE" 2>&1
+  "$PYTHON_CMD" scripts/plot_all_oom_vs_ilp.py \
+    --input_root "$REPORT_INPUT_ROOT" \
+    --output_dir "$REPORTS_DIR/plots/oom_vs_ilp" >> "$LOG_FILE" 2>&1
 
   log_msg "Generating Energy vs Power Tradeoff plots..."
-  "$PYTHON_CMD" scripts/plot_all_energy_tradeoff.py >> "$LOG_FILE" 2>&1
+  "$PYTHON_CMD" scripts/plot_all_energy_tradeoff.py \
+    --input_root "$REPORT_INPUT_ROOT" \
+    --output_dir "$REPORTS_DIR/plots/energy_tradeoff" >> "$LOG_FILE" 2>&1
 
   PYTHON_CMD="$PYTHON_CMD" \
   INPUT_ROOT="$REPORT_INPUT_ROOT" \
