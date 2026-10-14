@@ -1,0 +1,102 @@
+# Parametros de PRISM. Unico sitio para valores por defecto.
+# Cada parametro: value, unit, origin.
+#   origin = cli       -> debe poder sobreescribirse por argumento
+#   origin = measured  -> el valor final debe venir de un archivo de mediciones;
+#                         el value aqui es solo el respaldo heredado (legacy)
+#   origin = derived   -> se calcula a partir de otros valores
+# Los valores actuales reproducen el comportamiento previo (fix/PLAN_MEJORA_PRISM.md, regla 5).
+
+solver:
+  time_limit_s:
+    value: 300
+    unit: s
+    origin: cli
+    note: limite de CBC (solve.py)
+  gap_rel:
+    value: 0.01
+    unit: ratio
+    origin: cli
+  exhaustive_max_nodes:
+    value: 14
+    unit: nodes
+    origin: cli
+    note: Fase 2.4 lo reemplaza por una politica explicita
+
+dual_placement:
+  atol:
+    value: 0.15
+    unit: abs
+    origin: cli
+    note: Fase 3.1 lo hace dependiente de dtype y escala
+  rtol:
+    value: 0.05
+    unit: ratio
+    origin: cli
+  verify_dual_every:
+    value: 1
+    unit: steps
+    origin: cli
+    note: 0 desactiva la verificacion; N compara cada N pasos
+
+runtime:
+  gpu_id:
+    value: 0
+    unit: index
+    origin: cli
+  pinned_cache_max_mb:
+    value: 512
+    unit: MB
+    origin: cli
+    note: Fase 3.5 lo deriva de la RAM libre
+  optimizer:
+    value: SGD
+    unit: name
+    origin: cli
+  lr:
+    value: 0.01
+    unit: ratio
+    origin: cli
+  hybrid_batch_size:
+    value: 8
+    unit: samples
+    origin: cli
+  energy_sample_interval_s:
+    value: 0.05
+    unit: s
+    origin: cli
+
+profiler:
+  warmup_steps:
+    value: 5
+    unit: steps
+    origin: cli
+  measure_steps:
+    value: 15
+    unit: steps
+    origin: cli
+  backward_factor_fallback:
+    value: 2.0
+    unit: ratio
+    origin: measured
+    note: Fase 4.1 prohibe usarlo en silencio
+
+memory:
+  budget_ladder_pct:
+    value: [90, 85, 80, 75, 70, 50]
+    unit: percent
+    origin: cli
+  safety_ratio_primary:
+    value: 0.90
+    unit: ratio
+    origin: measured
+  safety_ratio_secondary:
+    value: 0.85
+    unit: ratio
+    origin: measured
+
+experiments:
+  seeds:
+    value: [42, 43, 44]
+    unit: seed
+    origin: cli
+    note: Fase 5.3 exige al menos 5

@@ -9,6 +9,7 @@
 numpy>=1.24.0
 pandas>=2.0.0
 psutil>=5.9.0
+pyyaml>=6.0
 
 # Deep Learning (PyTorch)
 # Install separately: see environment.yml or https://pytorch.org/

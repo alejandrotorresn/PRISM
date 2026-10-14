@@ -57,3 +57,74 @@ def test_h5c_batchnorm_stats_updated_once():
     out = _run_layer_with_dual_placement(layer, "bn", x, cpu, cpu)
     out.sum().backward()
     assert int(layer.num_batches_tracked) == 1
+
+
+import importlib.util
+import json
+import sys
+from argparse import Namespace
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _p in (str(_REPO_ROOT / "src"),):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+
+def _load_validation_module(name: str):
+    spec = importlib.util.spec_from_file_location(f"{name}_repro", _REPO_ROOT / "validation" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.xfail(strict=True, reason="H1: medicion no-ok mueve todas las capas a CPU (hi = n)")
+def test_h1_unmeasurable_plan_is_not_emptied(monkeypatch):
+    mod = _load_validation_module("run_ilp_partition")
+    monkeypatch.setattr(
+        mod,
+        "measure_real_peak_for_plan",
+        lambda **kw: {"status": "trace_error", "real_reserved_mb": None, "real_allocated_mb": None},
+    )
+
+    class _Topo:
+        def layer_gpu_weight(self, name):
+            return 1.0
+
+    fwd = {f"l{i}": "GPU" for i in range(5)}
+    bwd = dict(fwd)
+    args = Namespace(gpu_mem_budget_mb=1000.0)
+    res = mod._validate_final_plan_against_real_overhead(
+        fwd, bwd, None, None, args, _Topo(), object(), None
+    )
+    assert any(d == "GPU" for d in res["forward_assignment"].values())
+
+
+@pytest.mark.xfail(strict=True, reason="H7: ilp_objective se usa como sim_time_ms")
+def test_h7_objective_is_not_reported_as_simulated_ms(tmp_path):
+    mod = _load_validation_module("run_hybrid_execution")
+    csv = tmp_path / "plans.csv"
+    csv.write_text("model,ilp_status,ilp_objective\nresnet50,optimal,123.0\n")
+    args = Namespace(
+        plan_sim_time_ms=None, plan_sim_energy_j=None, plan_source_csv=str(csv),
+        plan_gpu_budget_mb=None, model="resnet50", precision="fp32", batch_size=8, plan_objective=None,
+    )
+    # config_dir con < 4 componentes: sin identidad model/optimizer/batch inferida
+    ref = mod._resolve_sim_reference_values(args, Path("/cfg"))
+    assert ref["sim_time_ms"] is None
+
+
+@pytest.mark.xfail(strict=True, reason="H9: el clasificador OOM lee el log global de campaña")
+def test_h9_oom_classifier_not_fed_global_campaign_log():
+    text = (_REPO_ROOT / "scripts" / "run_experiments.sh").read_text()
+    assert 'is_oom_failure_from_log "$LOG_FILE"' not in text
+
+
+@pytest.mark.xfail(strict=True, reason="H11: symbolic_trace no puede trazar modelos HF (BERT)")
+def test_h11_hf_bert_graph_is_traceable():
+    transformers = pytest.importorskip("transformers")
+    cfg = transformers.BertConfig(
+        hidden_size=32, num_hidden_layers=1, num_attention_heads=2, intermediate_size=64, vocab_size=100
+    )
+    model = transformers.BertModel(cfg).eval()
+    _build_fx_graph(model, {}, torch.randint(0, 100, (2, 8)))
