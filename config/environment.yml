@@ -49,6 +49,7 @@ dependencies:
   - scipy>=1.10
   # Test runner
   - pytest>=8.0
+  - pyyaml>=6.0
   # Optional experiment tracking / telemetry backend support
   - pymongo>=4.0
   - pip:

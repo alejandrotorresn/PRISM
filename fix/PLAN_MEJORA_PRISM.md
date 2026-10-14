@@ -71,12 +71,17 @@ Convenciones: `[ID]` identifica la tarea. "Aceptación" es el criterio verificab
 - **[0.2]** Crear `config/prism.yaml` (y su loader) con todos los parámetros que hoy están en el código. Cada parámetro tiene el valor por defecto en un solo sitio, con nombre, unidad y origen (CLI, medición o derivado). Los resultados deben guardar la configuración efectiva usada (`effective_config.json`).
 - **[0.3]** Tests de reproducción (deben **fallar** antes del arreglo) para H1, H2, H5, H6, H7, H9, H11, H12 y H13. Cada test usa un modelo pequeño y no requiere GPU salvo marca explícita.
 - **Aceptación:** los tests existen, fallan por la razón correcta y están en `pytest.ini`.
-- **Estado 0.3 (parcial):** `tests/test_repro_findings.py` cubre H2, H5b, H5c y H12 (`xfail(strict=True)`, fallo por la causa documentada, verificado con `--runxfail`). Suite: 109 pasan, 7 omitidos, 4 xfail. Faltan H1, H6, H7, H9 y H11 (requieren grafo HF, `.sh` o ejecución del runner) y 0.2 (`config/prism.yaml`).
+- **Estado Fase 0 (hecho, salvo H6):**
+  - **0.2:** `config/prism.yaml` (cada parámetro con `value`, `unit`, `origin`; los valores reproducen el comportamiento actual) y `src/core/config.py` (`load_config`, overrides con fuente registrada, rechazo de claves desconocidas, `write_effective()` → `effective_config.json`). `tests/test_config_loader.py`: 5 tests. Aún no está conectado a los módulos: eso se hace de forma incremental en cada fase (Fase 6 lo cierra).
+  - **0.3:** `tests/test_repro_findings.py` cubre H1, H2, H5b, H5c, H7, H9, H11 y H12 (`xfail(strict=True)`, verificado con `--runxfail` que cada uno falla por su causa). H9 es un test sobre el texto del script; se reemplazará por un test de comportamiento al crear el clasificador (1.4). **H6 queda pendiente:** requiere construir un `HybridExecutor` con un grafo con checkpoint y varios dispositivos; se escribe junto a la tarea 3.2.
+  - H11: con la config mínima de BERT, `symbolic_trace` falla con `TypeError: 'Proxy' object does not support item assignment`, y no con el `ValueError: varnames is too small` de los logs. Es la misma causa de fondo (HF no es trazable con `symbolic_trace`) con otra versión de transformers.
+  - Suite: 114 pasan, 7 omitidos, 8 xfail.
 - **Cruce con el jurado:** ver `CRUCE_PLAN_VS_JURADO.md`. Añade las tareas 5.6, 2.8, 4.6, 5.7, 5.4b y 5.1b.
 
 ### Fase 1. Bugs que invalidan los resultados
 
 - **[1.1] Post-proceso del plan (H1).** En `_validate_final_plan_against_real_overhead`:
+  - **Estado 1.1 (hecho):** plan no medible se conserva (`validation_status=unmeasurable`), ya no existe la rama todo-CPU, objetivo recalculado si el plan cambia. Verificado con distilgpt2/batch_16: 57/59 capas en GPU. Pendiente: probe de safety-ratio (1.1.4) y modelo de memoria de la Fase 2.3 para validar planes no medibles.
   1. Si `measured["status"] != "ok"`, no modificar el plan. Registrar `validation_status="unmeasurable"` y validar con el modelo de memoria calibrado (Fase 2.3).
   2. Eliminar la rama `hi = n`. Si ni vaciar la GPU cabe, abortar con error explícito.
   3. Tras cualquier cambio del plan, recalcular `objective_value`, `gpu_mem_used_mb`, `cpu_mem_used_mb`, cortes y `activation_strategy`.

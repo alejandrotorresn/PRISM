@@ -319,8 +319,27 @@ def _validate_final_plan_against_real_overhead(
 
     measured = _measure(final_fwd, final_bwd)
     reserved = measured.get("real_reserved_mb")
-    feasible = measured["status"] == "ok" and reserved is not None and reserved <= args.gpu_mem_budget_mb
 
+    if measured["status"] != "ok" or reserved is None:
+        # No real number to compare against the budget (e.g. a HF model that
+        # symbolic_trace cannot handle): leave the solver's plan untouched
+        # instead of guessing a trim from a non-measurement.
+        print(
+            f"[real_overhead] WARNING: final plan could not be measured (status={measured['status']}); "
+            "keeping the plan unchanged (validation_status=unmeasurable).",
+            flush=True,
+        )
+        return {
+            "forward_assignment": dict(final_fwd),
+            "backward_assignment": dict(final_bwd),
+            "flips_removed": 0,
+            "real_allocated_mb": None,
+            "real_reserved_mb": None,
+            "feasible": None,
+            "validation_status": "unmeasurable",
+        }
+
+    feasible = reserved <= args.gpu_mem_budget_mb
     fwd, bwd = dict(final_fwd), dict(final_bwd)
     flips_removed = 0
 
@@ -361,9 +380,12 @@ def _validate_final_plan_against_real_overhead(
                 else:
                     lo = mid
         else:
-            # Even moving every GPU layer to CPU does not fit for real --
-            # degenerate case, use it anyway (best effort, logged loudly).
-            hi = n
+            raise RuntimeError(
+                "[real_overhead] Even with every GPU layer moved to CPU the measured peak "
+                f"(status={measured['status']}, real_reserved_mb={measured.get('real_reserved_mb')}) "
+                f"does not fit the budget ({args.gpu_mem_budget_mb}MB) or could not be measured. "
+                "Refusing to emit an all-CPU plan; reduce the batch size or raise the budget."
+            )
         flips_removed = hi
         fwd, bwd = _plan_removing(hi)
 
@@ -382,7 +404,35 @@ def _validate_final_plan_against_real_overhead(
         "feasible": measured["status"] == "ok"
         and measured.get("real_reserved_mb") is not None
         and measured["real_reserved_mb"] <= args.gpu_mem_budget_mb,
+        "validation_status": "trimmed" if flips_removed else "ok",
     }
+
+
+def _recompute_plan_objective(
+    data, args: argparse.Namespace, fwd: dict, bwd: dict, enforce_convex_weights: bool
+) -> Optional[float]:
+    """Re-evaluates the (forward, backward) plan with the same dual objective the
+    solver uses, with budgets lifted (the plan's memory was already validated).
+    Phase-4 recompute/checkpoint penalties are not included."""
+    model_builder = importlib.import_module("ilp.model_builder")
+    solve_mod = importlib.import_module("ilp.solve")
+    cfg = ILPConfig(
+        w_time=args.w_time,
+        w_energy=args.w_energy,
+        enforce_convex_weights=enforce_convex_weights,
+        w_transfer=args.w_transfer,
+        w_fragmentation=args.w_fragmentation,
+        w_congestion=args.w_congestion,
+        congestion_knee_ms=args.congestion_knee_ms,
+        gpu_mem_budget_mb=float("inf"),
+        cpu_mem_budget_mb=float("inf"),
+        memory_model=args.memory_model,
+        peak_activation_overlap=args.peak_activation_overlap,
+    )
+    problem = model_builder.build_problem_data_dual(data, cfg)
+    to_bits = lambda a: {n: 1 if a.get(n) == "GPU" else 0 for n in data.nodes}
+    result = solve_mod._eval_assignment_dual(to_bits(fwd), to_bits(bwd), data, cfg, problem)
+    return None if result is None else float(result[0])
 
 
 def _solve_with_calibrated_recompute_curve(data, args: argparse.Namespace, base_cfg4: "ILPConfig4"):
@@ -812,6 +862,9 @@ def main() -> int:
         prepared_topology = PreparedTopologyMemory.prepare(graph_csv_path, stats_csv_path)
         base_fwd = sol.forward_assignment or sol.assignment
         base_bwd = sol.backward_assignment or sol.assignment
+        solver_fwd, solver_bwd = dict(base_fwd), dict(base_bwd)
+        sol.solver_objective_value = sol.objective_value
+        sol.validation_status = "not_measured"
         activation_strategy = getattr(sol, "activation_strategies", None)
         # Loaded at most once per invocation, shared by the expansion
         # validation below (if --enable_gpu_expansion) and the always-on
@@ -919,6 +972,7 @@ def main() -> int:
             calib_inp,
         )
         if final_check is not None:
+            sol.validation_status = final_check["validation_status"]
             if final_check["flips_removed"] > 0:
                 new_fwd = final_check["forward_assignment"]
                 new_bwd = final_check["backward_assignment"]
@@ -930,13 +984,22 @@ def main() -> int:
                 sol.cross_phase_edges = [(n, n) for n in data.nodes if new_fwd.get(n) != new_bwd.get(n)]
             if final_check["real_allocated_mb"] is not None:
                 sol.gpu_mem_used_mb = final_check["real_allocated_mb"]
-            if not final_check["feasible"]:
+            if final_check["feasible"] is False:
                 print(
                     "[real_overhead] WARNING: final plan still exceeds the real measured peak even "
                     "after removing every GPU-resident layer this validation could. Consider a "
                     "smaller batch size.",
                     flush=True,
                 )
+
+        final_fwd = sol.forward_assignment or sol.assignment
+        final_bwd = sol.backward_assignment or sol.assignment
+        sol.plan_modified_after_solve = final_fwd != solver_fwd or final_bwd != solver_bwd
+        if sol.plan_modified_after_solve:
+            recomputed = _recompute_plan_objective(data, args, final_fwd, final_bwd, enforce_convex_weights)
+            if recomputed is not None:
+                sol.objective_value = recomputed
+            sol.objective_recomputed = recomputed is not None
 
     out = save_ilp_solution(sol, str(output_dir))
 
