@@ -326,14 +326,27 @@ handle_failure() {
     fi
 }
 
-is_oom_failure_from_log() {
-    local log_file="$1"
-    if [ ! -f "$log_file" ]; then
-        return 1
-    fi
+classify_run_failure() {
+    # Usage: classify_run_failure <exit_code> <log_offset_bytes> <elapsed_s>
+    # Prints GPU_OOM | CPU_OOM | TRACE_ERROR | TIMEOUT | CODE_ERROR using only
+    # the log bytes written by the failed run (never the whole campaign log).
+    "$PYTHON_CMD" src/core/failure_classifier.py \
+        --exit_code "$1" --log "$LOG_FILE" --log_offset_bytes "$2" \
+        --elapsed_s "$3" --timeout_s "${PROFILER_TIMEOUT_SECS:-0}" 2>/dev/null || echo CODE_ERROR
+}
 
-    tail -n 200 "$log_file" | tr '[:upper:]' '[:lower:]' | grep -E -q \
-        "profiling failed after oom retries were exhausted|oom retries were exhausted|cuda out of memory|out of memory|cuda error: out of memory|hip out of memory|cublas.*alloc"
+mark_failed_config() {
+    # Informational marker; resuming never skips a batch because of it.
+    local out_dir="$1" category="$2" run_id="$3" exit_code="$4"
+    cat > "$out_dir/failed_config.json" <<EOF
+{
+  "status": "failed",
+  "failure_category": "$category",
+  "failed_run_id": "$run_id",
+  "exit_code": $exit_code,
+  "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
 }
 
 # --- CPU (DRAM) OOM protection helpers ---
@@ -587,6 +600,8 @@ for model in "${MODELS[@]}"; do
                 OUT_DIR="$BASE_OUTPUT_DIR/$model/$optimizer/$precision/batch_${batch}"
                 mkdir -p "$OUT_DIR"
                 BATCH_SKIPPED_OOM=false
+                # The GPU-OOM rescue (--no_gpu) only applies to this configuration.
+                CONFIG_NO_GPU="${FORCE_NO_GPU:-false}"
                 
                 if [ -f "$OUT_DIR/${model}_metrics_stats.csv" ]; then
                     log_msg "  → SKIPPING BATCH: Batch $batch already profiled and aggregated (resuming)."
@@ -646,7 +661,7 @@ for model in "${MODELS[@]}"; do
                         CMD+=(--no-oom_retry_enabled)
                     fi
                     
-                    if [ "${FORCE_NO_GPU:-false}" = true ]; then
+                    if [ "$CONFIG_NO_GPU" = true ]; then
                         CMD+=(--no_gpu)
                     fi
                     if [ "$USE_SKIP_CPU" = false ] && [ "$ENABLE_RAPL" = true ]; then
@@ -668,14 +683,16 @@ for model in "${MODELS[@]}"; do
                         log_msg "  [DRY_RUN] ${CMD[*]}"
                         SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                     # Execute profiler inside sandboxed cgroup with memory ceiling
-                    elif run_profiler_sandboxed "${CMD[@]}" >> "$LOG_FILE" 2>&1; then
+                    elif RUN_LOG_OFFSET=$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0); RUN_T0=$SECONDS; run_profiler_sandboxed "${CMD[@]}" >> "$LOG_FILE" 2>&1; then
                         SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                         log_msg "  ✓ SUCCESS: Batch $batch replicate $RUN_ID complete"
                     else
                         EXIT_CODE=$?
+                        FAIL_CATEGORY="$(classify_run_failure "$EXIT_CODE" "$RUN_LOG_OFFSET" "$((SECONDS - RUN_T0))")"
+                        log_msg "  Failure category: $FAIL_CATEGORY (exit code: $EXIT_CODE)"
 
                         # --- Priority 1: CPU/DRAM OOM (SIGKILL from cgroup or kernel) ---
-                        if is_cpu_oom_kill "$EXIT_CODE"; then
+                        if [ "$FAIL_CATEGORY" = "CPU_OOM" ]; then
                             CPU_OOM_SKIPPED_CONFIGS=$((CPU_OOM_SKIPPED_CONFIGS + 1))
                             CPU_OOM_SKIPPED_RUNS=$((CPU_OOM_SKIPPED_RUNS + 1))
                             mark_cpu_oom_skipped_config "$OUT_DIR" "$model" "$optimizer" "$precision" "$batch" "$RUN_ID" "$EXIT_CODE" "${mem_limit_mb:-unknown}"
@@ -685,7 +702,8 @@ for model in "${MODELS[@]}"; do
                             break
 
                         # --- Priority 2: Timeout kill ---
-                        elif is_timeout_kill "$EXIT_CODE"; then
+                        elif [ "$FAIL_CATEGORY" = "TIMEOUT" ]; then
+                            mark_failed_config "$OUT_DIR" "$FAIL_CATEGORY" "$RUN_ID" "$EXIT_CODE"
                             TIMEOUT_SKIPPED_RUNS=$((TIMEOUT_SKIPPED_RUNS + 1))
                             FAILED_RUNS=$((FAILED_RUNS + 1))
                             log_msg "  ⏱️ TIMEOUT KILL: Batch $batch replicate $RUN_ID exceeded ${PROFILER_TIMEOUT_SECS}s"
@@ -693,7 +711,7 @@ for model in "${MODELS[@]}"; do
                             break
 
                         # --- Priority 3: GPU VRAM OOM (detected from Python log output) ---
-                        elif is_true "$OOM_SKIP_CONFIGS" && is_oom_failure_from_log "$LOG_FILE"; then
+                        elif is_true "$OOM_SKIP_CONFIGS" && [ "$FAIL_CATEGORY" = "GPU_OOM" ]; then
                             OOM_SKIPPED_CONFIGS=$((OOM_SKIPPED_CONFIGS + 1))
                             OOM_SKIPPED_RUNS=$((OOM_SKIPPED_RUNS + 1))
                             mark_oom_skipped_config "$OUT_DIR" "$model" "$optimizer" "$precision" "$batch" "$RUN_ID" "$EXIT_CODE"
@@ -708,7 +726,7 @@ for model in "${MODELS[@]}"; do
                                 log_msg "  ✓ RESCUE SUCCESS: El trazado CPU fue exitoso. ILP podrá usar fallback analítico."
                                 SUCCEEDED_RUNS=$((SUCCEEDED_RUNS + 1))
                                 BATCH_SKIPPED_OOM=false
-                                FORCE_NO_GPU=true
+                                CONFIG_NO_GPU=true
                             else
                                 RESCUE_EXIT=$?
                                 if is_cpu_oom_kill "$RESCUE_EXIT"; then
@@ -726,8 +744,8 @@ for model in "${MODELS[@]}"; do
                         # --- Priority 4: Generic failure ---
                         else
                             FAILED_RUNS=$((FAILED_RUNS + 1))
-                            log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (exit code: $EXIT_CODE)"
-                            log_msg "  Probable causes: Out of Memory (OOM), unsupported precision, or hardware constraint"
+                            mark_failed_config "$OUT_DIR" "$FAIL_CATEGORY" "$RUN_ID" "$EXIT_CODE"
+                            log_msg "  ✗ FAILURE: Batch $batch replicate $RUN_ID (category: $FAIL_CATEGORY, exit code: $EXIT_CODE)"
                             handle_failure "$EXIT_CODE" "$model/$optimizer/$precision/batch_${batch}/$RUN_ID"
                         fi
                     fi

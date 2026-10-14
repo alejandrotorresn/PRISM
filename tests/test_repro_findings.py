@@ -65,12 +65,6 @@ def test_h7_objective_is_not_reported_as_simulated_ms(tmp_path):
     assert ref["sim_time_ms"] is None
 
 
-@pytest.mark.xfail(strict=True, reason="H9: el clasificador OOM lee el log global de campaña")
-def test_h9_oom_classifier_not_fed_global_campaign_log():
-    text = (_REPO_ROOT / "scripts" / "run_experiments.sh").read_text()
-    assert 'is_oom_failure_from_log "$LOG_FILE"' not in text
-
-
 @pytest.mark.xfail(strict=True, reason="H11: symbolic_trace no puede trazar modelos HF (BERT)")
 def test_h11_hf_bert_graph_is_traceable():
     transformers = pytest.importorskip("transformers")
