@@ -14,9 +14,9 @@ from torchvision.models import (
 from transformers import BertForSequenceClassification, GPT2LMHeadModel
 
 try:
-    from data.dataset_registry import load_model_batch
+    from data.dataset_registry import VISION_MODELS, load_model_batch
 except ModuleNotFoundError:  # pragma: no cover - exercised by package-style imports in tests
-    from src.data.dataset_registry import load_model_batch
+    from src.data.dataset_registry import VISION_MODELS, load_model_batch
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def _build_model(args, torch_dtype: torch.dtype) -> nn.Module:
 
 
 def _build_synthetic_input(args, torch_dtype: torch.dtype) -> Tuple[Any, torch.Tensor | None, dict[str, Any]]:
-    if args.model in {"resnet50", "resnet152", "vit_b16"}:
+    if args.model in VISION_MODELS:
         inp = torch.randn((args.batch_size, 3, args.input_size, args.input_size), dtype=torch_dtype)
     elif args.model in {"bert_base", "gpt2_small", "distilgpt2"}:
         inp = torch.randint(0, 1000, (args.batch_size, args.seq_length), dtype=torch.long)

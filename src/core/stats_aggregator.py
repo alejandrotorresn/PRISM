@@ -42,6 +42,7 @@ DEFAULT_METRIC_COLUMNS = [
     "optimizer_states_mb",
     "activations_mb",
     "gpu_mem_peak_mb",
+    "gpu_bwd_mem_peak_mb",
     "cpu_mem_mb",
     "transfer_h2d_ms",
     "transfer_d2h_ms",
@@ -60,6 +61,14 @@ GROUP_COLUMNS = [
     "optimizer",
     "layer",
     "type",
+    # Constant per layer (a structural property of the model, like "type"),
+    # not a measured value -- same grouping trick as "type" above, so it
+    # survives aggregation without needing a mean/std. Lets
+    # topology_memory.py deduplicate a tied weight's params+optimizer_states
+    # (e.g. GPT-2's lm_head/wte sharing one tensor) instead of double-counting
+    # it once per layer name. See training_profiler.py's
+    # _detect_shared_weight_groups for how this gets assigned.
+    "shared_weight_group",
     "cpu_precision_executed",
     "gpu_precision_executed",
 ]
@@ -145,6 +154,15 @@ def aggregate_metrics_stats(
 
     if df.empty:
         raise ValueError("All rows were filtered out; no executable samples remain for aggregation")
+
+    # Backward compatibility: metrics.csv files from before this column
+    # existed have no weight-sharing info at all -- fall back to each row's
+    # own "layer" as a singleton group, exactly what training_profiler.py
+    # itself does for an untied layer. Never silently fail aggregation just
+    # because older profiling data predates this field.
+    if "shared_weight_group" not in df.columns and "layer" in df.columns:
+        df = df.copy()
+        df["shared_weight_group"] = df["layer"]
 
     missing_group_cols = [c for c in GROUP_COLUMNS if c not in df.columns]
     if missing_group_cols:

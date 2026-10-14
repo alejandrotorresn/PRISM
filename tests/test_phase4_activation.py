@@ -203,18 +203,26 @@ class TestPhase4GreedyCPUBudget(unittest.TestCase):
     def _make_data(self) -> ILPInputData:
         from src.ilp.data_loader import ILPInputData
 
-        nodes = ["a", "b", "c"]
+        # Node names deliberately share a block ("layer1.0.*" -- see
+        # src/ilp/solve.py's _block_id_for_layer_name) rather than being
+        # unrelated singletons: fix/08 README found that a vision-style
+        # graph (graph_trace_source="unknown"/"torch_fx" here, the default)
+        # only ever gets a real checkpoint/recompute candidate for a WHOLE
+        # multi-leaf block, never an isolated node -- so this test's data
+        # must form one to actually exercise the CPU-budget feasibility
+        # check these tests are about.
+        nodes = ["layer1.0.a", "layer1.0.b", "layer1.0.c"]
         return ILPInputData(
             nodes=nodes,
-            node_cost_gpu_ms={"a": 1.0, "b": 1.0, "c": 1.0},
-            node_cost_cpu_ms={"a": 100.0, "b": 100.0, "c": 100.0},
-            node_mem_gpu_mb={"a": 200.0, "b": 200.0, "c": 100.0},
-            node_mem_cpu_mb={"a": 50.0, "b": 50.0, "c": 50.0},
-            edges=[("a", "b"), ("b", "c")],
-            edge_transfer_ms={("a", "b"): 0.5, ("b", "c"): 0.5},
-            node_mem_activation_mb={"a": 140.0, "b": 140.0, "c": 70.0},
-            node_time_io_ms={"a": 0.15, "b": 0.15, "c": 0.15},
-            node_energy_io_j={"a": 0.05, "b": 0.05, "c": 0.05},
+            node_cost_gpu_ms={"layer1.0.a": 1.0, "layer1.0.b": 1.0, "layer1.0.c": 1.0},
+            node_cost_cpu_ms={"layer1.0.a": 100.0, "layer1.0.b": 100.0, "layer1.0.c": 100.0},
+            node_mem_gpu_mb={"layer1.0.a": 200.0, "layer1.0.b": 200.0, "layer1.0.c": 100.0},
+            node_mem_cpu_mb={"layer1.0.a": 50.0, "layer1.0.b": 50.0, "layer1.0.c": 50.0},
+            edges=[("layer1.0.a", "layer1.0.b"), ("layer1.0.b", "layer1.0.c")],
+            edge_transfer_ms={("layer1.0.a", "layer1.0.b"): 0.5, ("layer1.0.b", "layer1.0.c"): 0.5},
+            node_mem_activation_mb={"layer1.0.a": 140.0, "layer1.0.b": 140.0, "layer1.0.c": 70.0},
+            node_time_io_ms={"layer1.0.a": 0.15, "layer1.0.b": 0.15, "layer1.0.c": 0.15},
+            node_energy_io_j={"layer1.0.a": 0.05, "layer1.0.b": 0.05, "layer1.0.c": 0.05},
         )
 
     def test_checkpoint_respects_cpu_budget(self):
@@ -231,6 +239,12 @@ class TestPhase4GreedyCPUBudget(unittest.TestCase):
             w_io=1.0,
             enable_checkpoint=True,
             enable_recompute=False,
+            # Explicit, not the production default (0.95 as of this test's
+            # last update): this test is about the CPU-budget feasibility
+            # check inside the candidate-selection loop, not about whichever
+            # trigger threshold production happens to use, so it pins its
+            # own trigger to force a checkpoint attempt regardless.
+            target_gpu_utilization=0.60,
         )
         sol = _solve_phase4_greedy(data, cfg)
         self.assertLessEqual(
@@ -253,6 +267,10 @@ class TestPhase4GreedyCPUBudget(unittest.TestCase):
             w_io=1.0,
             enable_checkpoint=True,
             enable_recompute=False,
+            # Explicit for the same reason as test_checkpoint_respects_cpu_budget
+            # above -- decouple this trigger-path test from whatever the
+            # production default happens to be.
+            target_gpu_utilization=0.60,
         )
         sol = _solve_phase4_greedy(data, cfg)
         self.assertLessEqual(sol.cpu_mem_used_mb, cfg.cpu_mem_budget_mb)

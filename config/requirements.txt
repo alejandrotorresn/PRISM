@@ -16,8 +16,14 @@ psutil>=5.9.0
 # torchvision>=0.16.0
 
 # NLP / Transformer models
-transformers>=4.40.0,<4.50
-huggingface_hub>=0.20.0,<0.28
+# Floor raised from 4.40-4.49 (the original pin): that range cannot
+# torch.export GPT-2-family models once the batch has real attention-mask
+# padding (torch._dynamo cannot trace torch.finfo(dtype).min inside
+# transformers' causal-mask construction on torch 2.5.1). Confirmed fixed
+# at transformers 5.2.0 paired with torch 2.10.0/torchvision 0.25.0 -- see
+# config/environment.yml and fix/03_phase4_oom_avoidance_and_adaptive_search/README.md.
+transformers>=5.0.0
+huggingface_hub>=1.0.0  # transformers>=5.0 requires a hub client this new; confirmed working at 1.4.1
 safetensors>=0.4.0
 
 # GPU monitoring and energy telemetry

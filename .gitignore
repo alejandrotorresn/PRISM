@@ -49,3 +49,7 @@ docs/archive/reference_material/*.pdf
 # IDE settings
 .vscode/
 .idea/
+
+# Herramientas locales y material personal
+.claude/
+Calificaciones/

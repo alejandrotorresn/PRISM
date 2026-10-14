@@ -79,6 +79,34 @@ OPTIMIZERS_CSV="${OPTIMIZERS_CSV:-}"
 WARMUP="${WARMUP:-3}"   # Number of warmup iterations
 MEASURE="${MEASURE:-10}" # Number of measurement iterations
 
+# src/profiler.py's own --lr (metadata only -- see
+# src/runner/training_profiler.py::_build_optimizer: lr's VALUE never
+# changes a layer's measured memory or optimizer.step() time, only the
+# recorded "optimizer_lr" field) still shouldn't silently record 0.01 for
+# every model regardless of what a real training run would actually use.
+# Same vision/language split as scripts/run_thesis_mode.sh's
+# LR_VISION/LR_LM (mirrored here, not sourced -- this script is also run
+# standalone, without run_thesis_mode.sh setting these first). Classification
+# queried from the project's single source of truth
+# (src/data/dataset_registry.py::VISION_MODELS), not a hardcoded case list --
+# see scripts/run_thesis_mode.sh's own is_vision_model for why a duplicated
+# list silently drifts out of sync.
+LR_VISION="${LR_VISION:-0.01}"
+LR_LM="${LR_LM:-0.00005}"
+is_vision_model() {
+  "$PYTHON_CMD" -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('_prism_dataset_registry', 'src/data/dataset_registry.py')
+mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
+spec.loader.exec_module(mod)
+sys.exit(0 if sys.argv[1] in mod.VISION_MODELS else 1)
+" "$1"
+}
+lr_for_model() {
+  if is_vision_model "$1"; then echo "$LR_VISION"; else echo "$LR_LM"; fi
+}
+
 # --- ZOMBIE THREAD FIX FLAGS ---
 # When profiling ViT-B16 or other models where CPU FP16 emulation is slow:
 # --skip_cpu:      Skip CPU profiling entirely
@@ -603,6 +631,7 @@ for model in "${MODELS[@]}"; do
                         --optimizer "$optimizer"
                         --warmup "$WARMUP"
                         --measure "$MEASURE"
+                        --lr "$(lr_for_model "$model")"
                         --output_dir "$RUN_OUT_DIR"
                         --datasets_root "$DATASETS_DIR"
                         --require_datasets

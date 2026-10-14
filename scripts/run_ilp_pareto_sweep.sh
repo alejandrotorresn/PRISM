@@ -13,7 +13,25 @@ MODEL="${MODEL:-resnet50}"
 CONFIG_DIR="${CONFIG_DIR:-data/test-m4/resnet50/SGD/fp32/batch_8}"
 CONFIG_DIRS="${CONFIG_DIRS:-}"
 GPU_BUDGETS_MB="${GPU_BUDGETS_MB:-auto}"
-CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-1e18}"
+# See scripts/run_ilp_partition.sh for why this default changed from an
+# unconstrained 1e18 to "auto" (real local-machine freeze from an
+# unconstrained CPU budget once the GPU memory estimate was fixed).
+CPU_MEM_BUDGET_MB="${CPU_MEM_BUDGET_MB:-auto}"
+# 0.90 -- see scripts/run_ilp_partition.sh for why (the CPU memory
+# constraint is already a correct, hard budget; it does not need a
+# punitive extra discount beyond GPU_VRAM_SAFETY_RATIO's own convention).
+CPU_MEM_SAFETY_RATIO="${CPU_MEM_SAFETY_RATIO:-0.9}"
+
+if [ "$CPU_MEM_BUDGET_MB" = "auto" ]; then
+  if [ ! -r /proc/meminfo ]; then
+    echo "[ERROR] CPU_MEM_BUDGET_MB=auto but /proc/meminfo is not readable." >&2
+    echo "        Set CPU_MEM_BUDGET_MB explicitly, or 1e18 to disable this safety limit." >&2
+    exit 1
+  fi
+  _CPU_RAM_AVAILABLE_MB="$(awk '/^MemAvailable:/ { printf "%d", $2 / 1024 }' /proc/meminfo)"
+  CPU_MEM_BUDGET_MB="$(awk -v v="$_CPU_RAM_AVAILABLE_MB" -v r="$CPU_MEM_SAFETY_RATIO" 'BEGIN{printf "%d", v*r}')"
+  echo "System RAM available: ${_CPU_RAM_AVAILABLE_MB} MiB; CPU_MEM_SAFETY_RATIO=$CPU_MEM_SAFETY_RATIO -> CPU memory budget: ${CPU_MEM_BUDGET_MB} MiB"
+fi
 
 # ---- Resolve GPU_BUDGETS_MB=auto to dynamic values ----
 if [ "$GPU_BUDGETS_MB" = "auto" ]; then

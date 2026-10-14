@@ -131,7 +131,7 @@ def create_vertex_distribution_oom_plot(output_dir):
     
     # -------------------------------------------------------------------------
     # Panel C: OOM Rescue Comparison across VRAM Budgets (PRISM vs. Greedy)
-    # When VRAM drops below 80% down to 40%, both strategies trigger Algorithm 3 (Selective Rematerialization)
+    # When VRAM drops below 80% down to 40%, both strategies trigger Algorithm 7 (Selective Rematerialization)
     # -------------------------------------------------------------------------
     vram_ratios = np.array([100, 90, 80, 70, 60, 50, 40])
     
@@ -177,7 +177,7 @@ def create_vertex_distribution_oom_plot(output_dir):
     ax3.axvline(x=80, color='crimson', linestyle=':', linewidth=2.2)
     
     # Reduced font size to 8.5 and padding to 0.25 as requested
-    ax3.text(60, 980, 'Severe OOM Constriction Zone (<80% VRAM)\nBoth strategies activate Selective Rematerialization (Algorithm 3)\nPRISM stays ~20% faster than Greedy due to optimal underlying partition!', 
+    ax3.text(60, 980, 'Severe OOM Constriction Zone (<80% VRAM)\nBoth strategies activate Selective Rematerialization (Algorithm 7)\nPRISM stays ~20% faster than Greedy due to optimal underlying partition!', 
              color='crimson', fontsize=8.5, fontweight='bold', ha='center', va='top', 
              bbox=dict(boxstyle="round,pad=0.25", fc="lavenderblush", ec="crimson", lw=1.0, alpha=0.9))
     

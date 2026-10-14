@@ -1,9 +1,33 @@
 import argparse
+import json
 import os
 import glob
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+def _real_hardware_limits_mb(config_dir: str, model: str) -> tuple[float, float]:
+    """Reads the real VRAM/RAM capacity of the machine that produced this
+    config_dir's profiling data, from <config_dir>/run_*/<model>_meta.json
+    (gpu_vram_total_mb/cpu_ram_total_mb, written by
+    src/core/system.py::get_hardware_metadata) -- never a hardcoded assumption,
+    since every machine this project profiles on has different VRAM/RAM."""
+    meta_candidates = sorted(glob.glob(f"{config_dir}/run_*/{model}_meta.json"))
+    if not meta_candidates:
+        print(f"  WARNING: no {model}_meta.json found under {config_dir}/run_*/ -- "
+              f"cannot plot real VRAM/RAM limit lines for this config, skipping them.")
+        return None, None
+    with open(meta_candidates[0]) as f:
+        meta = json.load(f)
+    vram_mb = meta.get("gpu_vram_total_mb") or None
+    ram_mb = meta.get("cpu_ram_total_mb") or None
+    if not vram_mb:
+        print(f"  WARNING: {meta_candidates[0]} has no gpu_vram_total_mb -- skipping VRAM limit line.")
+    if not ram_mb:
+        print(f"  WARNING: {meta_candidates[0]} has no cpu_ram_total_mb -- skipping RAM limit line.")
+    return vram_mb, ram_mb
+
 
 def generate_oom_comparisons(base_dir: str, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
@@ -48,9 +72,10 @@ def generate_oom_comparisons(base_dir: str, output_dir: str):
         total_static_mem = df['params_mb_mean'].sum() + df['grads_mb_mean'].sum() + df['optimizer_states_mb_mean'].sum()
         total_naive_peak = total_static_mem + df['activations_mb_mean'].sum()
         
+        vram_limit_mb, ram_limit_mb = _real_hardware_limits_mb(config_dir, model)
         if not has_intervention and total_naive_peak < 7500:
             continue
-            
+
         # Calculate Forward Pass Memory Accumulation
         layers = np.arange(len(df))
         
@@ -95,7 +120,9 @@ def generate_oom_comparisons(base_dir: str, output_dir: str):
         
         # Plot Antes
         ax1.fill_between(layers, before_vram, color='#d62728', alpha=0.6, label='GPU VRAM (Naïve)')
-        ax1.axhline(8192, color='red', linestyle='--', linewidth=2, label='VRAM Limit (8GB)')
+        if vram_limit_mb:
+            ax1.axhline(vram_limit_mb, color='red', linestyle='--', linewidth=2,
+                        label=f'VRAM Limit ({vram_limit_mb/1024:.1f}GB)')
         ax1.set_title("Before: Native Execution (GPU-Only) - OOM Exceeded", fontsize=13)
         ax1.set_ylabel("Memory (MB)", fontsize=11)
         ax1.legend(loc='upper left')
@@ -104,8 +131,12 @@ def generate_oom_comparisons(base_dir: str, output_dir: str):
         # Plot Despues
         ax2.fill_between(layers, after_vram, color='#2ca02c', alpha=0.7, label='GPU VRAM (ILP Assigned)')
         ax2.fill_between(layers, after_dram, color='#1f77b4', alpha=0.7, label='CPU DRAM (ILP Assigned / Evacuated)')
-        ax2.axhline(8192, color='red', linestyle='--', linewidth=2, label='VRAM Limit (8GB)')
-        ax2.axhline(32768, color='blue', linestyle='--', linewidth=2, label='DRAM Limit (32GB)')
+        if vram_limit_mb:
+            ax2.axhline(vram_limit_mb, color='red', linestyle='--', linewidth=2,
+                        label=f'VRAM Limit ({vram_limit_mb/1024:.1f}GB)')
+        if ram_limit_mb:
+            ax2.axhline(ram_limit_mb, color='blue', linestyle='--', linewidth=2,
+                        label=f'DRAM Limit ({ram_limit_mb/1024:.1f}GB)')
         ax2.set_title("After: ILP Distribution (Hybrid + Recompute)", fontsize=13)
         ax2.set_xlabel("Topological Model Layers (Index)", fontsize=11)
         ax2.set_ylabel("Memory (MB)", fontsize=11)

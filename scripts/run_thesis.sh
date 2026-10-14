@@ -26,6 +26,17 @@ CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
 RUN_HYBRID="${RUN_HYBRID:-true}"
 MODELS_CSV="${MODELS_CSV:-}"
+# MEMORY_MODEL/GPU_EXPANSION/GPU_EXPANSION_BUDGET/CALIBRATION_BATCH_SIZE: unlike a plain `bash`
+# invocation (which inherits the calling shell's environment) or `sbatch` (--export=ALL by
+# default), SSH does NOT forward the local shell's environment -- only variables explicitly
+# interpolated into the remote command string below exist on the other side. Without these
+# defaults+forwarding, a remote Grid5000 campaign silently falls back to run_thesis_mode.sh's own
+# defaults (MEMORY_MODEL=topological, GPU_EXPANSION=false) no matter what the operator exports
+# locally before `oarsub` -- see fix/10_backward_segment_misattribution_residual_blocks/README.md.
+MEMORY_MODEL="${MEMORY_MODEL:-topological_tight}"
+GPU_EXPANSION="${GPU_EXPANSION:-false}"
+GPU_EXPANSION_BUDGET="${GPU_EXPANSION_BUDGET:-}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-}"
 FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
 SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
@@ -303,6 +314,10 @@ ssh "${SSH_OPTS[@]}" "root@$TARGET_NODE" \
      FULL_REPEATS_PER_SEED='$FULL_REPEATS_PER_SEED' \
      NON_FULL_REPEATS='$NON_FULL_REPEATS' \
      RUN_HYBRID='$RUN_HYBRID' \
+     MEMORY_MODEL='$MEMORY_MODEL' \
+     GPU_EXPANSION='$GPU_EXPANSION' \
+     GPU_EXPANSION_BUDGET='$GPU_EXPANSION_BUDGET' \
+     CALIBRATION_BATCH_SIZE='$CALIBRATION_BATCH_SIZE' \
      '$REMOTE_LAUNCH_SCRIPT'"
 
 log_msg "Grid5000 thesis campaign completed."

@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# ==============================================================================
+# GRID5000 CAMPAIGN LAUNCHER v2 (node-side)
+#
+# Same as scripts/launch_grid5k.sh (profiling + ILP campaign via
+# scripts/run_thesis_mode.sh) PLUS a convergence-validation stage at the end
+# (convergence_validation/run_convergence_study.sh): real multi-step
+# training under the ILP plan, All-GPU, All-GPU+gradient-accumulation, and
+# the greedy heuristic, for a genuine accuracy/convergence comparison on
+# top of the profiling-only latency numbers v1 already produced.
+#
+# v1 (launch_grid5k.sh) is left untouched -- this is a separate script, not
+# an edit of it, so existing jobs/automation pointing at v1 keep working
+# exactly as before.
+# ==============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-prism_env}"
+PYTHON_CMD="${PYTHON_CMD:-python}"
+CAMPAIGN_PROFILE="${CAMPAIGN_PROFILE:-doctoral_full}"
+FULL_SEEDS_CSV="${FULL_SEEDS_CSV:-42,43,44}"
+SINGLE_SEED="${SINGLE_SEED:-42}"
+FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
+NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
+DATA_MOUNT_SRC="${DATA_MOUNT_SRC:-/home/ltorresnino/data}"
+DATA_LINK="${DATA_LINK:-$PROJECT_ROOT/data}"
+_DEFAULT_STORAGE_BASE="${DATA_MOUNT_SRC%/data}"
+REPORTS_MOUNT_SRC="${REPORTS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/reports}"
+REPORTS_LINK="${REPORTS_LINK:-$PROJECT_ROOT/reports}"
+LOGS_MOUNT_SRC="${LOGS_MOUNT_SRC:-$_DEFAULT_STORAGE_BASE/logs}"
+LOGS_LINK="${LOGS_LINK:-$PROJECT_ROOT/logs}"
+LOG_DIR="${LOG_DIR:-$LOGS_LINK/grid5k}"
+LOG_FILE="${LOG_FILE:-${LOG_DIR}/grid5k_launch_v2_$(date +%Y%m%d_%H%M%S).log}"
+
+# Convergence-validation stage. Defaults to on; set RUN_CONVERGENCE=false to
+# get the exact same behavior as v1 (profiling + ILP only).
+RUN_CONVERGENCE="${RUN_CONVERGENCE:-true}"
+CONVERGENCE_MODELS_CSV="${CONVERGENCE_MODELS_CSV:-resnet50,resnet152,distilgpt2,gpt2_small}"
+CONVERGENCE_PRECISIONS_CSV="${CONVERGENCE_PRECISIONS_CSV:-fp32}"
+CONVERGENCE_REGIMES_CSV="${CONVERGENCE_REGIMES_CSV:-A,B}"
+CONVERGENCE_SEEDS_CSV="${CONVERGENCE_SEEDS_CSV:-42,43,44}"
+CONVERGENCE_EPOCHS="${CONVERGENCE_EPOCHS:-7}"
+CONVERGENCE_MAX_STEPS="${CONVERGENCE_MAX_STEPS:-}"
+
+mkdir -p "$LOG_DIR"
+
+log_msg() {
+    local msg="$1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$LOG_FILE"
+}
+
+on_error() {
+    local exit_code=$?
+    log_msg "ERROR: campaign aborted (exit_code=$exit_code, line=${BASH_LINENO[0]})."
+    exit "$exit_code"
+}
+
+trap on_error ERR
+
+activate_conda_env() {
+    local candidates=(
+        "/root/miniconda3/etc/profile.d/conda.sh"
+        "/opt/conda/etc/profile.d/conda.sh"
+        "$HOME/miniconda3/etc/profile.d/conda.sh"
+        "$HOME/anaconda3/etc/profile.d/conda.sh"
+    )
+
+    if command -v conda >/dev/null 2>&1; then
+        eval "$(conda shell.bash hook)"
+    else
+        local c
+        for c in "${candidates[@]}"; do
+            if [ -f "$c" ]; then
+                # shellcheck disable=SC1090
+                source "$c"
+                break
+            fi
+        done
+    fi
+
+    if ! command -v conda >/dev/null 2>&1; then
+        log_msg "ERROR: conda was not found. Install conda in the deployed image or export CONDA_ENV_NAME accordingly."
+        exit 1
+    fi
+
+    # Some conda activate scripts (e.g., MKL hooks) are not nounset-safe.
+    # Temporarily relax nounset only for activation.
+    local _had_nounset=0
+    if [[ "$-" == *u* ]]; then
+        _had_nounset=1
+        set +u
+    fi
+
+    if ! conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
+        log_msg "ERROR: unable to activate requested conda environment: $CONDA_ENV_NAME"
+        exit 1
+    fi
+
+    if [ "$_had_nounset" -eq 1 ]; then
+        set -u
+    fi
+    log_msg "Conda environment activated: $CONDA_ENV_NAME"
+}
+
+prepare_storage() {
+    link_or_migrate_dir() {
+        local mount_src="$1"
+        local link_path="$2"
+        local label="$3"
+
+        if [ ! -d "$mount_src" ]; then
+            mkdir -p "$mount_src" 2>/dev/null || true
+        fi
+
+        if [ -d "$mount_src" ]; then
+            if [ -L "$link_path" ]; then
+                local current_target
+                current_target="$(readlink "$link_path")"
+                if [ "$current_target" != "$mount_src" ]; then
+                    rm -f "$link_path"
+                    ln -s "$mount_src" "$link_path"
+                fi
+            elif [ -e "$link_path" ]; then
+                if [ -d "$link_path" ]; then
+                    local first_entry
+                    first_entry="$(find "$link_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
+                    if [ -n "$first_entry" ]; then
+                        log_msg "Migrating existing $label directory into home-backed storage: $link_path -> $mount_src"
+                        mkdir -p "$mount_src"
+                        cp -r "$link_path"/. "$mount_src"/
+                    else
+                        log_msg "Replacing empty $label directory with symlink: $link_path -> $mount_src"
+                    fi
+                    rm -rf "$link_path"
+                    ln -s "$mount_src" "$link_path"
+                else
+                    log_msg "WARNING: $link_path exists and is not a directory/symlink. Keeping it as-is."
+                fi
+            else
+                ln -s "$mount_src" "$link_path"
+            fi
+            log_msg "$label path ready: $link_path -> $mount_src"
+        else
+            mkdir -p "$link_path"
+            log_msg "WARNING: $mount_src not available. Using local path: $link_path"
+        fi
+    }
+
+    link_or_migrate_dir "$DATA_MOUNT_SRC" "$DATA_LINK" "Data"
+    link_or_migrate_dir "$REPORTS_MOUNT_SRC" "$REPORTS_LINK" "Reports"
+    link_or_migrate_dir "$LOGS_MOUNT_SRC" "$LOGS_LINK" "Logs"
+}
+
+configure_cpu_runtime() {
+    log_msg "Starting hardware autodetection..."
+
+    local cpu_vendor
+    local model_name
+    local phy_cores
+    local target_threads
+
+    cpu_vendor="$(lscpu | grep -m1 'Vendor ID' | awk -F ':' '{print $2}' | xargs || true)"
+    model_name="$(lscpu | grep -m1 'Model name' | awk -F ':' '{print $2}' | xargs || true)"
+    phy_cores="$(lscpu -b -p=Core,Socket | grep -v '^#' | sort -u | wc -l | xargs || true)"
+
+    if ! [[ "$phy_cores" =~ ^[0-9]+$ ]] || [ "$phy_cores" -le 0 ]; then
+        phy_cores=1
+    fi
+
+    if [ "${FORCE_THREADS:-0}" -gt 0 ] 2>/dev/null; then
+        target_threads="$FORCE_THREADS"
+    else
+        target_threads="$phy_cores"
+    fi
+
+    export OMP_NUM_THREADS="$target_threads"
+    export MKL_NUM_THREADS="$target_threads"
+    export TORCH_NUM_THREADS="$target_threads"
+
+    if [[ "$cpu_vendor" == "AuthenticAMD" || "$cpu_vendor" == "AMD" ]]; then
+        export MKL_DEBUG_CPU_TYPE=5
+        export OMP_BIND_PROC=true
+        export OMP_PLACES=cores
+        export OMP_PROC_BIND=close
+        log_msg "CPU mode: AMD optimized"
+    elif [[ "$cpu_vendor" == "GenuineIntel" ]]; then
+        export KMP_AFFINITY=granularity=fine,compact,1,0
+        export KMP_BLOCKTIME=0
+        log_msg "CPU mode: Intel optimized"
+    else
+        log_msg "CPU vendor not recognized. Using generic affinity settings."
+    fi
+
+    log_msg "CPU: ${model_name:-unknown} (${cpu_vendor:-unknown}), physical_cores=$phy_cores, threads=$target_threads"
+}
+
+run_campaign() {
+    if [ ! -f "$PROJECT_ROOT/scripts/run_thesis_mode.sh" ]; then
+        log_msg "ERROR: missing script: $PROJECT_ROOT/scripts/run_thesis_mode.sh"
+        exit 1
+    fi
+
+    local host_tag
+    local base_output_root
+    local reports_root
+    local run_namespace
+    local repeats_for_run
+    local seed
+
+    host_tag="${HOST_TAG:-$(hostname)}"
+    run_namespace="${RUN_NAMESPACE:-job_${OAR_JOB_ID:-adhoc}_$(date +%Y%m%d_%H%M%S)}"
+    base_output_root="${BASE_OUTPUT_DIR:-$DATA_LINK/$host_tag/thesis_runs/$run_namespace}"
+    reports_root="${REPORTS_DIR:-$REPORTS_LINK/ilp_results/grid5k_${host_tag}_thesis_mode}"
+
+    log_msg "Run namespace: $run_namespace"
+    log_msg "Base output root: $base_output_root"
+
+    run_single_seed() {
+        local campaign_seed="$1"
+        local run_repeats="$2"
+        local seed_output_dir
+        local seed_reports_dir
+
+        seed_output_dir="$base_output_root/$CAMPAIGN_PROFILE/seed_${campaign_seed}"
+        seed_reports_dir="$reports_root/$CAMPAIGN_PROFILE/seed_${campaign_seed}"
+
+        log_msg "Launching profile=$CAMPAIGN_PROFILE seed=$campaign_seed repeats=$run_repeats"
+        log_msg "Output dir: $seed_output_dir"
+        log_msg "Reports dir: $seed_reports_dir"
+
+        (
+            cd "$PROJECT_ROOT"
+
+            # Optional hardening for CUDA env if script exists.
+            if [ -f "scripts/sanitize_cuda_env.sh" ]; then
+                # shellcheck disable=SC1091
+                source "scripts/sanitize_cuda_env.sh"
+                sanitize_cuda_runtime_env
+            fi
+
+            PROFILE="$CAMPAIGN_PROFILE" \
+            MODELS_CSV="$MODELS_CSV" \
+            PYTHON_CMD="$PYTHON_CMD" \
+            HOST_TAG="$host_tag" \
+            SEED_BASE="$campaign_seed" \
+            REPEATS="$run_repeats" \
+            BASE_OUTPUT_DIR="$seed_output_dir" \
+            REPORTS_DIR="$seed_reports_dir" \
+            LOG_DIR="$LOGS_LINK/thesis_mode" \
+            DATASETS_DIR="${DATASETS_DIR:-$PROJECT_ROOT/datasets}" \
+            DOWNLOAD_DATASETS="${DOWNLOAD_DATASETS:-true}" \
+            RUN_PROFILING="${RUN_PROFILING:-true}" \
+            RUN_ILP="${RUN_ILP:-true}" \
+            RUN_HYBRID="${RUN_HYBRID:-true}" \
+            RUN_REPORTS="${RUN_REPORTS:-true}" \
+            FAIL_FAST="${FAIL_FAST:-false}" \
+            DRY_RUN="${DRY_RUN:-false}" \
+            bash "scripts/run_thesis_mode.sh"
+        ) | tee -a "$LOG_FILE"
+    }
+
+    if [ "$CAMPAIGN_PROFILE" = "doctoral_full" ]; then
+        IFS=',' read -r -a full_seeds <<< "$FULL_SEEDS_CSV"
+        repeats_for_run="$FULL_REPEATS_PER_SEED"
+        if ! [[ "$repeats_for_run" =~ ^[0-9]+$ ]] || [ "$repeats_for_run" -le 0 ]; then
+            log_msg "ERROR: FULL_REPEATS_PER_SEED must be a positive integer"
+            exit 1
+        fi
+        if [ "$repeats_for_run" -lt 2 ]; then
+            log_msg "WARNING: FULL_REPEATS_PER_SEED=$repeats_for_run is too low for strict official mode; using 2"
+            repeats_for_run=2
+        fi
+
+        for seed in "${full_seeds[@]}"; do
+            seed="$(echo "$seed" | xargs)"
+            if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
+                log_msg "ERROR: invalid seed in FULL_SEEDS_CSV: '$seed'"
+                exit 1
+            fi
+            run_single_seed "$seed" "$repeats_for_run"
+        done
+    else
+        repeats_for_run="$NON_FULL_REPEATS"
+        if ! [[ "$repeats_for_run" =~ ^[0-9]+$ ]] || [ "$repeats_for_run" -le 0 ]; then
+            log_msg "ERROR: NON_FULL_REPEATS must be a positive integer"
+            exit 1
+        fi
+        if [ "$CAMPAIGN_PROFILE" = "doctoral_minimal" ] && [ "$repeats_for_run" -lt 2 ]; then
+            log_msg "WARNING: NON_FULL_REPEATS=$repeats_for_run is too low for strict official mode; using 2"
+            repeats_for_run=2
+        fi
+        if ! [[ "$SINGLE_SEED" =~ ^[0-9]+$ ]]; then
+            log_msg "ERROR: SINGLE_SEED must be a non-negative integer"
+            exit 1
+        fi
+        run_single_seed "$SINGLE_SEED" "$repeats_for_run"
+    fi
+
+    log_msg "Campaign finished successfully."
+}
+
+# Runs convergence_validation/run_convergence_study.sh once, after the
+# profiling+ILP campaign above has produced ilp_solution/ and
+# ilp_solution_pareto_best_budget_*/ directories under data/$host_tag/...
+# It is run once overall (not once per profiling seed): the ILP plan is a
+# structural property of the model/batch graph, not of the profiling run's
+# own random seed, so any one of this campaign's profiling seeds' plans is
+# equally valid input here. convergence_validation's OWN seeds
+# (CONVERGENCE_SEEDS_CSV) are the real-training seeds and are independent
+# of the profiling seeds above.
+run_convergence_stage() {
+    if [ "$RUN_CONVERGENCE" != "true" ]; then
+        log_msg "RUN_CONVERGENCE=$RUN_CONVERGENCE -- skipping convergence-validation stage."
+        return 0
+    fi
+    if [ ! -f "$PROJECT_ROOT/convergence_validation/run_convergence_study.sh" ]; then
+        log_msg "WARNING: convergence_validation/run_convergence_study.sh not found -- skipping (did you forget to pull/push it?)"
+        return 0
+    fi
+
+    local host_tag
+    host_tag="${HOST_TAG:-$(hostname)}"
+
+    log_msg "Starting convergence-validation stage (host=$host_tag)..."
+    (
+        cd "$PROJECT_ROOT"
+        MODELS_CSV="$CONVERGENCE_MODELS_CSV" \
+        PRECISIONS_CSV="$CONVERGENCE_PRECISIONS_CSV" \
+        REGIMES_CSV="$CONVERGENCE_REGIMES_CSV" \
+        SEEDS_CSV="$CONVERGENCE_SEEDS_CSV" \
+        EPOCHS="$CONVERGENCE_EPOCHS" \
+        MAX_STEPS="$CONVERGENCE_MAX_STEPS" \
+        PYTHON_CMD="$PYTHON_CMD" \
+        HOST_TAG="$host_tag" \
+        DATASETS_ROOT="${DATASETS_DIR:-$PROJECT_ROOT/datasets}" \
+        OUTPUT_ROOT="$REPORTS_LINK/convergence_study/$host_tag" \
+        bash "convergence_validation/run_convergence_study.sh"
+    ) | tee -a "$LOG_FILE"
+    log_msg "Convergence-validation stage finished."
+}
+
+main() {
+    log_msg "Grid5000 node launcher v2 started"
+    log_msg "Project root: $PROJECT_ROOT"
+    activate_conda_env
+    prepare_storage
+    configure_cpu_runtime
+    run_campaign
+    run_convergence_stage
+}
+
+main "$@"

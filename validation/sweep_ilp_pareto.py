@@ -25,12 +25,6 @@ solve_partition_ilp = importlib.import_module("ilp.solve").solve_partition_ilp
 
 
 infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
-load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
-load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
-ExecutionPlan = importlib.import_module("runtime.plan_representation").ExecutionPlan
-SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
-simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
-simulate_plan_phase4 = importlib.import_module("runtime.simulator").simulate_plan_phase4
 
 def _default_paths(config_dir: Path, model_name: str):
     inferred = infer_ilp_input_paths(config_dir, model_name)
@@ -287,23 +281,6 @@ def _resolve_regime_and_weight_policy(args: argparse.Namespace) -> tuple[str, bo
     return regime, enforce_convex
 
 
-def _to_execution_plan_from_ilp(ilp) -> ExecutionPlan:
-    forward_assignment = getattr(ilp, "forward_assignment", None) or ilp.assignment
-    backward_assignment = getattr(ilp, "backward_assignment", None) or ilp.assignment
-    cut_edges_forward = list(getattr(ilp, "cut_edges", []) or [])
-    cut_edges_backward = list(getattr(ilp, "backward_cut_edges", None) or cut_edges_forward)
-    cross_phase_edges = list(getattr(ilp, "cross_phase_edges", None) or [])
-    activation_strategies = dict(getattr(ilp, "activation_strategies", None) or {})
-    return ExecutionPlan(
-        assignment_forward=dict(forward_assignment),
-        assignment_backward=dict(backward_assignment),
-        cut_edges_forward=cut_edges_forward,
-        cut_edges_backward=cut_edges_backward,
-        cross_phase_edges=cross_phase_edges,
-        activation_strategies=activation_strategies,
-    )
-
-
 def _profile_invalid_rows(args: argparse.Namespace, budgets: List[float], profile_errors: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     error_text = " | ".join(f"{e['config_dir']}: {e['error']}" for e in profile_errors)
     rows: List[Dict[str, Any]] = []
@@ -339,16 +316,6 @@ def _profile_invalid_rows(args: argparse.Namespace, budgets: List[float], profil
             "greedy_layers_cpu": 0,
             "greedy_cut_edges": 0,
             "greedy_energy_j": None,
-            "sim_status": "skipped",
-            "sim_objective": None,
-            "sim_time_ms": None,
-            "sim_energy_j": None,
-            "sim_transfer_ms": None,
-            "sim_gpu_mem_mb": None,
-            "sim_cpu_mem_mb": None,
-            "sim_warnings": 0,
-            "sim_violations": 0,
-            "sim_error": None,
             "input_validation_status": "profile_invalid",
             "input_validation_error": error_text,
             "input_profile_error_count": len(profile_errors),
@@ -365,7 +332,7 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--gpu_budgets_mb", required=True, help="Comma-separated budgets, e.g. 400,600,800,1000")
     parser.add_argument("--cpu_mem_budget_mb", type=float, default=1e18)
-    parser.add_argument("--memory_model", choices=["nodal_sum", "peak_approx", "topological"], default="topological",
+    parser.add_argument("--memory_model", choices=["topological", "topological_tight"], default="topological",
                         help="Memory constraint model. 'topological' (default) is the only correct model for training: "
                              "activations are counted in GPU only when BOTH forward and backward are on GPU (AND logic).")
     parser.add_argument("--peak_activation_overlap", type=float, default=0.35)
@@ -445,6 +412,20 @@ def main() -> int:
             strict_schema=True,
         )
 
+    if args.memory_model == "topological_tight":
+        # Same requirement as validation/run_ilp_partition.py: the tight
+        # per-critical-point constraint (src/ilp/solve.py) needs the real
+        # topological walk, which only exists for a single hardware profile.
+        if len(loaded_config_dirs) != 1:
+            raise ValueError(
+                "--memory_model topological_tight requires a single --config_dir "
+                "(a multi-hardware merge has no single graph_edges.csv/metrics_stats.csv "
+                "the real topological walk can use)."
+            )
+        PreparedTopologyMemory = importlib.import_module("ilp.topology_memory").PreparedTopologyMemory
+        stats_csv, graph_csv, _transfer_csv = _default_paths(loaded_config_dirs[0], args.model)
+        data.prepared_topology = PreparedTopologyMemory.prepare(str(graph_csv), str(stats_csv))
+
     budgets = _parse_budget_list(args.gpu_budgets_mb)
     rows = []
 
@@ -488,19 +469,6 @@ def main() -> int:
         print("=" * 80)
         return 0
 
-    inferred_inputs = infer_ilp_input_paths(config_dir=loaded_config_dirs[0], model_name=args.model)
-    measured_layers = set(data.nodes)
-    graph_edges = load_graph_edges(
-        inferred_inputs.graph_edges_csv,
-        transfer_edges_csv=inferred_inputs.transfer_edges_csv,
-        measured_layers=measured_layers,
-    )
-    transfer_costs = load_transfer_costs(
-        inferred_inputs.transfer_edges_csv,
-        graph_edges_csv=inferred_inputs.graph_edges_csv,
-        measured_layers=measured_layers,
-    )
-
     for b in budgets:
         cfg = ILPConfig(
             w_time=args.w_time,
@@ -519,44 +487,6 @@ def main() -> int:
         all_gpu = _eval_fixed_policy("all_gpu", data, cfg)
         greedy = _eval_greedy_policy(data, cfg)
         phase_counts = _phase_assignment_counts(ilp)
-
-        sim_result = None
-        sim_error = None
-        if str(ilp.status).lower() in {"optimal", "feasible"} and len(getattr(ilp, "assignment", {})) > 0:
-            try:
-                sim_cfg = SimulationConfig(
-                    mode="robust",
-                    k_sigma=args.k_sigma,
-                    k_sigma_time=args.k_sigma_time,
-                    k_sigma_energy=args.k_sigma_energy,
-                    w_time=args.w_time,
-                    w_energy=args.w_energy,
-                    w_transfer=args.w_transfer,
-                    gpu_mem_budget_mb=b,
-                    cpu_mem_budget_mb=args.cpu_mem_budget_mb,
-                    memory_model=args.memory_model,
-                    peak_activation_overlap=args.peak_activation_overlap,
-                )
-                sim_plan = _to_execution_plan_from_ilp(ilp)
-                if sim_plan.activation_strategies:
-                    sim_result = simulate_plan_phase4(
-                        plan=sim_plan,
-                        metrics_stats_csv=inferred_inputs.metrics_stats_csv,
-                        graph_edges=graph_edges,
-                        transfer_costs=transfer_costs,
-                        cfg=sim_cfg,
-                        activation_strategies=sim_plan.activation_strategies,
-                    )
-                else:
-                    sim_result = simulate_plan(
-                        plan=sim_plan,
-                        metrics_stats_csv=inferred_inputs.metrics_stats_csv,
-                        graph_edges=graph_edges,
-                        transfer_costs=transfer_costs,
-                        cfg=sim_cfg,
-                    )
-            except Exception as exc:
-                sim_error = f"{type(exc).__name__}: {exc}"
 
         rows.append({
             "model": args.model,
@@ -594,16 +524,6 @@ def main() -> int:
             "greedy_layers_cpu": greedy["layers_cpu"],
             "greedy_cut_edges": greedy["cut_edges"],
             "greedy_energy_j": greedy["energy_j"],
-            "sim_status": sim_result.status if sim_result is not None else ("error" if sim_error else "skipped"),
-            "sim_objective": sim_result.objective_value if sim_result is not None else None,
-            "sim_time_ms": sim_result.total_time_ms if sim_result is not None else None,
-            "sim_energy_j": sim_result.total_energy_j if sim_result is not None else None,
-            "sim_transfer_ms": sim_result.total_transfer_ms if sim_result is not None else None,
-            "sim_gpu_mem_mb": sim_result.gpu_mem_used_mb if sim_result is not None else None,
-            "sim_cpu_mem_mb": sim_result.cpu_mem_used_mb if sim_result is not None else None,
-            "sim_warnings": len(sim_result.warnings) if sim_result is not None else 0,
-            "sim_violations": len(sim_result.violations) if sim_result is not None else 0,
-            "sim_error": sim_error,
             "input_validation_status": "ok" if len(profile_errors) == 0 else "partial",
             "input_validation_error": " | ".join(f"{e['config_dir']}: {e['error']}" for e in profile_errors) if profile_errors else None,
             "input_profile_error_count": len(profile_errors),

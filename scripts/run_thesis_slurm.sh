@@ -36,6 +36,16 @@ SINGLE_SEED="${SINGLE_SEED:-42}"
 FULL_REPEATS_PER_SEED="${FULL_REPEATS_PER_SEED:-2}"
 NON_FULL_REPEATS="${NON_FULL_REPEATS:-1}"
 DATA_MOUNT_SRC="${DATA_MOUNT_SRC:-$PROJECT_ROOT/data}"
+# `sbatch` forwards the whole submitting shell's environment by default
+# (--export=ALL), so exporting these before `sbatch` already works today --
+# but with no first-class flag/default here, it's easy for an operator to
+# forget and silently fall back to run_thesis_mode.sh's own defaults
+# (MEMORY_MODEL=topological, GPU_EXPANSION=false). See
+# fix/10_backward_segment_misattribution_residual_blocks/README.md.
+MEMORY_MODEL="${MEMORY_MODEL:-topological_tight}"
+GPU_EXPANSION="${GPU_EXPANSION:-false}"
+GPU_EXPANSION_BUDGET="${GPU_EXPANSION_BUDGET:-}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-}"
 
 log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -76,6 +86,22 @@ parse_args() {
                 RUN_HYBRID="$2"
                 shift 2
                 ;;
+            --memory-model)
+                MEMORY_MODEL="$2"
+                shift 2
+                ;;
+            --enable-gpu-expansion)
+                GPU_EXPANSION="$2"
+                shift 2
+                ;;
+            --gpu-expansion-budget)
+                GPU_EXPANSION_BUDGET="$2"
+                shift 2
+                ;;
+            --calibration-batch-size)
+                CALIBRATION_BATCH_SIZE="$2"
+                shift 2
+                ;;
             --help|-h)
                 cat <<'EOF'
 Usage: run_thesis_slurm.sh [options]
@@ -87,10 +113,15 @@ Options:
   --full-seeds <csv>
   --full-repeats <int>
   --run-hybrid <true|false>
+  --memory-model <topological|topological_tight>  (default: topological_tight)
+  --enable-gpu-expansion <true|false>  (default: false)
+  --gpu-expansion-budget <int>
+  --calibration-batch-size <int>  (required for --enable-gpu-expansion true to validate against real overhead)
 
 Examples:
   sbatch scripts/run_thesis_slurm.sh --profile doctoral_minimal --single-seed 42 --non-full-repeats 2
-  sbatch --time=72:00:00 --cpus-per-task=16 scripts/run_thesis_slurm.sh --profile doctoral_full
+  sbatch --time=72:00:00 --cpus-per-task=16 scripts/run_thesis_slurm.sh --profile doctoral_full \
+    --memory-model topological_tight --enable-gpu-expansion true --calibration-batch-size 64
 EOF
                 exit 0
                 ;;
@@ -167,6 +198,10 @@ SINGLE_SEED="$SINGLE_SEED" \
 FULL_REPEATS_PER_SEED="$FULL_REPEATS_PER_SEED" \
 NON_FULL_REPEATS="$NON_FULL_REPEATS" \
 RUN_HYBRID="$RUN_HYBRID" \
+MEMORY_MODEL="$MEMORY_MODEL" \
+GPU_EXPANSION="$GPU_EXPANSION" \
+GPU_EXPANSION_BUDGET="$GPU_EXPANSION_BUDGET" \
+CALIBRATION_BATCH_SIZE="$CALIBRATION_BATCH_SIZE" \
 bash "$LAUNCH_SCRIPT"
 
 log_msg "Slurm thesis campaign completed."

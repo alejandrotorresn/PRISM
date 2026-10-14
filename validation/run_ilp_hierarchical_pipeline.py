@@ -80,24 +80,16 @@ def main() -> int:
     parser.add_argument("--meta_ridge_lambda", type=float, default=1e-6, help="Deprecated and ignored.")
     parser.add_argument("--meta_seed", type=int, default=42, help="Deprecated and ignored.")
     parser.add_argument("--meta_blend", type=float, default=1.0, help="Deprecated and ignored.")
-    parser.add_argument("--no_simulate", action="store_true", help="Skip runtime simulation validation stage")
+    parser.add_argument("--no_topology_check", action="store_true", help="Skip real topological peak-memory validation stage")
     parser.add_argument("--output_dir", default=None)
 
     args = parser.parse_args()
 
     load_execution_plan = None
-    infer_ilp_input_paths = None
-    load_graph_edges = None
-    load_transfer_costs = None
-    SimulationConfig = None
-    simulate_plan = None
-    if not args.no_simulate:
+    PreparedTopologyMemory = None
+    if not args.no_topology_check:
         load_execution_plan = importlib.import_module("runtime.plan_representation").load_execution_plan
-        infer_ilp_input_paths = importlib.import_module("runtime.plan_representation").infer_ilp_input_paths
-        load_graph_edges = importlib.import_module("runtime.plan_representation").load_graph_edges
-        load_transfer_costs = importlib.import_module("runtime.plan_representation").load_transfer_costs
-        SimulationConfig = importlib.import_module("runtime.simulator").SimulationConfig
-        simulate_plan = importlib.import_module("runtime.simulator").simulate_plan
+        PreparedTopologyMemory = importlib.import_module("ilp.topology_memory").PreparedTopologyMemory
 
     config_dir = Path(args.config_dir)
     if not config_dir.exists():
@@ -151,47 +143,27 @@ def main() -> int:
         budget_dir = output_dir / f"budget_{budget_tag}"
         exported = save_ilp_solution(final_sol, str(budget_dir / "ilp_solution"))
 
-        sim = None
-        sim_summary = None
-        if not args.no_simulate:
+        peak_gpu_mb = None
+        peak_cpu_mb = None
+        topology_summary = None
+        if not args.no_topology_check:
             plan = load_execution_plan(
                 assignment_csv=exported["assignment_csv"],
                 cut_edges_csv=exported["cut_edges_csv"],
             )
-            inferred = infer_ilp_input_paths(config_dir=config_dir, model_name=args.model)
-            measured_layers = set(data.nodes)
-            graph_edges = load_graph_edges(
-                inferred.graph_edges_csv,
-                transfer_edges_csv=inferred.transfer_edges_csv,
-                measured_layers=measured_layers,
-            )
-            transfer_costs = load_transfer_costs(
-                inferred.transfer_edges_csv,
-                graph_edges_csv=inferred.graph_edges_csv,
-                measured_layers=measured_layers,
-            )
-            sim_cfg = SimulationConfig(
-                mode="robust",
-                k_sigma=args.k_sigma,
-                k_sigma_time=args.k_sigma_time,
-                k_sigma_energy=args.k_sigma_energy,
-                w_time=args.w_time,
-                w_energy=args.w_energy,
-                w_transfer=args.w_transfer,
-                gpu_mem_budget_mb=budget,
-                cpu_mem_budget_mb=args.cpu_mem_budget_mb,
-            )
-            sim = simulate_plan(
-                plan=plan,
-                metrics_stats_csv=inferred.metrics_stats_csv,
-                graph_edges=graph_edges,
-                transfer_costs=transfer_costs,
-                cfg=sim_cfg,
+            prepared = PreparedTopologyMemory.prepare(graph_csv, stats_csv)
+            peak_gpu_mb, peak_cpu_mb = prepared.evaluate(
+                forward_assignment=plan.assignment_forward,
+                backward_assignment=plan.assignment_backward,
+                activation_strategy=getattr(plan, "activation_strategies", None),
             )
 
-            sim_summary = budget_dir / "simulation_summary.json"
-            sim_summary.parent.mkdir(parents=True, exist_ok=True)
-            sim_summary.write_text(json.dumps(sim.to_dict(), indent=4), encoding="utf-8")
+            topology_summary = budget_dir / "topology_memory_summary.json"
+            topology_summary.parent.mkdir(parents=True, exist_ok=True)
+            topology_summary.write_text(
+                json.dumps({"peak_gpu_mem_mb": peak_gpu_mb, "peak_cpu_mem_mb": peak_cpu_mb}, indent=4),
+                encoding="utf-8",
+            )
 
         rows.append(
             {
@@ -202,17 +174,15 @@ def main() -> int:
                 "base_objective": base_sol.objective_value,
                 "final_objective": final_sol.objective_value,
                 "delta_objective": float(final_sol.objective_value - base_sol.objective_value),
-                "sim_status": sim.status if sim is not None else "skipped",
-                "sim_objective": sim.objective_value if sim is not None else float("nan"),
-                "sim_total_time_ms": sim.total_time_ms if sim is not None else float("nan"),
-                "sim_total_energy_j": sim.total_energy_j if sim is not None else float("nan"),
-                "sim_total_transfer_ms": sim.total_transfer_ms if sim is not None else float("nan"),
-                "sim_gpu_mem_mb": sim.gpu_mem_used_mb if sim is not None else float("nan"),
-                "sim_cpu_mem_mb": sim.cpu_mem_used_mb if sim is not None else float("nan"),
-                "sim_violations": len(sim.violations) if sim is not None else 0,
-                "sim_warnings": len(sim.warnings) if sim is not None else 0,
+                "topology_peak_gpu_mem_mb": peak_gpu_mb if peak_gpu_mb is not None else float("nan"),
+                "topology_peak_cpu_mem_mb": peak_cpu_mb if peak_cpu_mb is not None else float("nan"),
+                "topology_feasible": (
+                    (peak_gpu_mb <= budget and peak_cpu_mb <= args.cpu_mem_budget_mb)
+                    if peak_gpu_mb is not None
+                    else None
+                ),
                 "solution_dir": str((budget_dir / "ilp_solution")),
-                "simulation_summary_json": str(sim_summary) if sim_summary is not None else "",
+                "topology_memory_summary_json": str(topology_summary) if topology_summary is not None else "",
             }
         )
 

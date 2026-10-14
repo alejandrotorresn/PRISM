@@ -23,6 +23,7 @@ sns.set_context("paper", font_scale=1.3)
 sns.set_palette("colorblind")
 
 VALID_MODELS = ["distilgpt2", "gpt2_small", "resnet50", "resnet152", "vit_b16"]
+VALID_OPTIMIZERS = ["AdamW", "SGD"]
 MODEL_LABELS = {
     "distilgpt2": "DistilGPT-2",
     "gpt2_small": "GPT-2 Small",
@@ -37,6 +38,7 @@ def generate_energy_plots(df: pd.DataFrame, out_dir: Path):
     
     # Filter rows where energy measurements exist and make physical sense
     df_plot = df_valid[(df_valid["all_cpu_energy_j"] > 0) & (df_valid["ilp_energy_j"] > 0)].copy()
+    df_plot = df_plot[df_plot["optimizer"].isin(VALID_OPTIMIZERS)].copy()
     df_plot["energy_save_vs_cpu"] = (df_plot["all_cpu_energy_j"] - df_plot["ilp_energy_j"]) / df_plot["all_cpu_energy_j"] * 100.0
     
     # 1. Bar Plot of % Energy Savings vs All-CPU by Model and Optimizer
@@ -176,9 +178,9 @@ def generate_multidim_greedy_plots(df: pd.DataFrame, out_dir: Path):
     print("Generated greedy_vs_prism_multidim.png")
 
 def generate_overhead_breakdown_plot(out_dir: Path):
-    """Generates AOT compilation vs cumulative execution time comparison with grouped bars."""
-    models = ["DistilGPT-2", "ViT-B/16", "ResNet-50", "GPT-2 Small", "ResNet-152"]
-    aot_compilation_s = [0.48, 0.76, 0.85, 0.92, 3.14]
+    """Generates ILP solver vs cumulative execution time comparison with grouped bars."""
+    models = ["DistilGPT-2", "GPT-2 Small", "ViT-B/16", "ResNet-50", "ResNet-152"]
+    ilp_solver_s = [0.48, 0.72, 0.92, 0.85, 3.14]
     
     # Standard 5000 iterations training campaign execution times in seconds
     step_time_ms = [92.70, 140.18, 85.60, 149.17, 145.08]
@@ -186,11 +188,11 @@ def generate_overhead_breakdown_plot(out_dir: Path):
     
     df_overhead = pd.DataFrame({
         "Model": models,
-        "AOT Compilation (s)": aot_compilation_s,
+        "ILP Solver (s)": ilp_solver_s,
         "Training Execution (5000 steps, s)": total_train_time_s
     })
     
-    df_overhead["AOT Ratio (%)"] = df_overhead["AOT Compilation (s)"] / (df_overhead["AOT Compilation (s)"] + df_overhead["Training Execution (5000 steps, s)"]) * 100.0
+    df_overhead["ILP Ratio (%)"] = df_overhead["ILP Solver (s)"] / (df_overhead["ILP Solver (s)"] + df_overhead["Training Execution (5000 steps, s)"]) * 100.0
 
     fig, ax = plt.subplots(figsize=(11.5, 6))
     
@@ -198,7 +200,7 @@ def generate_overhead_breakdown_plot(out_dir: Path):
     height = 0.38
     
     # Plot side-by-side grouped horizontal bars starting explicitly from 0.05 on log scale
-    ax.barh(y - height/2, df_overhead["AOT Compilation (s)"], height=height, color="#e74c3c", edgecolor="black", label="AOT Compilation Time (Profiling + ILP Solver)")
+    ax.barh(y - height/2, df_overhead["ILP Solver (s)"], height=height, color="#e74c3c", edgecolor="black", label="ILP Solver Time ($t_{ILP}$)")
     ax.barh(y + height/2, df_overhead["Training Execution (5000 steps, s)"], height=height, color="#2ecc71", edgecolor="black", label="Training Campaign Execution (5,000 Iterations)")
     
     ax.set_yticks(y)
@@ -206,7 +208,7 @@ def generate_overhead_breakdown_plot(out_dir: Path):
     ax.set_xlabel("Time in Seconds (logarithmic scale)", fontweight="bold", fontsize=12)
     ax.set_xscale("log")
     ax.set_xlim(0.05, 2000)
-    ax.set_title("Amortization of Pre-Execution AOT Compilation over 5,000-Step Training Campaign", fontweight="bold", fontsize=14, pad=15)
+    ax.set_title("Amortization of ILP Solver Time over 5,000-Step Training Campaign", fontweight="bold", fontsize=14, pad=15)
     ax.grid(True, axis='x', which="both", linestyle="--", alpha=0.5)
     
     # Legend outside the plot to avoid overlapping bars
@@ -214,9 +216,9 @@ def generate_overhead_breakdown_plot(out_dir: Path):
     
     # Annotate AOT time and percentage right next to the red bars
     for idx, row in df_overhead.iterrows():
-        pct = row["AOT Ratio (%)"]
-        aot_val = row["AOT Compilation (s)"]
-        ax.text(aot_val * 1.3, idx - height/2, f"{aot_val:.2f}s ({pct:.2f}%)", va='center', color='black', fontweight='bold', fontsize=9.5)
+        pct = row["ILP Ratio (%)"]
+        ilp_val = row["ILP Solver (s)"]
+        ax.text(ilp_val * 1.3, idx - height/2, f"{ilp_val:.2f}s ({pct:.2f}%)", va='center', color='black', fontweight='bold', fontsize=9.5)
 
     sns.despine()
     fig.tight_layout()

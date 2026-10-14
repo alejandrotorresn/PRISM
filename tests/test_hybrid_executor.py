@@ -10,7 +10,12 @@ from transformers import GPT2Config, GPT2LMHeadModel
 from src.core.decoder_export_backend import try_export_decoder_only_trace
 from src.ilp.advanced_terms import ActivationStrategy
 from src.runtime.device_plan import DevicePlan, plan_requests_gpu
-from src.runtime.hybrid_executor import _DeviceAwareFXInterpreter, HybridExecutionUnsupportedError, run_hybrid_training
+from src.runtime.hybrid_executor import (
+    _DeviceAwareFXInterpreter,
+    _run_layer_with_dual_placement,
+    HybridExecutionUnsupportedError,
+    run_hybrid_training,
+)
 from validation import run_hybrid_execution as hybrid_cli
 
 
@@ -607,3 +612,67 @@ def test_run_hybrid_execution_safe_wraps_unsupported_runtime(monkeypatch: pytest
 
     assert payload["result"].status == "unsupported"
     assert any("trace unsupported" in warning for warning in payload["result"].warnings)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="dual placement needs a real second device")
+def test_dual_placement_pinned_buffer_cache_does_not_cross_contaminate_shared_module() -> None:
+    """Regression test for a real risk found while adding the pinned-buffer
+    cache (output_clone_safe=False path): a single nn.Module instance can be
+    the target of MULTIPLE distinct FX nodes in one forward pass (e.g.
+    torchvision Bottleneck's shared `self.relu`, called 3x per block, each a
+    separate node but all reporting the SAME `layer_name` since
+    node_layer_names is only ever populated for torch.export-traced decoder
+    models -- never for fx.symbolic_trace-traced vision models). If the
+    pinned-buffer cache were keyed by `layer_name`, a second call's forward()
+    would overwrite the first call's cached snapshot before its backward()
+    reads it. Callers must key by something call-site-unique (FX node name /
+    loop index) instead -- this test simulates exactly that shared-module,
+    two-call-site scenario and checks the resulting gradients are bit-correct
+    against a plain (no dual placement) reference, not just "didn't crash".
+    """
+    torch.manual_seed(0)
+    layer = torch.nn.Linear(4, 4)
+    x1 = torch.randn(3, 4, requires_grad=True)
+    x2 = torch.randn(3, 4, requires_grad=True)
+
+    # Reference: plain single-device computation, same shared layer, same
+    # two inputs, gradients naturally accumulate on layer.weight/bias.
+    ref_out1 = layer(x1)
+    ref_out2 = layer(x2)
+    (ref_out1.sum() + ref_out2.sum()).backward()
+    ref_weight_grad = layer.weight.grad.clone()
+    ref_bias_grad = layer.bias.grad.clone()
+    ref_x1_grad = x1.grad.clone()
+    ref_x2_grad = x2.grad.clone()
+
+    layer.zero_grad()
+    x1.grad = None
+    x2.grad = None
+
+    forward_device = torch.device("cpu")
+    backward_device = torch.device("cuda:0")
+    shared_cache: dict = {}
+
+    # Both forward() calls happen before either backward() -- exactly the
+    # real-world sequencing (a full forward pass completes before autograd
+    # runs any backward()), and exactly when a layer_name-keyed cache would
+    # have the second call's forward() clobber the first call's snapshot.
+    out1 = _run_layer_with_dual_placement(
+        layer, "shared.relu", x1, forward_device, backward_device,
+        output_clone_safe=False, pinned_buffer_cache=shared_cache, pinned_buffer_key=0,
+    )
+    out2 = _run_layer_with_dual_placement(
+        layer, "shared.relu", x2, forward_device, backward_device,
+        output_clone_safe=False, pinned_buffer_cache=shared_cache, pinned_buffer_key=1,
+    )
+    assert len(shared_cache) == 2, "expected two distinct cached buffers (one per call site), not one shared/overwritten slot"
+    (out1.sum() + out2.sum()).backward()
+
+    # layer.to(backward_device) inside the dual-placement recompute leaves
+    # the module's own parameters resident on that device afterward
+    # (pre-existing behavior, unrelated to this fix) -- compare on a common
+    # device rather than assuming either side's device.
+    assert torch.allclose(layer.weight.grad.cpu(), ref_weight_grad, atol=1e-5)
+    assert torch.allclose(layer.bias.grad.cpu(), ref_bias_grad, atol=1e-5)
+    assert torch.allclose(x1.grad.cpu(), ref_x1_grad, atol=1e-5)
+    assert torch.allclose(x2.grad.cpu(), ref_x2_grad, atol=1e-5)

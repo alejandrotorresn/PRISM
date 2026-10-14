@@ -1,6 +1,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
-[![PyTorch 2.5.x](https://img.shields.io/badge/PyTorch-2.5.x-red)](https://pytorch.org)
+[![PyTorch 2.14.x](https://img.shields.io/badge/PyTorch-2.14.x-red)](https://pytorch.org)
 
 # PRISM
 
@@ -46,7 +46,7 @@ conda activate prism_env
 python -m venv .venv
 source .venv/bin/activate
 pip install -r config/requirements.txt
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ### Recommended Validation Order
@@ -338,8 +338,22 @@ The documentation set was reduced so the core references now have distinct respo
 ## System Requirements
 
 - Python 3.10 or higher
-- PyTorch 2.5.x (validated baseline from config/environment.yml)
-- CUDA 12.1 or higher for GPU execution
+- PyTorch 2.14.x and transformers>=5.0 (validated baseline from config/environment.yml). **Do not
+  downgrade below this**: torch 2.5.x + transformers<5.0 cannot `torch.export` GPT-2-family
+  decoder-only models once a batch has real attention-mask padding (`torch._dynamo` fails to trace
+  `torch.finfo(dtype).min` inside transformers' causal-mask construction) -- see
+  `fix/03_phase4_oom_avoidance_and_adaptive_search/README.md` for the full investigation. Confirmed
+  fixed at torch 2.10.0, and separately re-confirmed end-to-end at torch 2.14.1/torchvision
+  0.29.1/transformers 5.17.0 (pinned to the 2.14 line since that is the exact combination
+  verified, not just the minimum).
+  **Important for conda users:** the `pytorch` conda channel's last-ever release is 2.5.1 (PyTorch
+  stopped publishing conda packages after that version) -- `config/environment.yml` installs
+  torch/torchvision via pip (PyTorch's own wheel index) for this reason, not via `conda install`.
+  If you already have an older `prism_env`, upgrading in place requires `pip install --upgrade
+  torch torchvision --extra-index-url https://download.pytorch.org/whl/cu128` run *inside* that
+  conda env (a plain `conda install -c pytorch pytorch=2.10` will fail with
+  `PackagesNotFoundInChannelsError`, since that version was never published there).
+- CUDA 12.8 or higher for GPU execution
 - NVIDIA GPU with NVML support for GPU energy monitoring
 - Linux with RAPL support if CPU energy capture is required
 

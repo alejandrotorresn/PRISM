@@ -46,6 +46,7 @@ def _new_layer_stat(module: nn.Module) -> Dict[str, Any]:
         "bwd_time_ms_accum": 0.0,
         "bwd_dispatch_ms_accum": 0.0,
         "mem_mb": 0.0,
+        "bwd_mem_mb": 0.0,
         "count": 0,
         "bwd_count": 0,
         "output_bytes": 0,
@@ -101,18 +102,79 @@ class TrainingProfiler:
         self._partial_csv_path = None
         self._partial_json_path = None
         self._fwd_tstarts = {}
-        self._bwd_tstarts = {}
+        # Chained tensor-hook backward marker state (see
+        # close_and_rearm_backward_segment in _register_hooks for why this
+        # replaces register_full_backward_hook). _bwd_marker holds the
+        # currently-armed checkpoint (mem_before_mb / cpu / gpu event);
+        # _bwd_closed_names tracks which layers already closed a segment in
+        # the current backward pass, so a module with more than one
+        # grad-requiring input doesn't double-count. _fwd_leaf_order records
+        # real forward execution order so the first-executed leaf module
+        # (whose backward finishes last, with no further input hook to
+        # close it) can be flushed explicitly after loss.backward() returns.
+        self._bwd_marker: Dict[str, Any] = {}
+        self._bwd_closed_names = set()
+        self._fwd_leaf_order: List[str] = []
         self._use_backward_hooks = True
         self._active_optimizer = None
         self._oom_retry_events = 0
         self._oom_retry_last_micro_batch = None
+        # Scale factor applied to per-layer memory deltas captured by the hooks
+        # below. 1.0 under normal (full target-batch) execution. When the OOM
+        # retry fallback drops to a smaller micro-batch (see
+        # _run_step_with_oom_fallback), this is set to target_batch/chunk_size
+        # for the duration of that forward/backward call, so a layer's
+        # recorded memory still reflects the real target batch size instead of
+        # the smaller chunk actually executed. Without this, any layer past
+        # the point where the full-batch attempt first OOMs would otherwise
+        # only ever be measured at the reduced micro-batch size, silently
+        # underestimating its true memory requirement to the ILP.
+        self._current_batch_scale = 1.0
         self.has_gpu = torch.cuda.is_available() and not args.no_gpu
         self.gpu_id = args.gpu_id if self.has_gpu else 0
         self._disable_inplace_modules_for_backward_hooks()
+        self._shared_weight_group = self._detect_shared_weight_groups()
         if self.has_gpu:
             self.model.to(f"cuda:{self.gpu_id}")
         else:
             self.model.to("cpu")
+
+    def _detect_shared_weight_groups(self) -> Dict[str, str]:
+        """Map each leaf module's name to a canonical group id when it
+        shares a parameter TENSOR OBJECT (weight tying, e.g. GPT-2's
+        lm_head.weight is transformer.wte.weight) with another leaf module.
+
+        Root-cause context: topology_memory.py's static-memory sum (params +
+        optimizer state) previously counted each layer NAME once, so a tied
+        pair like lm_head/wte -- two names, one real tensor -- was counted
+        twice (confirmed: ~442MB of double-counted params+AdamW optimizer
+        state for distilgpt2, a meaningful share of its measured +69%
+        overestimate). Detected here, at profiling time, via plain Python
+        object identity (id()) on each leaf module's own parameters -- not
+        data_ptr(), since weight tying is done by literal attribute
+        assignment (two attributes referencing the SAME nn.Parameter
+        object), and identity survives model.to(device) moves. Layers that
+        don't share anything get their own name as a singleton group, so
+        every layer always has a group and downstream code never needs a
+        None-check.
+        """
+        param_id_to_first_layer: Dict[int, str] = {}
+        group_of: Dict[str, str] = {}
+        for name, module in self._get_leaf_modules():
+            group_of[name] = name  # default: singleton group
+            for param in module.parameters(recurse=False):
+                pid = id(param)
+                if pid in param_id_to_first_layer:
+                    group_of[name] = param_id_to_first_layer[pid]
+                else:
+                    param_id_to_first_layer[pid] = name
+        shared = {n: g for n, g in group_of.items() if g != n}
+        if shared:
+            logger.info(
+                "Detected shared-weight (tied) layer groups: %s",
+                {v: k for k, v in shared.items()},
+            )
+        return group_of
 
     def _disable_inplace_modules_for_backward_hooks(self) -> None:
         changed = 0
@@ -143,10 +205,14 @@ class TrainingProfiler:
             h.remove()
         self.hooks = []
         self._fwd_tstarts = {}
-        self._bwd_tstarts = {}
+        self._bwd_marker = {}
+        self._bwd_closed_names = set()
+        self._fwd_leaf_order = []
 
         def pre_hook(name):
             def hook(module, inp):
+                if name not in self._fwd_leaf_order:
+                    self._fwd_leaf_order.append(name)
                 self._fwd_tstarts[name] = {"cpu": time.perf_counter()}
                 if device_type == "cuda":
                     start = torch.cuda.Event(enable_timing=True)
@@ -181,7 +247,16 @@ class TrainingProfiler:
                         pass
 
                     try:
-                        s["output_bytes"] = get_tensor_size_recursive(out)
+                        # Scale to the real target batch size: this is the
+                        # same OOM-retry micro-batch issue as mem_mb above --
+                        # the output tensor's batch dimension here is whatever
+                        # chunk size first reached this layer, not necessarily
+                        # the target batch size. activations_mb (derived from
+                        # this field in src/ilp/data_loader.py) is what the
+                        # ILP's memory budget constraint actually uses, so an
+                        # unscaled value here is the real driver of the
+                        # underestimation, more so than mem_mb/gpu_mem_peak_mb.
+                        s["output_bytes"] = get_tensor_size_recursive(out) * self._current_batch_scale
                     except Exception:
                         pass
 
@@ -201,6 +276,12 @@ class TrainingProfiler:
                     mem_peak_mb = torch.cuda.max_memory_allocated(self.gpu_id) / (1024 ** 2)
                     mem_before_mb = self._fwd_tstarts[name].get("mem_before_mb", 0.0)
                     layer_peak_delta_mb = max(0.0, mem_peak_mb - mem_before_mb)
+                    # Rescale to the real target batch size when this call ran
+                    # on a reduced OOM-retry micro-batch (see
+                    # _current_batch_scale), so a layer never-reached by the
+                    # full-batch attempt isn't silently recorded at a smaller
+                    # effective batch size than what the ILP is told it is.
+                    layer_peak_delta_mb *= self._current_batch_scale
                     s["mem_mb"] = max(s["mem_mb"], layer_peak_delta_mb)
                 else:
                     kernel_ms = (cpu_end - self._fwd_tstarts[name]["cpu"]) * 1000.0
@@ -214,56 +295,173 @@ class TrainingProfiler:
 
             return hook
 
-        def backward_pre_hook(name):
-            def hook(module, grad_output):
-                self._bwd_tstarts[name] = {"cpu": time.perf_counter()}
-                if device_type == "cuda":
-                    start = torch.cuda.Event(enable_timing=True)
-                    start.record()
-                    self._bwd_tstarts[name]["gpu"] = start
+        # NOTE on why this does NOT use register_full_backward_hook /
+        # register_full_backward_pre_hook: those APIs insert a
+        # BackwardHookFunction wrapper node into the autograd graph at
+        # forward time. Real CNN backbones (e.g. torchvision ResNet) use an
+        # in-place residual add (`out += identity`) inside Bottleneck.forward
+        # -- not just in-place ReLU, which _disable_inplace_modules_for_
+        # backward_hooks already neutralizes -- and PyTorch forbids
+        # in-place-modifying a tensor that is the wrapped output of a
+        # full-backward-hooked module ("Output 0 of BackwardHookFunction is
+        # a view and is being modified inplace"). This crashes on the very
+        # first real forward step for ResNet50/152, silently falling back to
+        # _use_backward_hooks=False for the WHOLE run: no backward timing or
+        # memory was ever actually measured for these architectures -- GPU
+        # backward time silently degraded to the analytical
+        # fwd_time * BACKWARD_FACTOR guess (see t_bwd_gpu below), and
+        # backward memory had no fallback at all, reporting a hard 0.0.
+        # Confirmed via direct reproduction against torchvision resnet50.
+        #
+        # Plain tensor.register_hook() does not insert any such wrapper, so
+        # it never triggers this conflict. Semantically: a module's own
+        # INPUT-gradient becoming ready is exactly the signal that this
+        # module's own backward kernels have just finished (that gradient is
+        # produced BY this module's backward formula). Chaining a single
+        # shared marker across these input-gradient events -- reading the
+        # peak/elapsed time accumulated since the previous event and
+        # attributing it to the module whose input just became ready, then
+        # re-arming for whichever module's input becomes ready next --
+        # reconstructs the same real per-layer backward segments as the old
+        # module-hook design, without the graph-wrapping conflict. The
+        # segment for the very last module(s) in the chain (whose output
+        # feeds the loss directly) is armed explicitly in _run_step /
+        # _run_step_with_oom_fallback right before loss.backward(); the
+        # segment for the first module(s) in the chain (whose input is the
+        # raw, non-differentiable network input) is flushed explicitly right
+        # after loss.backward() returns, attributed to the first module seen
+        # in forward order this run.
+
+        def close_and_rearm_backward_segment(name, module):
+            def hook(grad):
+                marker = self._bwd_marker
+                if marker.get("armed") and name not in self._bwd_closed_names:
+                    self._bwd_closed_names.add(name)
+                    cpu_end = time.perf_counter()
+                    if name not in self.layer_stats:
+                        self.layer_stats[name] = _new_layer_stat(module)
+                    s = self.layer_stats[name]
+
+                    if device_type == "cuda":
+                        end = torch.cuda.Event(enable_timing=True)
+                        end.record()
+                        torch.cuda.synchronize()
+                        kernel_ms = marker["gpu"].elapsed_time(end)
+                        bwd_mem_peak_mb = torch.cuda.max_memory_allocated(self.gpu_id) / (1024 ** 2)
+                        bwd_layer_peak_delta_mb = max(0.0, bwd_mem_peak_mb - marker["mem_before_mb"])
+                        bwd_layer_peak_delta_mb *= self._current_batch_scale
+                        s["bwd_mem_mb"] = max(s["bwd_mem_mb"], bwd_layer_peak_delta_mb)
+                    else:
+                        kernel_ms = (cpu_end - marker["cpu"]) * 1000.0
+
+                    wall_ms = (cpu_end - marker["cpu"]) * 1000.0
+                    dispatch_ms = max(0.0, wall_ms - kernel_ms)
+
+                    s["bwd_time_ms_accum"] += kernel_ms
+                    s["bwd_dispatch_ms_accum"] += dispatch_ms
+                    s["bwd_count"] += 1
+
+                self._arm_backward_marker(device_type)
 
             return hook
 
-        def backward_post_hook(name):
-            def hook(module, grad_input, grad_output):
-                start_info = self._bwd_tstarts.get(name)
-                if start_info is None:
-                    return
-
-                cpu_end = time.perf_counter()
+        def capture_grad_output_size(name, module):
+            def hook(grad):
                 if name not in self.layer_stats:
                     self.layer_stats[name] = _new_layer_stat(module)
                 s = self.layer_stats[name]
-
-                if s["bwd_count"] == 0:
+                if not s.get("_grad_output_captured", False):
+                    s["_grad_output_captured"] = True
                     try:
-                        s["grad_output_bytes"] = get_tensor_size_recursive(grad_output)
+                        s["grad_output_bytes"] = get_tensor_size_recursive(grad) * self._current_batch_scale
                     except Exception:
                         pass
 
-                if device_type == "cuda":
-                    end = torch.cuda.Event(enable_timing=True)
-                    end.record()
-                    torch.cuda.synchronize()
-                    kernel_ms = start_info["gpu"].elapsed_time(end)
-                else:
-                    kernel_ms = (cpu_end - start_info["cpu"]) * 1000.0
-
-                wall_ms = (cpu_end - start_info["cpu"]) * 1000.0
-                dispatch_ms = max(0.0, wall_ms - kernel_ms)
-
-                s["bwd_time_ms_accum"] += kernel_ms
-                s["bwd_dispatch_ms_accum"] += dispatch_ms
-                s["bwd_count"] += 1
-
             return hook
+
+        def post_hook_backward_tensor_wiring(name, module, inp, out):
+            if not self._use_backward_hooks:
+                return
+            if torch.is_tensor(out) and out.requires_grad:
+                out.register_hook(capture_grad_output_size(name, module))
+            inputs = inp if isinstance(inp, (tuple, list)) else (inp,)
+            for t in inputs:
+                if torch.is_tensor(t) and t.requires_grad:
+                    t.register_hook(close_and_rearm_backward_segment(name, module))
 
         for name, module in self._get_leaf_modules():
             self.hooks.append(module.register_forward_pre_hook(pre_hook(name)))
             self.hooks.append(module.register_forward_hook(post_hook(name)))
             if self._use_backward_hooks:
-                self.hooks.append(module.register_full_backward_pre_hook(backward_pre_hook(name)))
-                self.hooks.append(module.register_full_backward_hook(backward_post_hook(name)))
+                self.hooks.append(
+                    module.register_forward_hook(
+                        lambda m, i, o, n=name: post_hook_backward_tensor_wiring(n, m, i, o)
+                    )
+                )
+
+    def _arm_backward_marker(self, device_type: str) -> None:
+        """Arm the chained backward checkpoint right before loss.backward().
+
+        Covers the segment for whichever leaf module(s) feed the loss
+        directly -- their output has no further leaf-module consumer, so no
+        tensor hook would otherwise mark the start of their backward
+        segment. See close_and_rearm_backward_segment in _register_hooks.
+        """
+        # Reset per-pass: each loss.backward() call is a fresh backward pass,
+        # and every leaf module must be eligible to close a new segment in
+        # it (otherwise only the very first step/chunk would ever measure
+        # anything -- _bwd_closed_names would stay saturated forever after).
+        self._bwd_closed_names = set()
+        marker: Dict[str, Any] = {"cpu": time.perf_counter(), "armed": True}
+        if device_type == "cuda":
+            start = torch.cuda.Event(enable_timing=True)
+            start.record()
+            torch.cuda.synchronize()
+            marker["gpu"] = start
+            marker["mem_before_mb"] = torch.cuda.memory_allocated(self.gpu_id) / (1024 ** 2)
+            torch.cuda.reset_peak_memory_stats(self.gpu_id)
+        self._bwd_marker = marker
+
+    def _finalize_pending_backward_marker(self, device_type: str) -> None:
+        """Flush whatever segment is still pending after loss.backward() returns.
+
+        Attributes it to the earliest-executed leaf module (by real forward
+        order) that never closed a segment -- normally the very first layer,
+        whose input is the raw network input and therefore does not require
+        grad, so no tensor hook fires to close it naturally.
+        """
+        marker = self._bwd_marker
+        if not marker.get("armed"):
+            return
+        pending_name = next(
+            (n for n in self._fwd_leaf_order if n not in self._bwd_closed_names), None
+        )
+        if pending_name is None:
+            return
+        module = next((m for n, m in self._get_leaf_modules() if n == pending_name), None)
+        if module is None:
+            return
+        self._bwd_closed_names.add(pending_name)
+        if pending_name not in self.layer_stats:
+            self.layer_stats[pending_name] = _new_layer_stat(module)
+        s = self.layer_stats[pending_name]
+        cpu_end = time.perf_counter()
+        if device_type == "cuda":
+            end = torch.cuda.Event(enable_timing=True)
+            end.record()
+            torch.cuda.synchronize()
+            kernel_ms = marker["gpu"].elapsed_time(end)
+            bwd_mem_peak_mb = torch.cuda.max_memory_allocated(self.gpu_id) / (1024 ** 2)
+            bwd_layer_peak_delta_mb = max(0.0, bwd_mem_peak_mb - marker["mem_before_mb"])
+            bwd_layer_peak_delta_mb *= self._current_batch_scale
+            s["bwd_mem_mb"] = max(s["bwd_mem_mb"], bwd_layer_peak_delta_mb)
+        else:
+            kernel_ms = (cpu_end - marker["cpu"]) * 1000.0
+        wall_ms = (cpu_end - marker["cpu"]) * 1000.0
+        dispatch_ms = max(0.0, wall_ms - kernel_ms)
+        s["bwd_time_ms_accum"] += kernel_ms
+        s["bwd_dispatch_ms_accum"] += dispatch_ms
+        s["bwd_count"] += 1
 
     def _build_optimizer(self, params, opt_name: str, lr: float, momentum: float):
         if opt_name == "SGD":
@@ -321,7 +519,11 @@ class TrainingProfiler:
             out = self.model(inp)
 
         loss = self._compute_loss(out)
+        if self._use_backward_hooks:
+            self._arm_backward_marker(device)
         loss.backward()
+        if self._use_backward_hooks:
+            self._finalize_pending_backward_marker(device)
 
         t0_opt = time.perf_counter()
         self._active_optimizer.step()
@@ -336,16 +538,19 @@ class TrainingProfiler:
         backoff = max(2, int(getattr(self.args, "oom_retry_backoff", 2)))
 
         micro_batch = target_batch
+        self._current_batch_scale = 1.0
         while True:
             try:
                 self._active_optimizer.zero_grad(set_to_none=True)
 
                 if micro_batch >= target_batch:
+                    self._current_batch_scale = 1.0
                     return self._run_step(inp=inp, device=device)
 
                 chunks = int(math.ceil(target_batch / float(micro_batch)))
                 for start in range(0, target_batch, micro_batch):
                     end = min(start + micro_batch, target_batch)
+                    self._current_batch_scale = target_batch / float(end - start)
                     chunk_inp = self._slice_batch(inp, start, end)
                     if isinstance(chunk_inp, dict):
                         out = self.model(**chunk_inp)
@@ -354,12 +559,17 @@ class TrainingProfiler:
 
                     # Keep gradient magnitude aligned with full-batch average loss semantics.
                     loss = self._compute_loss(out) / float(chunks)
+                    if self._use_backward_hooks:
+                        self._arm_backward_marker(device)
                     loss.backward()
+                    if self._use_backward_hooks:
+                        self._finalize_pending_backward_marker(device)
 
                 t0_opt = time.perf_counter()
                 self._active_optimizer.step()
                 if device == "cuda":
                     torch.cuda.synchronize()
+                self._current_batch_scale = 1.0
                 return (time.perf_counter() - t0_opt) * 1000.0
 
             except RuntimeError as ex:
@@ -479,7 +689,7 @@ class TrainingProfiler:
                     "(--oom_retry_min_batch / --oom_retry_backoff)."
                 ) from ex
             hook_inplace_conflict = (
-                "BackwardHookFunctionBackward" in msg
+                "BackwardHookFunction" in msg
                 and "view" in msg
                 and "inplace" in msg
             )
@@ -820,6 +1030,7 @@ class TrainingProfiler:
                 "run_id": getattr(self.args, "run_id", "run_001"),
                 "seed": getattr(self.args, "seed", 42),
                 "type": g_s.get("type", "Unknown"),
+                "shared_weight_group": self._shared_weight_group.get(name, name),
                 "params_mb": params_mb,
                 "grads_mb": params_mb,
                 "optimizer_states_mb": params_mb * opt_factor_used,
@@ -832,6 +1043,7 @@ class TrainingProfiler:
                 "gpu_fwd_energy_j": gpu_layer_energy_j,
                 "gpu_bwd_energy_j": gpu_bwd_energy_j,
                 "gpu_mem_peak_mb": g_s.get("mem_mb", 0),
+                "gpu_bwd_mem_peak_mb": g_s.get("bwd_mem_mb", 0),
                 "layer_j_per_tflop_gpu": (gpu_layer_energy_j / layer_work_tflops)
                 if (layer_work_tflops > 0 and gpu_layer_energy_j > 0)
                 else 0.0,
@@ -905,6 +1117,7 @@ class TrainingProfiler:
             "run_id": getattr(self.args, "run_id", "run_001"),
             "seed": getattr(self.args, "seed", 42),
             "type": "NA",
+            "shared_weight_group": "__profiling_skipped__",
             "params_mb": 0.0,
             "grads_mb": 0.0,
             "optimizer_states_mb": 0.0,
@@ -917,6 +1130,7 @@ class TrainingProfiler:
             "gpu_fwd_energy_j": 0.0,
             "gpu_bwd_energy_j": 0.0,
             "gpu_mem_peak_mb": 0.0,
+            "gpu_bwd_mem_peak_mb": 0.0,
             "layer_j_per_tflop_gpu": None,
             "dispatch_overhead_ratio": 0.0,
             "cpu_fwd_time_ms": 0.0,
@@ -1326,6 +1540,7 @@ class TrainingProfiler:
                 "run_id": getattr(self.args, "run_id", "run_001"),
                 "seed": getattr(self.args, "seed", 42),
                 "type": g_s.get("type") or c_s.get("type", "Unknown"),
+                "shared_weight_group": self._shared_weight_group.get(name, name),
                 "params_mb": params_mb,
                 "grads_mb": params_mb,
                 "optimizer_states_mb": params_mb * opt_factor_used,
@@ -1338,6 +1553,7 @@ class TrainingProfiler:
                 "gpu_fwd_energy_j": gpu_layer_energy_j,
                 "gpu_bwd_energy_j": gpu_bwd_energy_j,
                 "gpu_mem_peak_mb": g_s.get("mem_mb", 0),
+                "gpu_bwd_mem_peak_mb": g_s.get("bwd_mem_mb", 0),
                 "layer_j_per_tflop_gpu": layer_j_per_tflop_gpu,
                 "dispatch_overhead_ratio": disp_ms / t_fwd_gpu if t_fwd_gpu > 0 else 0,
                 "cpu_fwd_time_ms": t_fwd_cpu,

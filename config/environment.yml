@@ -1,7 +1,5 @@
 name: prism_env
 channels:
-  - pytorch
-  - nvidia
   - conda-forge
   - defaults
 dependencies:
@@ -10,16 +8,35 @@ dependencies:
   - numpy>=1.24
   - pandas>=2.0
   - psutil>=5.9
-  # Core DL stack (GPU build by default). For CPU-only, see notes below.
-  - pytorch::pytorch>=2.5,<2.6
-  - pytorch::torchvision>=0.20,<0.21
-  - pytorch-cuda=12.1  # Remove this line and add 'cpuonly' (from pytorch channel) for CPU-only nodes
+  # Core DL stack. For GPU, torch/torchvision are installed via pip below
+  # (see the `pip:` block), NOT conda -- as of this writing, the `pytorch`
+  # conda channel's last-ever release is 2.5.1 (confirmed via
+  # `conda search -c pytorch pytorch`: nothing newer was ever published,
+  # and there is no conda `pytorch-cuda` build past 12.4). PyTorch upstream
+  # stopped publishing conda packages after that release in favor of pip
+  # wheels, so a conda-only install cannot reach the floor below.
+  #
+  # Floor raised from torch 2.5.x/transformers 4.4x (the original pin) after
+  # finding that combination cannot `torch.export` GPT-2-family models
+  # whenever the input batch has real attention-mask padding: dynamo raises
+  # "Unsupported: Graph break due to unsupported builtin None.finfo.__new__"
+  # inside transformers' `_prepare_4d_causal_attention_mask_for_sdpa` ->
+  # `_make_causal_mask` (torch/_dynamo cannot trace `torch.finfo(dtype).min`
+  # in that code path on torch 2.5.1). This only shows up with real,
+  # variably-padded data -- a synthetic unpadded batch traces fine, which is
+  # why it was not caught earlier. Confirmed fixed at torch 2.10.0, and
+  # re-confirmed at torch 2.14.1 / torchvision 0.29.1 / transformers 5.17.0
+  # (the real `distilgpt2` ilp_plan repro traces and trains cleanly on that
+  # combination) -- see fix/04_torch_export_dynamo_transformers_version_floor/
+  # README.md for the full investigation. Pinned to the 2.14 line (not just
+  # ">=2.10") because that is the exact combination verified end-to-end;
+  # anything in between was never tested.
   # GPU telemetry
   - nvidia-ml-py>=12.535  # module import remains `pynvml`
   # NLP models
-  - transformers>=4.40,<4.50
+  - transformers>=5.0
   # Optional helpers (safe to keep; can help with HF model loading)
-  - huggingface_hub>=0.20,<0.28
+  - huggingface_hub>=1.0  # transformers>=5.0 requires a hub client this new; confirmed working at 1.4.1
   - safetensors>=0.4
   
   # ILP solver stack: PuLP modeler + CBC executable for MILP solves
@@ -35,5 +52,12 @@ dependencies:
   # Optional experiment tracking / telemetry backend support
   - pymongo>=4.0
   - pip:
+      # torch/torchvision: installed via pip (PyTorch's own wheel index), not
+      # conda -- see the comment above the (now-removed) conda pytorch deps
+      # for why. For a CPU-only node, drop --extra-index-url and the +cuXXX
+      # local version will simply resolve to the CPU wheel instead.
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch>=2.14,<2.15
+      - torchvision>=0.29,<0.30
       # CPU energy (RAPL). Requires read access to /sys/class/powercap/intel-rapl/* on Linux
       - pyRAPL>=0.2.3

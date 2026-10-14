@@ -6,10 +6,13 @@ import logging
 import math
 from pathlib import Path
 from collections import defaultdict, deque
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import pandas as pd
 import numpy as np
+
+if TYPE_CHECKING:
+    from .topology_memory import PreparedTopologyMemory
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,12 @@ class ILPInputData:
     node_energy_cpu_bwd_j: Dict[str, float] = None
     node_mem_gpu_mb: Dict[str, float] = None
     node_mem_cpu_mb: Dict[str, float] = None
+    # Real measured per-phase GPU peak (see load_ilp_inputs for why this is
+    # distinct from node_mem_gpu_mb). Defaulted to node_mem_gpu_mb itself when
+    # not provided, so callers that pre-date this field still get a sane,
+    # if less accurate, value instead of a silent 0.0.
+    node_mem_gpu_fwd_peak_mb: Dict[str, float] = None
+    node_mem_gpu_bwd_peak_mb: Dict[str, float] = None
     edges: List[Tuple[str, str]] = None
     edge_transfer_ms: Dict[Tuple[str, str], float] = None
     # Fase 4: activation persistence metadata
@@ -41,12 +50,51 @@ class ILPInputData:
     activation_metadata_source: str = "unknown"
     io_metadata_source: str = "unknown"
     graph_trace_source: str = "unknown"
+    # Layer names whose underlying module is invoked at more than one
+    # distinct graph position (e.g. torchvision resnet's shared
+    # self.relu, called once after bn1, once after bn2, once after the
+    # residual add -- same module, same layer name, three different
+    # src_id/dst_id node ids in graph_edges.csv). A Phase 4 activation
+    # strategy is a single value keyed by layer name, so it cannot
+    # distinguish between these call sites -- offering recompute/
+    # checkpoint for one of them silently (and ambiguously) offers it for
+    # all of them, which crashes the runtime when one call site turns out
+    # to be structurally incompatible with the others (confirmed
+    # empirically: the residual-add call site breaks torch.utils.
+    # checkpoint's bookkeeping, see fix/07_gpu_recompute_joint_decision/
+    # README.md). Nodes in this set must never be offered recompute/
+    # checkpoint by the ILP -- they always retain, exactly like today's
+    # validated default, which is a complete, principled exclusion rather
+    # than an ad hoc skip: these layers were never independently
+    # decidable to begin with, given the per-layer-name granularity of
+    # every decision this project makes.
+    shared_call_site_layers: set = None
+    # Set by validation/run_ilp_partition.py (before solving, not loaded
+    # here) when --memory_model=topological_tight is requested --
+    # src/ilp/solve.py's tight per-critical-point GPU memory constraints
+    # (see fix/09_.../README.md) need the real topological walk's node
+    # order and per-node retained/transient/weight-group data, the same
+    # PreparedTopologyMemory object the post-solve correction already uses.
+    # None for every other memory_model -- this field is never populated by
+    # load_ilp_inputs/merge_ilp_inputs_multi_hardware themselves.
+    prepared_topology: Optional["PreparedTopologyMemory"] = None
 
     def __post_init__(self):
+        if self.shared_call_site_layers is None:
+            self.shared_call_site_layers = set()
         if self.node_mem_gpu_mb is None:
             self.node_mem_gpu_mb = {n: 0.0 for n in self.nodes}
         if self.node_mem_cpu_mb is None:
             self.node_mem_cpu_mb = {n: 0.0 for n in self.nodes}
+        if self.node_mem_gpu_fwd_peak_mb is None:
+            # 0.0, not node_mem_gpu_mb (that theoretical sum already bundles
+            # params+grads+optimizer_states, not just the activation it would
+            # be standing in for here) -- model_builder.py's
+            # _build_effective_memory treats <=0.0 as "no real peak measured"
+            # and falls back to the theoretical activation estimate itself.
+            self.node_mem_gpu_fwd_peak_mb = {n: 0.0 for n in self.nodes}
+        if self.node_mem_gpu_bwd_peak_mb is None:
+            self.node_mem_gpu_bwd_peak_mb = {n: 0.0 for n in self.nodes}
         if self.edges is None:
             self.edges = []
         if self.edge_transfer_ms is None:
@@ -606,6 +654,26 @@ def load_ilp_inputs(
         node_mem_gpu_mb[layer] = isolated_mem
         node_mem_cpu_mb[layer] = _safe_num(row.get("cpu_mem_mb_mean", 0.0))
 
+    # REAL measured peak GPU memory per phase (training_profiler.py's hook-based
+    # delta: memory_allocated before vs max_memory_allocated during this layer's
+    # own forward/backward kernels) -- as opposed to node_mem_gpu_mb above, which
+    # is a purely theoretical params+activations+grads+optimizer_states sum that
+    # never reflects real transient/workspace cost. gpu_bwd_mem_peak_mb only
+    # exists from this session onward (training_profiler.py's tensor-hook fix,
+    # replacing the register_full_backward_hook path that silently never fired
+    # for architectures with an in-place residual add, e.g. torchvision ResNet)
+    # -- an older metrics_stats.csv without the column falls back to 0.0 here,
+    # which model_builder.py's _build_effective_memory treats as "no backward
+    # measurement available", NOT "backward needs no memory".
+    node_mem_gpu_fwd_peak_mb = {
+        row["layer"]: max(_safe_num(row.get("gpu_mem_peak_mb_mean", 0.0)), 0.0)
+        for _, row in stats.iterrows()
+    }
+    node_mem_gpu_bwd_peak_mb = {
+        row["layer"]: max(_safe_num(row.get("gpu_bwd_mem_peak_mb_mean", 0.0)), 0.0)
+        for _, row in stats.iterrows()
+    }
+
     node_mem_activation_mb = {}
     node_time_io_ms = {}
     node_energy_io_j = {}
@@ -736,6 +804,29 @@ def load_ilp_inputs(
             raise ValueError(msg)
         logger.warning(msg)
 
+    # Detect layer names reused at more than one distinct graph node id --
+    # see ILPInputData.shared_call_site_layers' docstring. A layer name is
+    # "shared" if it is EVER the producer of more than one distinct
+    # src_id, or the consumer of more than one distinct dst_id, in the raw
+    # (uncollapsed) graph_edges.csv -- that is exactly what "the same
+    # module called at multiple points in the graph" looks like in this
+    # file format.
+    shared_call_site_layers: set = set()
+    if "src_id" in graph.columns and "producer_name" in graph.columns:
+        producer_occurrences = graph.groupby("producer_name")["src_id"].nunique()
+        shared_call_site_layers |= set(producer_occurrences[producer_occurrences > 1].index.astype(str))
+    if "dst_id" in graph.columns and "consumer_name" in graph.columns:
+        consumer_occurrences = graph.groupby("consumer_name")["dst_id"].nunique()
+        shared_call_site_layers |= set(consumer_occurrences[consumer_occurrences > 1].index.astype(str))
+    shared_call_site_layers &= set(nodes)
+    if shared_call_site_layers:
+        logger.info(
+            "Detected %d layer name(s) reused at multiple call sites (e.g. %s) -- "
+            "excluded from Phase 4 recompute/checkpoint eligibility, always retain.",
+            len(shared_call_site_layers),
+            sorted(shared_call_site_layers)[:5],
+        )
+
     return ILPInputData(
         nodes=nodes,
         node_cost_gpu_ms=node_cost_gpu_ms,
@@ -752,6 +843,8 @@ def load_ilp_inputs(
         node_energy_cpu_bwd_j=node_energy_cpu_bwd_j,
         node_mem_gpu_mb=node_mem_gpu_mb,
         node_mem_cpu_mb=node_mem_cpu_mb,
+        node_mem_gpu_fwd_peak_mb=node_mem_gpu_fwd_peak_mb,
+        node_mem_gpu_bwd_peak_mb=node_mem_gpu_bwd_peak_mb,
         node_mem_activation_mb=node_mem_activation_mb,
         node_time_io_ms=node_time_io_ms,
         node_energy_io_j=node_energy_io_j,
@@ -760,6 +853,7 @@ def load_ilp_inputs(
         activation_metadata_source=("provided" if "activations_mb_mean" in stats.columns else "heuristic_default"),
         io_metadata_source=("provided" if ("transfer_d2h_ms_mean" in stats.columns or "transfer_edge_aware_total_ms_mean" in stats.columns) else "heuristic_default"),
         graph_trace_source=str(meta.get("graph_trace_source", "unknown")) if meta is not None else "unknown",
+        shared_call_site_layers=shared_call_site_layers,
     )
 
 
@@ -821,6 +915,8 @@ def merge_ilp_inputs_multi_hardware(
         node_energy_cpu_bwd_j=agg_node(lambda p, n: p.node_energy_cpu_bwd_j[n]),
         node_mem_gpu_mb=agg_node(lambda p, n: p.node_mem_gpu_mb[n]),
         node_mem_cpu_mb=agg_node(lambda p, n: p.node_mem_cpu_mb[n]),
+        node_mem_gpu_fwd_peak_mb=agg_node(lambda p, n: p.node_mem_gpu_fwd_peak_mb[n]),
+        node_mem_gpu_bwd_peak_mb=agg_node(lambda p, n: p.node_mem_gpu_bwd_peak_mb[n]),
         edges=edges,
         edge_transfer_ms=agg_edge(lambda p, e: p.edge_transfer_ms[e]),
         graph_trace_source=(
@@ -828,6 +924,11 @@ def merge_ilp_inputs_multi_hardware(
             if all(p.graph_trace_source == profiles[0].graph_trace_source for p in profiles)
             else "mixed"
         ),
+        # Union, not intersection: the underlying model architecture is the
+        # same across hardware profiles (strict_schema already enforces
+        # identical nodes/edges), so this should already agree across
+        # profiles -- union is simply the safe choice if it ever doesn't.
+        shared_call_site_layers=set().union(*(p.shared_call_site_layers for p in profiles)),
     )
 
     logger.info(

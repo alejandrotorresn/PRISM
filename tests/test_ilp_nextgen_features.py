@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.ilp.backward_meta_model import apply_backward_meta_model, train_backward_meta_model
 from src.ilp.data_loader import ILPInputData, load_ilp_inputs
-from src.ilp.model_builder import ILPConfig
+from src.ilp.model_builder import ILPConfig, build_problem_data_dual
 from src.ilp.solve import ILPSolution, refine_solution_hierarchical_local, solve_partition_ilp
 
 
@@ -248,3 +249,80 @@ def test_explicit_congestion_term_discourages_branched_frontier_cuts() -> None:
     )
     assert moved_to_cpu >= 1
     assert len(sol_with_congestion.cut_edges) < len(sol_no_congestion.cut_edges)
+
+
+def test_cross_phase_cost_is_direction_aware() -> None:
+    """Regression test for the dual-placement cost fix.
+
+    src/runtime/hybrid_executor.py's _run_layer_with_dual_placement recomputes
+    the ENTIRE forward pass on the backward device before computing
+    gradients there. That recompute's real cost depends on which device it
+    runs on: cheap if the backward device is fast (GPU), expensive if it is
+    slow (CPU) -- this project's own profiling shows GPU running ~15-17x
+    faster than CPU. Before this fix, both directions were priced with the
+    same small, undirected node_time_io_ms proxy, so the ILP treated
+    "forward=GPU, backward=CPU" (expensive: the recompute lands on the slow
+    device) as being just as cheap as "forward=CPU, backward=GPU" (genuinely
+    cheap: the recompute lands on the fast device).
+
+    Checks the two directional cross-phase cost coefficients
+    (build_problem_data_dual's objective_cross_phase_cpu_to_gpu /
+    _gpu_to_cpu) directly, rather than relying on the solver to pick a
+    cross-phase placement via a memory-constrained scenario: fixing the
+    real cross-phase memory-accounting bug found in the same investigation
+    (see src/ilp/topology_memory.py's module docstring -- activation memory
+    must belong to whichever device runs backward, not only when forward
+    and backward devices match) means a cross-phase placement never needs
+    LESS GPU memory than fully retaining on GPU, so a single-node,
+    memory-constrained scenario can no longer force the solver into a
+    cross-phase choice to exercise this cost. Asserting on the coefficients
+    themselves tests the exact mechanism in isolation instead.
+
+      - GPU fwd/bwd: 1ms each -- fast.
+      - CPU fwd/bwd: 100ms each -- ~100x slower (deliberately exaggerated
+        here for a clean, unambiguous assertion; this project's own real
+        CPU/GPU gap is ~15-17x, same qualitative effect).
+      - fwd=CPU, bwd=GPU recompute cost: 1 (GPU fwd replay) + 0.1 (io) = 1.1ms  <- cheap, recompute lands on GPU
+      - fwd=GPU, bwd=CPU recompute cost: 100 (CPU fwd replay) + 0.1 (io) = 100.1ms <- expensive, recompute lands on CPU
+
+    Under the old undirected model both directions were priced with the
+    same small, undirected node_time_io_ms proxy (~0.1ms each), making them
+    look equally (and wrongly) cheap regardless of which device the
+    recompute actually lands on.
+    """
+    data = ILPInputData(
+        nodes=["a"],
+        node_cost_gpu_ms={"a": 2.0},
+        node_cost_cpu_ms={"a": 200.0},
+        node_cost_gpu_fwd_ms={"a": 1.0},
+        node_cost_gpu_bwd_ms={"a": 1.0},
+        node_cost_cpu_fwd_ms={"a": 100.0},
+        node_cost_cpu_bwd_ms={"a": 100.0},
+        node_energy_gpu_j={"a": 0.0},
+        node_energy_cpu_j={"a": 0.0},
+        node_energy_gpu_fwd_j={"a": 0.0},
+        node_energy_gpu_bwd_j={"a": 0.0},
+        node_energy_cpu_fwd_j={"a": 0.0},
+        node_energy_cpu_bwd_j={"a": 0.0},
+        node_mem_gpu_mb={"a": 800.0},
+        node_mem_cpu_mb={"a": 10.0},
+        node_mem_activation_mb={"a": 400.0},
+        node_time_io_ms={"a": 0.1},
+        node_energy_io_j={"a": 0.0},
+        edges=[],
+        edge_transfer_ms={},
+    )
+    cfg = ILPConfig(
+        w_time=1.0,
+        w_energy=0.0,
+        w_transfer=1.0,
+        w_fragmentation=0.0,
+        gpu_mem_budget_mb=1_000_000.0,
+        cpu_mem_budget_mb=1_000_000.0,
+        memory_model="topological",
+    )
+
+    problem = build_problem_data_dual(data, cfg)
+    assert problem.objective_cross_phase_cpu_to_gpu["a"] == pytest.approx(1.1, abs=0.05)
+    assert problem.objective_cross_phase_gpu_to_cpu["a"] == pytest.approx(100.1, abs=0.05)
+    assert problem.objective_cross_phase_cpu_to_gpu["a"] < problem.objective_cross_phase_gpu_to_cpu["a"]

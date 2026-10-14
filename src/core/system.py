@@ -135,6 +135,7 @@ def get_hardware_metadata() -> Dict[str, Any]:
         "gpu_name": "None",
         "gpu_driver": "None",
         "gpu_vram_total_mb": 0,
+        "cpu_ram_total_mb": round(psutil.virtual_memory().total / (1024 * 1024), 1),
         "rapl_available": PYRAPL_AVAILABLE,
     }
     if torch.cuda.is_available():

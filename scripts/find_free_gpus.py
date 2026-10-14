@@ -4,8 +4,13 @@ Grid5000 Free GPU Node Finder
 This script connects to all Grid5000 sites via SSH and uses `oarnodes -J` 
 to query the real-time status of nodes. It filters for nodes that:
 1. Have a GPU (NVIDIA preferred)
-2. Are 'Alive'
+2. Are 'Alive' and not under maintenance
 3. Have no active jobs currently running on them.
+
+Note: `oarnodes -J` returns one entry PER OAR RESOURCE (typically per CPU
+core), not one entry per physical node. Resources must be grouped by
+`network_address` before deciding whether a node is free, otherwise a node
+with a job occupying only some of its resources is wrongly reported as free.
 """
 
 import subprocess
@@ -42,28 +47,52 @@ def check_site(site):
             return site, f"Error querying OAR (Exit code {result.returncode})"
             
         data = json.loads(result.stdout)
-        free_nodes = []
-        
+
+        # Group per-resource entries by their physical node (network_address),
+        # since a single node is represented by many resource_ids in oarnodes -J.
+        resources_by_node = {}
         for resource_id, props in data.items():
-            state = props.get("state", "")
-            jobs = props.get("jobs", "")
-            gpu_model = props.get("gpu_model", "")
-            compute_cap = props.get("gpu_compute_capability_major", "")
-            cputype = props.get("cputype", "")
             node_name = props.get("network_address", "")
-            cluster = props.get("nodeset", "")
-            
-            # Check if it has a GPU
-            if gpu_model and str(gpu_model).lower() not in ["none", "no", "null", ""]:
-                # Check if it is Alive and Free
-                if state == "Alive" and (jobs == "" or jobs is None):
-                    free_nodes.append({
-                        "node": node_name,
-                        "cluster": cluster,
-                        "gpu_model": gpu_model,
-                        "compute_cap": str(compute_cap) if compute_cap else "N/A",
-                        "cputype": str(cputype) if cputype else "N/A"
-                    })
+            if not node_name:
+                continue
+            resources_by_node.setdefault(node_name, []).append(props)
+
+        free_nodes = []
+        for node_name, resources in resources_by_node.items():
+            gpu_model = ""
+            compute_cap = ""
+            cputype = ""
+            cluster = ""
+            node_alive = True
+            node_busy = False
+            node_in_maintenance = False
+
+            for props in resources:
+                if props.get("state", "") != "Alive":
+                    node_alive = False
+                if str(props.get("maintenance", "NO")).upper() == "YES":
+                    node_in_maintenance = True
+                jobs = props.get("jobs", "")
+                if jobs not in ("", None):
+                    node_busy = True
+
+                candidate_gpu = props.get("gpu_model", "")
+                if candidate_gpu and str(candidate_gpu).lower() not in ["none", "no", "null", ""]:
+                    gpu_model = candidate_gpu
+                    compute_cap = props.get("gpu_compute_capability_major", "")
+                    cluster = props.get("nodeset", "")
+                    cputype = props.get("cputype", "")
+
+            # Only report nodes that: have a GPU, are fully Alive, are not
+            # under maintenance, and have NO job on ANY of their resources.
+            if gpu_model and node_alive and not node_in_maintenance and not node_busy:
+                free_nodes.append({
+                    "node": node_name,
+                    "cluster": cluster,
+                    "gpu_model": gpu_model,
+                    "compute_cap": str(compute_cap) if compute_cap else "N/A",
+                    "cputype": str(cputype) if cputype else "N/A"
+                })
                     
         return site, free_nodes
     except subprocess.TimeoutExpired:

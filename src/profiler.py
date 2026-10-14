@@ -22,7 +22,9 @@ from core.precision_policy import (
 )
 from core.system import configure_cpu_runtime, set_determinism
 from core.system import get_hostname, normalize_output_dir_for_host
+from core.io_artifacts import write_json_dict
 from models.factory import SimpleMLP, build_model_input_target
+from runner.hybrid_overhead_calibration import measure_hybrid_overhead_ratio
 from runner.training_profiler import TrainingProfiler
 
 
@@ -168,6 +170,21 @@ def main() -> None:
     args.gpu_precision_executed = args.precision
 
     TrainingProfiler(model, args.model, args).run_profiling(inp)
+
+    # Additive, best-effort measurement of PRISM's own hybrid-execution
+    # memory overhead (see hybrid_overhead_calibration.py's module
+    # docstring for why this is a separate pass, not part of
+    # TrainingProfiler). Any failure here is logged and ignored -- it must
+    # never affect the profiling run above, which has already completed
+    # and saved its own results by this point.
+    try:
+        calibration = measure_hybrid_overhead_ratio(model, inp, gpu_id=args.gpu_id)
+        write_json_dict(
+            os.path.join(args.output_dir, f"{args.model}_hybrid_overhead.json"),
+            calibration,
+        )
+    except Exception as exc:
+        logger.warning("Hybrid overhead calibration step failed unexpectedly (non-fatal): %s", exc)
 
 
 if __name__ == "__main__":
