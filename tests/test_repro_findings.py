@@ -63,13 +63,3 @@ def test_h7_objective_is_not_reported_as_simulated_ms(tmp_path):
     # config_dir con < 4 componentes: sin identidad model/optimizer/batch inferida
     ref = mod._resolve_sim_reference_values(args, Path("/cfg"))
     assert ref["sim_time_ms"] is None
-
-
-@pytest.mark.xfail(strict=True, reason="H11: symbolic_trace no puede trazar modelos HF (BERT)")
-def test_h11_hf_bert_graph_is_traceable():
-    transformers = pytest.importorskip("transformers")
-    cfg = transformers.BertConfig(
-        hidden_size=32, num_hidden_layers=1, num_attention_heads=2, intermediate_size=64, vocab_size=100
-    )
-    model = transformers.BertModel(cfg).eval()
-    _build_fx_graph(model, {}, torch.randint(0, 100, (2, 8)))

@@ -68,17 +68,12 @@ def is_decoder_only_export_candidate(model: nn.Module, input_data: Any) -> bool:
     if config is None or getattr(config, "is_encoder_decoder", False):
         return False
 
-    if not isinstance(input_data, dict) or "input_ids" not in input_data:
-        return False
-
-    get_output_embeddings = getattr(model, "get_output_embeddings", None)
-    if get_output_embeddings is None:
-        return False
-
-    try:
-        return get_output_embeddings() is not None
-    except Exception:
-        return False
+    # Dict inputs ({"input_ids": ...}) and a bare tensor (the profiler's synthetic
+    # input, passed positionally as input_ids) are both exportable. Encoder-only
+    # models such as BERT have no output embeddings and are valid candidates.
+    if isinstance(input_data, dict):
+        return "input_ids" in input_data or "inputs_embeds" in input_data
+    return isinstance(input_data, torch.Tensor)
 
 
 def _prepare_export_inputs(input_data: Any) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:

@@ -1048,19 +1048,6 @@ def _ordered_sequential_layers(model: nn.Module) -> List[Tuple[str, nn.Module]]:
     return leaves
 
 
-def _try_huggingface_symbolic_trace(model: nn.Module) -> Optional[fx.GraphModule]:
-    try:
-        from transformers import PreTrainedModel
-        from transformers.utils.fx import symbolic_trace as hf_symbolic_trace
-    except Exception:
-        return None
-
-    if not isinstance(model, PreTrainedModel):
-        return None
-
-    return hf_symbolic_trace(model)
-
-
 def _try_symbolic_trace(model: nn.Module) -> Optional[fx.GraphModule]:
     was_training = model.training
     config = getattr(model, "config", None)
@@ -1068,10 +1055,7 @@ def _try_symbolic_trace(model: nn.Module) -> Optional[fx.GraphModule]:
     try:
         return fx.symbolic_trace(model)
     except Exception:
-        try:
-            return _try_huggingface_symbolic_trace(model)
-        except Exception:
-            return None
+        return None
     finally:
         model.train(was_training)
         if config is not None and original_use_cache is not None:

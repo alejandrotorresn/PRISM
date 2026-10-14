@@ -391,35 +391,6 @@ def test_hybrid_executor_auto_supports_prefetch_features_without_forcing_linear(
     assert not any("selected linear runtime" in warning for warning in result.warnings)
 
 
-def test_hybrid_executor_auto_uses_hf_trace_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    model = BranchMLP()
-    inp = torch.randn(3, 4)
-    original_symbolic_trace = torch.fx.symbolic_trace
-    plan = DevicePlan(
-        assignment_forward={"left": "CPU", "right": "CPU", "out": "CPU"},
-        assignment_backward={"left": "CPU", "right": "CPU", "out": "CPU"},
-        cut_edges_forward=[],
-        cut_edges_backward=[],
-        cross_phase_edges=[],
-    )
-
-    monkeypatch.setattr("src.runtime.hybrid_executor.fx.symbolic_trace", lambda _model: (_ for _ in ()).throw(RuntimeError("fx failed")))
-    monkeypatch.setattr("src.runtime.hybrid_executor._try_huggingface_symbolic_trace", lambda current_model: original_symbolic_trace(current_model))
-
-    result = run_hybrid_training(
-        model=model,
-        input_data=inp,
-        plan=plan,
-        steps=1,
-        lr=0.01,
-        strict_plan=True,
-        execution_mode="auto",
-    )
-
-    assert result.status == "ok"
-    assert not any("fell back to linear runtime" in warning for warning in result.warnings)
-
-
 def test_hybrid_executor_auto_rejects_structured_input_without_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     model = DictInputModel()
     inp = {"input_ids": torch.randint(0, 16, (2, 5), dtype=torch.long)}
@@ -433,7 +404,6 @@ def test_hybrid_executor_auto_rejects_structured_input_without_trace(monkeypatch
     )
 
     monkeypatch.setattr("src.runtime.hybrid_executor.fx.symbolic_trace", lambda _model: (_ for _ in ()).throw(RuntimeError("fx failed")))
-    monkeypatch.setattr("src.runtime.hybrid_executor._try_huggingface_symbolic_trace", lambda _model: None)
 
     with pytest.raises(HybridExecutionUnsupportedError, match="structured inputs"):
         run_hybrid_training(
