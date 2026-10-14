@@ -223,7 +223,9 @@ def measure_recompute_curve(
     except StopIteration:
         original_device = torch.device("cpu")
 
-    leaf_names = [n for n, m in model.named_modules() if n and len(list(m.children())) == 0]
+    from runtime.leaf_modules import iter_leaf_modules
+
+    leaf_names = [n for n, _m in iter_leaf_modules(model) if n]
     all_gpu_fwd = {n: "GPU" for n in leaf_names}
     all_gpu_bwd = {n: "GPU" for n in leaf_names}
     plan_fwd = {n: (baseline_forward_assignment or all_gpu_fwd).get(n, "CPU") for n in leaf_names}

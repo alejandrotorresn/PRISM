@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Tuple
 import torch
 import torch.nn as nn
 
+from .leaf_modules import iter_leaf_modules
 from .plan_representation import ExecutionPlan
 
 
@@ -18,6 +19,8 @@ class DevicePlan:
     cut_edges_backward: List[Tuple[str, str]]
     cross_phase_edges: List[Tuple[str, str]]
     activation_strategies: Dict[str, str] = field(default_factory=dict)
+    # Debug only: legacy behavior where a layer missing from the plan runs on CPU.
+    allow_unplanned: bool = False
 
     @property
     def assignment(self) -> Dict[str, str]:
@@ -40,6 +43,11 @@ class DevicePlan:
 
     def resolve_torch_device(self, layer_name: str, gpu_id: int = 0, phase: str = "forward") -> torch.device:
         assignment = self.assignment_forward if phase == "forward" else self.assignment_backward
+        if layer_name not in assignment and not self.allow_unplanned:
+            raise KeyError(
+                f"Layer '{layer_name}' has no {phase} device in the plan; refusing to default it to CPU "
+                "(use --allow_unplanned_layers for debugging only)."
+            )
         label = assignment.get(layer_name, "CPU").upper()
         if label == "GPU" and torch.cuda.is_available():
             return torch.device(f"cuda:{gpu_id}")
@@ -48,8 +56,8 @@ class DevicePlan:
 
 def collect_leaf_module_names(model: nn.Module) -> List[str]:
     names: List[str] = []
-    for name, module in model.named_modules():
-        if name and len(list(module.children())) == 0:
+    for name, _module in iter_leaf_modules(model):
+        if name:
             names.append(name)
     return names
 
@@ -65,6 +73,7 @@ def validate_plan_coverage(
     plan: DevicePlan,
     strict: bool = False,
     model_layer_names: Iterable[str] | None = None,
+    allow_unplanned: bool | None = None,
 ) -> List[str]:
     warnings: List[str] = []
     leaf_names = set(model_layer_names) if model_layer_names is not None else set(collect_leaf_module_names(model))
@@ -81,6 +90,10 @@ def validate_plan_coverage(
 
     if missing_in_plan:
         msg = f"{len(missing_in_plan)} model layer(s) are not explicitly assigned and default to CPU: {missing_in_plan[:5]}"
+        if allow_unplanned is None:
+            allow_unplanned = plan.allow_unplanned
+        if not allow_unplanned:
+            raise ValueError(msg)
         warnings.append(msg)
 
     return warnings

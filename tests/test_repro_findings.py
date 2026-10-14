@@ -26,7 +26,6 @@ class _TwoRelu(nn.Module):
         return x + x
 
 
-@pytest.mark.xfail(strict=True, reason="H2: capa ausente del plan cae a CPU sin aviso")
 def test_h2_unplanned_layer_is_not_silently_cpu():
     plan = DevicePlan({"a": "GPU"}, {"a": "GPU"}, [], [], [])
     with pytest.raises((KeyError, ValueError)):

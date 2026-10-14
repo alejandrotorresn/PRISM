@@ -61,6 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--strict_plan", action="store_true")
+    parser.add_argument("--allow_unplanned_layers", action="store_true", help="Debug only: layers missing from the plan run on CPU instead of raising")
     parser.add_argument("--enable_async_transfer", action="store_true")
     parser.add_argument("--enable_prefetch", action="store_true")
     parser.add_argument("--execution_mode", default="auto", choices=["auto", "linear", "dag"])
@@ -288,6 +289,7 @@ def _make_uniform_plan(reference_plan: DevicePlan, device_label: str) -> DeviceP
         cut_edges_backward=cut_edges,
         cross_phase_edges=cross_phase,
         activation_strategies={layer: "retain" for layer in assignment},
+        allow_unplanned=reference_plan.allow_unplanned,
     )
 
 
@@ -413,6 +415,7 @@ def main() -> int:
 
     plan = load_execution_plan(assignment_csv=assignment_csv, cut_edges_csv=cut_edges_csv)
     device_plan = DevicePlan.from_execution_plan(plan)
+    device_plan.allow_unplanned = args.allow_unplanned_layers
 
     out_dir = Path(args.output_dir) if args.output_dir else (solution_dir / "hybrid_execution")
     out_dir.mkdir(parents=True, exist_ok=True)

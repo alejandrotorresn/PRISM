@@ -61,7 +61,9 @@ except ModuleNotFoundError:
 
 
 def _leaf_module_names(model: nn.Module) -> List[str]:
-    return [name for name, module in model.named_modules() if name and len(list(module.children())) == 0]
+    from runtime.leaf_modules import iter_leaf_modules
+
+    return [name for name, _m in iter_leaf_modules(model) if name]
 
 
 def _infer_batch_size(input_data: Any) -> int:

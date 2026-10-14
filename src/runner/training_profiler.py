@@ -16,6 +16,7 @@ from core.constants import (
     WARMUP_STEPS,
 )
 from core.energy import EnergyMonitor
+from runtime.leaf_modules import iter_leaf_modules
 from core.loss_utils import compute_stable_surrogate_loss
 from core.graph_extractor import export_graph_artifacts
 from core.io_artifacts import cleanup_artifacts, write_csv_rows, write_json_dict
@@ -193,9 +194,7 @@ class TrainingProfiler:
             )
 
     def _get_leaf_modules(self) -> Iterator[Tuple[str, nn.Module]]:
-        for name, module in self.model.named_modules():
-            if len(list(module.children())) == 0:
-                yield name, module
+        yield from iter_leaf_modules(self.model)
 
     def _compute_loss(self, out: Any) -> torch.Tensor:
         return compute_stable_surrogate_loss(out)

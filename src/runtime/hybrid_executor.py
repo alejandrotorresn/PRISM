@@ -36,6 +36,7 @@ except ModuleNotFoundError:
     from core.decoder_export_backend import try_export_decoder_only_trace
 
 from .device_plan import DevicePlan, validate_plan_coverage
+from .leaf_modules import iter_leaf_modules
 
 try:
     from core.energy import EnergyMonitor
@@ -1039,8 +1040,8 @@ def _ordered_sequential_layers(model: nn.Module) -> List[Tuple[str, nn.Module]]:
         return [(f"net.{idx}", mod) for idx, mod in enumerate(model.net)]
 
     leaves: List[Tuple[str, nn.Module]] = []
-    for name, module in model.named_modules():
-        if name and len(list(module.children())) == 0:
+    for name, module in iter_leaf_modules(model):
+        if name:
             leaves.append((name, module))
     if not leaves:
         raise ValueError("Model has no leaf modules to execute")
@@ -1958,6 +1959,9 @@ class _DeviceAwareFXInterpreter(fx.Interpreter):
             self._active_node = None
 
     def call_module(self, target: fx.node.Target, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+        if str(target) == "_guards_fn":
+            # torch.export shape-guard helper: no parameters, no compute, never planned.
+            return super().call_module(target, args, kwargs)
         layer_name = self._layer_name_for_node(self._active_node) or str(target)
         forward_device = self._plan.resolve_torch_device(layer_name=layer_name, gpu_id=self._gpu_id, phase="forward")
         backward_device = self._plan.resolve_torch_device(layer_name=layer_name, gpu_id=self._gpu_id, phase="backward")
