@@ -71,6 +71,8 @@ Convenciones: `[ID]` identifica la tarea. "Aceptación" es el criterio verificab
 - **[0.2]** Crear `config/prism.yaml` (y su loader) con todos los parámetros que hoy están en el código. Cada parámetro tiene el valor por defecto en un solo sitio, con nombre, unidad y origen (CLI, medición o derivado). Los resultados deben guardar la configuración efectiva usada (`effective_config.json`).
 - **[0.3]** Tests de reproducción (deben **fallar** antes del arreglo) para H1, H2, H5, H6, H7, H9, H11, H12 y H13. Cada test usa un modelo pequeño y no requiere GPU salvo marca explícita.
 - **Aceptación:** los tests existen, fallan por la razón correcta y están en `pytest.ini`.
+- **Estado 0.3 (parcial):** `tests/test_repro_findings.py` cubre H2, H5b, H5c y H12 (`xfail(strict=True)`, fallo por la causa documentada, verificado con `--runxfail`). Suite: 109 pasan, 7 omitidos, 4 xfail. Faltan H1, H6, H7, H9 y H11 (requieren grafo HF, `.sh` o ejecución del runner) y 0.2 (`config/prism.yaml`).
+- **Cruce con el jurado:** ver `CRUCE_PLAN_VS_JURADO.md`. Añade las tareas 5.6, 2.8, 4.6, 5.7, 5.4b y 5.1b.
 
 ### Fase 1. Bugs que invalidan los resultados
 
