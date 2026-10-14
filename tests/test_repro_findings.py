@@ -32,6 +32,25 @@ def test_h2_unplanned_layer_is_not_silently_cpu():
         plan.resolve_torch_device("missing_layer")
 
 
+@pytest.mark.xfail(strict=True, reason="H5b: Dropout en dual placement lanza RuntimeError por mismatch")
+def test_h5b_dropout_dual_placement_does_not_raise():
+    layer = nn.Dropout(0.5).train()
+    x = torch.randn(64, 64, requires_grad=True)
+    cpu = torch.device("cpu")
+    out = _run_layer_with_dual_placement(layer, "drop", x, cpu, cpu)
+    out.sum().backward()
+
+
+@pytest.mark.xfail(strict=True, reason="H5c: BatchNorm actualiza estadisticas dos veces en dual placement")
+def test_h5c_batchnorm_stats_updated_once():
+    layer = nn.BatchNorm1d(8).train()
+    x = torch.randn(16, 8, requires_grad=True)
+    cpu = torch.device("cpu")
+    out = _run_layer_with_dual_placement(layer, "bn", x, cpu, cpu)
+    out.sum().backward()
+    assert int(layer.num_batches_tracked) == 1
+
+
 @pytest.mark.xfail(strict=True, reason="H7: ilp_objective se usa como sim_time_ms")
 def test_h7_objective_is_not_reported_as_simulated_ms(tmp_path):
     mod = _load_validation_module("run_hybrid_execution")

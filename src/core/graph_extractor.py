@@ -36,13 +36,31 @@ def _activation_mb_from_layer_stats(layer_stats: Dict[str, Dict[str, Any]], name
 
 
 def _node_label(node) -> str:
+    # Only call_module labels must equal the module path (they key the profiler's
+    # layer stats). Everything else uses the FX node name, which is unique per graph.
     if node.op == "call_module":
         return str(node.target)
-    if node.op in {"call_function", "call_method"}:
-        return str(node.target)
-    if node.op == "placeholder":
-        return str(node.target)
     return node.name
+
+
+def _tensor_mb_from_meta(node) -> Optional[float]:
+    """Size of the node's output from ShapeProp metadata; None if unavailable."""
+    tmeta = node.meta.get("tensor_meta")
+    if tmeta is None:
+        return None
+    total_bytes = 0
+    for leaf in torch.utils._pytree.tree_flatten(
+        tmeta, is_leaf=lambda x: hasattr(x, "dtype") and hasattr(x, "shape")
+    )[0]:
+        shape = getattr(leaf, "shape", None)
+        dtype = getattr(leaf, "dtype", None)
+        if shape is None or dtype is None:
+            continue
+        numel = 1
+        for d in shape:
+            numel *= int(d)
+        total_bytes += numel * torch.empty((), dtype=dtype).element_size()
+    return total_bytes / (1024**2)
 
 
 def _shape_from_meta(node) -> str:
@@ -136,6 +154,7 @@ def _build_fx_graph(model: nn.Module, layer_stats: Dict[str, Dict[str, Any]], in
     node_id_map: Dict[str, str] = {}
     activation_map: Dict[str, float] = {}
     name_map: Dict[str, str] = {}
+    size_source_map: Dict[str, str] = {}
 
     topo_index = 0
     for node in gm.graph.nodes:
@@ -155,7 +174,15 @@ def _build_fx_graph(model: nn.Module, layer_stats: Dict[str, Dict[str, Any]], in
             op_type = module.__class__.__name__ if module is not None else "Module"
 
         activ_out_mb = _activation_mb_from_layer_stats(layer_stats, label)
+        meta_mb = _tensor_mb_from_meta(node)
+        if activ_out_mb > 0.0:
+            size_source = "measured"
+        elif meta_mb is not None:
+            activ_out_mb, size_source = meta_mb, "shape_prop"
+        else:
+            size_source = "unknown"
         activation_map[node.name] = activ_out_mb
+        size_source_map[node.name] = size_source
 
         nodes.append({
             "node_id": node_id,
@@ -183,6 +210,7 @@ def _build_fx_graph(model: nn.Module, layer_stats: Dict[str, Dict[str, Any]], in
                 "src_id": src_id,
                 "dst_id": dst_id,
                 "tensor_mb": activation_map.get(src.name, 0.0),
+                "tensor_mb_source": size_source_map.get(src.name, "unknown"),
                 "tensor_shape": _shape_from_meta(src),
                 "producer_name": name_map.get(src.name, src.name),
                 "consumer_name": name_map.get(dst.name, dst.name),
@@ -243,13 +271,12 @@ def _build_export_grouped_graph(
     for start_layer, start_nodes in source_nodes_by_layer.items():
         queue = deque((node_name, 0) for node_name in start_nodes)
         visited = set(start_nodes)
-        nearest_depth: int | None = None
         reached_layers: set[str] = set()
 
+        # Every path stops at the first layer it meets, so skip/residual
+        # connections (layer -> add -> farther layer) are kept as edges.
         while queue:
             current_name, depth = queue.popleft()
-            if nearest_depth is not None and depth >= nearest_depth:
-                continue
             for next_name in adjacency.get(current_name, []):
                 if next_name in visited:
                     continue
@@ -257,11 +284,7 @@ def _build_export_grouped_graph(
                 next_layer = node_layer_names.get(next_name)
                 next_depth = depth + 1
                 if next_layer and next_layer != start_layer:
-                    if nearest_depth is None or next_depth < nearest_depth:
-                        nearest_depth = next_depth
-                        reached_layers = {next_layer}
-                    elif next_depth == nearest_depth:
-                        reached_layers.add(next_layer)
+                    reached_layers.add(next_layer)
                     continue
                 queue.append((next_name, next_depth))
 
@@ -291,6 +314,7 @@ def export_graph_artifacts(
     layer_stats: Optional[Dict[str, Dict[str, Any]]] = None,
     include_records: bool = False,
     allow_fallback_graph: bool = False,
+    strict_tensor_sizes: bool = False,
 ) -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     layer_stats = layer_stats or {}
@@ -313,6 +337,17 @@ def export_graph_artifacts(
         else:
             logger.info("torch.fx graph extraction failed; using decoder-only export backend")
             nodes, edges, source = _build_export_grouped_graph(model, layer_stats, trace_ctx)
+
+    unknown_edges = [e for e in edges if e.get("tensor_mb_source") == "unknown"]
+    if unknown_edges:
+        msg = (
+            f"{len(unknown_edges)} graph edge(s) have no measured or shape-propagated tensor size "
+            f"(e.g. {unknown_edges[0]['producer_name']} -> {unknown_edges[0]['consumer_name']}); "
+            "their transfer cost would be treated as 0"
+        )
+        if strict_tensor_sizes:
+            raise ValueError(msg)
+        logger.warning(msg)
 
     write_csv_rows(nodes_path, nodes)
     write_csv_rows(edges_path, edges)

@@ -95,6 +95,7 @@ Convenciones: `[ID]` identifica la tarea. "Aceptación" es el criterio verificab
   - Aceptación: vit_b16 con 100 % de nodos `call_module` cubiertos, sin avisos de capas ausentes.
 - **[1.3] Grafo del ILP (H12, H13).** Nombres de nodo únicos (`node.name`), `tensor_mb` real de todos los nodos desde ShapeProp, aristas residuales conservadas, y transferencia desconocida = error (no 0).
   - Aceptación: en resnet50, el número de aristas del CSV iguala el del FX; ninguna arista con tamaño 0 salvo las de escalares.
+  - **Estado 1.3 (hecho):** nodos no-módulo usan `node.name` (único); los nombres repetidos que quedan son módulos compartidos (p. ej. `relu` en resnet50: 144 únicos de 176 nodos), ya tratados por `shared_call_site_layers`. `tensor_mb` sale de las estadísticas medidas y, si faltan, de ShapeProp (columna nueva `tensor_mb_source`); resnet50: 191 aristas = 191 del FX, 0 con tamaño 0. Tamaño desconocido: aviso, o error con `strict_tensor_sizes=True` (aún no expuesto por CLI). Aristas residuales conservadas en el grafo exportado de decoders (se quitó el corte por profundidad mínima). Se restauraron los tests H5b/H5c que se perdieron en el commit 1.1. Pendiente: exponer `strict_tensor_sizes` en el perfilador y que el ILP trate transferencia desconocida como error (data_loader aún usa 0.0 con aviso).
 - **[1.4] Clasificación de fallos (H9).**
   1. Un único clasificador (módulo Python o función de shell) que lea el log **de esa ejecución**, el código de salida y la señal.
   2. Categorías: `GPU_OOM`, `CPU_OOM`, `TRACE_ERROR`, `TIMEOUT`, `CODE_ERROR`.
